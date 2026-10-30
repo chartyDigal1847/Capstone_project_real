@@ -1,0 +1,53 @@
+# Production-style Compose. Do not bind-mount source code. Supply secrets via the host environment.
+services:
+    app:
+        image: ${LOCALSPOT_IMAGE:?set LOCALSPOT_IMAGE to a versioned production tag}
+        restart: unless-stopped
+        ports:
+            - '8080:8080'
+        environment:
+            APP_ENV: production
+            APP_DEBUG: 'false'
+            APP_KEY: ${APP_KEY}
+            APP_URL: ${APP_URL}
+            DB_CONNECTION: mysql
+            DB_HOST: mysql
+            DB_PORT: 3306
+            DB_DATABASE: ${DB_DATABASE}
+            DB_USERNAME: ${DB_USERNAME}
+            DB_PASSWORD: ${DB_PASSWORD}
+        depends_on:
+            mysql:
+                condition: service_healthy
+        networks:
+            - internal
+        healthcheck:
+            test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:8080/up']
+            interval: 30s
+            timeout: 5s
+            retries: 3
+    mysql:
+        image: mysql:8.4
+        restart: unless-stopped
+        environment:
+            MYSQL_DATABASE: ${DB_DATABASE}
+            MYSQL_USER: ${DB_USERNAME}
+            MYSQL_PASSWORD: ${DB_PASSWORD}
+            MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+        volumes:
+            - localspot-mysql:/var/lib/mysql
+        networks:
+            - internal
+        healthcheck:
+            test: ['CMD', 'mysqladmin', 'ping', '-p${DB_PASSWORD}']
+            interval: 15s
+            timeout: 5s
+            retries: 5
+        # Intentionally not published to the host. Keep MySQL on the private network.
+
+networks:
+    internal:
+        driver: bridge
+
+volumes:
+    localspot-mysql:
