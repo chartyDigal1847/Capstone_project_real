@@ -180,7 +180,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('BROWSE CATEGORIES'), findsNothing);
-    expect(find.text('Product category'), findsOneWidget);
+    expect(find.text('CATEGORY'), findsOneWidget);
     expect(find.text('All products'), findsOneWidget);
 
     final app = AppScope.of(tester.element(find.byType(SearchPage)));
