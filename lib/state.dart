@@ -7,6 +7,7 @@ import 'package:geolocator/geolocator.dart';
 import 'api.dart';
 import 'models.dart';
 import 'repositories.dart';
+import 'services/directions_service.dart';
 
 const defaultCenterLat = 14.6195;
 const defaultCenterLng = 121.0568;
@@ -18,6 +19,7 @@ class AppState extends ChangeNotifier {
   }
 
   final api = LocalSpotApi();
+  final directionsService = DirectionsService();
   late final authRepo = AuthRepository(api);
   late final catalogRepo = CatalogRepository(api);
   bool apiOnline = false;
@@ -513,41 +515,14 @@ class AppState extends ChangeNotifier {
   Future<RoutePreview> previewRoute({required double destLat, required double destLng}) async {
     final originLat = deviceLat ?? searchLat;
     final originLng = deviceLng ?? searchLng;
-    if (apiOnline) {
-      try {
-        final data = await api.post('/routes/preview', {
-          'origin_lat': originLat,
-          'origin_lng': originLng,
-          'destination_lat': destLat,
-          'destination_lng': destLng,
-        }) as Map;
-        lastRoute = routePreviewFromJson(Map<String, dynamic>.from(data));
-        notifyListeners();
-        return lastRoute!;
-      } catch (_) {}
-    }
-    lastRoute = _localRoute(originLat, originLng, destLat, destLng);
+    lastRoute = await directionsService.getDrivingRoute(
+      originLat: originLat,
+      originLng: originLng,
+      destinationLat: destLat,
+      destinationLng: destLng,
+    );
     notifyListeners();
     return lastRoute!;
-  }
-
-  RoutePreview _localRoute(double originLat, double originLng, double destLat, double destLng) {
-    const steps = 16;
-    final points = <GeoPoint>[
-      for (var i = 0; i <= steps; i++)
-        GeoPoint(
-          originLat + (destLat - originLat) * (i / steps),
-          originLng + (destLng - originLng) * (i / steps),
-        ),
-    ];
-    final km = distanceKm(originLat, originLng, destLat, destLng);
-    return RoutePreview(
-      coordinates: points,
-      distanceKm: km,
-      durationMinutes: km > 0 ? max(1, (km / 20 * 60).round()) : 1,
-      provider: 'localspot',
-      fallback: true,
-    );
   }
 
   VendorSession? sessionFor(Store store) {

@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:localspot/api.dart';
 import 'package:localspot/main.dart';
 import 'package:localspot/models.dart';
+import 'package:localspot/services/directions_service.dart';
 import 'package:localspot/screens/customer_screens.dart';
 import 'package:localspot/screens/detail_screens.dart';
 import 'package:localspot/state.dart';
@@ -103,6 +106,55 @@ void main() {
     expect(error.field('password'), isNull);
   });
 
+  test('Mapbox Directions parses GeoJSON road geometry and route metrics', () async {
+    final client = MockClient((request) async {
+      expect(request.url.host, 'api.mapbox.com');
+      expect(request.url.path, contains('/directions/v5/mapbox/driving/121.0,14.6;121.01,14.61'));
+      expect(request.url.queryParameters['geometries'], 'geojson');
+      expect(request.url.queryParameters['overview'], 'full');
+      expect(request.url.queryParameters['access_token'], 'pk.test-public-token');
+      return http.Response(
+        '{"code":"Ok","routes":[{"distance":1500,"duration":360,"geometry":{"type":"LineString","coordinates":[[121.0,14.6],[121.01,14.61]]}}]}',
+        200,
+      );
+    });
+    final service = DirectionsService(client: client, accessToken: 'pk.test-public-token');
+
+    final result = await service.getDrivingRoute(
+      originLat: 14.6,
+      originLng: 121,
+      destinationLat: 14.61,
+      destinationLng: 121.01,
+    );
+
+    expect(result.coordinates, hasLength(2));
+    expect(result.coordinates[0].lat, 14.6);
+    expect(result.coordinates[0].lng, 121);
+    expect(result.coordinates[1].lat, 14.61);
+    expect(result.coordinates[1].lng, 121.01);
+    expect(result.distanceKm, 1.5);
+    expect(result.durationMinutes, 6);
+    expect(result.fallback, isFalse);
+    expect(result.provider, contains('Mapbox Directions'));
+    client.close();
+  });
+
+  test('Mapbox Directions reports unavailable routes instead of drawing a fallback line', () async {
+    final client = MockClient((_) async => http.Response('{"code":"NoRoute","routes":[]}', 200));
+    final service = DirectionsService(client: client, accessToken: 'pk.test-public-token');
+
+    await expectLater(
+      service.getDrivingRoute(
+        originLat: 14.6,
+        originLng: 121,
+        destinationLat: 14.61,
+        destinationLng: 121.01,
+      ),
+      throwsA(isA<DirectionsException>().having((error) => error.message, 'message', contains('No driving route'))),
+    );
+    client.close();
+  });
+
   test('offline catalog is labeled as bundled sample data', () {
     final app = AppState();
     expect(app.usingSeededCatalog, isTrue);
@@ -180,7 +232,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('BROWSE CATEGORIES'), findsNothing);
-    expect(find.text('Product category'), findsOneWidget);
+    expect(find.text('CATEGORY'), findsOneWidget);
     expect(find.text('All products'), findsOneWidget);
 
     final app = AppScope.of(tester.element(find.byType(SearchPage)));
@@ -265,13 +317,14 @@ void main() {
     expect(app.isWatchingLocation, isFalse);
   });
 
-  test('route preview and vendor live session stay on-device without an API', () async {
+  test('route preview requires Mapbox while vendor live sessions stay on-device', () async {
     final app = AppState();
     final store = app.stores.firstWhere((item) => item.isMobile);
     app.currentUser = app.users.firstWhere((user) => user.id == store.ownerId);
-    final route = await app.previewRoute(destLat: store.lat, destLng: store.lng);
-    expect(route.coordinates, isNotEmpty);
-    expect(route.fallback, isTrue);
+    await expectLater(
+      app.previewRoute(destLat: store.lat, destLng: store.lng),
+      throwsA(isA<DirectionsException>()),
+    );
 
     await app.startVendorSession(store, lat: 14.6201, lng: 121.0572);
     expect(app.sessionFor(store)?.isActive, isTrue);
