@@ -187,7 +187,8 @@ service cloud.firestore {
     }
 
     match /stores/{storeId} {
-      allow read: if isAuthenticated();
+      // Approved stores are publicly readable; all stores readable when authenticated.
+      allow read: if resource.data.status == 'approved' || isAuthenticated();
       allow create: if isOwnerRole() && isValidStore(request.resource.data) &&
         request.resource.data.ownerUid == request.auth.uid &&
         request.resource.data.status == 'pending';
@@ -203,7 +204,8 @@ service cloud.firestore {
     }
 
     match /products/{id} {
-      allow read: if isAuthenticated();
+      // Products are publicly readable.
+      allow read: if true;
       allow create: if isAuthenticated() && isValidProduct(request.resource.data) &&
         request.resource.data.createdByUid == request.auth.uid;
       allow update: if isAuthenticated() && isValidProduct(request.resource.data) &&
@@ -213,7 +215,8 @@ service cloud.firestore {
     }
 
     match /listings/{id} {
-      allow read: if isAuthenticated();
+      // Active listings are publicly readable.
+      allow read: if resource.data.status == 'active' || isAuthenticated();
       allow create: if isAuthenticated() && isValidListing(request.resource.data) &&
         request.resource.data.ownerUid == request.auth.uid;
       allow update: if isAuthenticated() && isValidListing(request.resource.data) &&
@@ -223,7 +226,8 @@ service cloud.firestore {
     }
 
     match /promotions/{id} {
-      allow read: if isAuthenticated();
+      // Approved promotions are publicly readable.
+      allow read: if resource.data.status == 'approved' || isAuthenticated();
       allow create: if isAuthenticated() && isValidPromotion(request.resource.data) &&
         request.resource.data.ownerUid == request.auth.uid &&
         request.resource.data.status == 'pending';
@@ -238,8 +242,9 @@ service cloud.firestore {
     }
 
     match /tours/{id} {
-      allow read: if isAuthenticated() &&
-        (resource.data.status == 'published' || resource.data.ownerUid == request.auth.uid || isAdmin());
+      // Published tours are publicly readable.
+      allow read: if resource.data.status == 'published' ||
+        (isAuthenticated() && (resource.data.ownerUid == request.auth.uid || isAdmin()));
       allow create: if isAuthenticated() && isValidTour(request.resource.data) &&
         request.resource.data.ownerUid == request.auth.uid &&
         request.resource.data.status == 'draft';
@@ -290,7 +295,8 @@ service cloud.firestore {
     }
 
     match /vendorSessions/{id} {
-      allow read: if isAuthenticated();
+      // Active sessions are publicly readable for the map.
+      allow read: if true;
       allow create, update: if isAuthenticated() &&
         request.resource.data.keys().hasOnly([
           'numericId', 'storeId', 'lat', 'lng', 'started_at', 'last_update_at',
