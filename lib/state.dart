@@ -143,11 +143,10 @@ class AppState extends ChangeNotifier {
             currentUser = null;
           }
         }
-      } catch (_) {
-        // Firebase is initialised but Firestore returned an error
-        // (e.g. security rules deny read before sign-in).
+      } catch (e) {
+        // Firebase is initialised but Firestore returned an error.
         usingSeededCatalog = stores.isEmpty;
-        connectionNote = 'Firebase ready · sign in to load data';
+        connectionNote = 'Firebase ready · catalog error: ${e.toString().length > 60 ? e.toString().substring(0, 60) : e}';
       }
     } else {
       // Firebase not configured — show seeded demo catalog.

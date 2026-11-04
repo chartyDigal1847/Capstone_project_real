@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -234,7 +236,18 @@ class LocalSpotFirebaseApi {
       docs.sort((a, b) => '${a['topic']}'.compareTo('${b['topic']}'));
       return docs;
     }
-    if (path == '/stores/nearby') return (await catalog())['stores'];
+    if (path == '/stores/nearby') {
+      final lat = double.tryParse(query?['lat'] ?? '') ?? 0;
+      final lng = double.tryParse(query?['lng'] ?? '') ?? 0;
+      final radiusKm = double.tryParse(query?['radius_km'] ?? '5') ?? 5;
+      final allStores = (await catalog())['stores'] as List? ?? [];
+      if (lat == 0 && lng == 0) return allStores; // no coords, return all
+      return [
+        for (final s in allStores)
+          if (s is Map && _geoDistKm(lat, lng, (s['lat'] as num?)?.toDouble() ?? 0, (s['lng'] as num?)?.toDouble() ?? 0) <= radiusKm)
+            s,
+      ];
+    }
 
     // Recognition job status poll — return immediately as 'ready' since
     // Firebase recognition is synchronous in _recognitionSuggest.
@@ -264,16 +277,19 @@ class LocalSpotFirebaseApi {
 
   Future<Map<String, dynamic>> getEnvelope(String path, [Map<String, String>? query]) async {
     if (path == '/search') {
-      // Perform a simple in-memory search over the catalog when a query is provided.
-      // Full-text / semantic search can be added via a Cloud Function later.
       final q = (query?['q'] ?? '').trim().toLowerCase();
+      final categoryFilter = (query?['category'] ?? '').trim();
+      final typeFilter = (query?['type'] ?? '').trim();
+      final searchLat = double.tryParse(query?['lat'] ?? '') ?? 0;
+      final searchLng = double.tryParse(query?['lng'] ?? '') ?? 0;
+      final radiusKm = double.tryParse(query?['radius_km'] ?? '10') ?? 10;
+
       final catalogData = await catalog();
       final allProducts = catalogData['products'] as List? ?? [];
       final allListings = catalogData['listings'] as List? ?? [];
       final allStores = catalogData['stores'] as List? ?? [];
 
-      // Build lookup maps — use asInt to guard against Firestore returning
-      // numeric IDs as doubles instead of ints.
+      // Build lookup maps with int key guard.
       final productMap = <int, Map<String, dynamic>>{
         for (final p in allProducts) _toInt((p as Map)['id']): Map<String, dynamic>.from(p),
       };
@@ -281,15 +297,31 @@ class LocalSpotFirebaseApi {
         for (final s in allStores) _toInt((s as Map)['id']): Map<String, dynamic>.from(s),
       };
 
+      // Expand category families (e.g. 'food' → [Produce, Groceries, Staples…]).
+      final expandedCategories = _expandCategories(q);
+      final explicitCategories = _expandCategories(categoryFilter);
+
       final results = <Map<String, dynamic>>[];
       for (final listing in allListings) {
         final l = Map<String, dynamic>.from(listing as Map);
+        if (l['status'] != null && l['status'] != 'active') continue;
+
         final product = productMap[_toInt(l['product_id'])];
         final store = storeMap[_toInt(l['store_id'])];
         if (product == null || store == null) continue;
         if (store['status'] != 'approved') continue;
 
-        // Simple keyword match when a query is provided.
+        // Seller type filter.
+        if (typeFilter.isNotEmpty && '${store['type']}'.toLowerCase() != typeFilter.toLowerCase()) continue;
+
+        // Explicit category filter from the filter UI.
+        if (explicitCategories.isNotEmpty) {
+          final productCat = '${product['category']}'.toLowerCase();
+          if (!explicitCategories.any((c) => c.toLowerCase() == productCat)) continue;
+        }
+
+        // Keyword/category match.
+        String matchType = 'exact';
         if (q.isNotEmpty) {
           final name = '${product['name']}'.toLowerCase();
           final category = '${product['category']}'.toLowerCase();
@@ -297,21 +329,52 @@ class LocalSpotFirebaseApi {
           final aliases = (product['aliases'] as List? ?? [])
               .map((a) => '$a'.toLowerCase())
               .toList();
-          final matches = name.contains(q) ||
-              category.contains(q) ||
-              brand.contains(q) ||
-              aliases.any((a) => a.contains(q));
-          if (!matches) continue;
+
+          final exactMatch = name.contains(q) || aliases.any((a) => a.contains(q));
+          final brandMatch = brand.contains(q);
+          final categoryExpand = expandedCategories.isNotEmpty &&
+              expandedCategories.any((c) => c.toLowerCase() == category);
+          final categoryDirect = category.contains(q);
+
+          if (!exactMatch && !brandMatch && !categoryExpand && !categoryDirect) continue;
+
+          if (categoryExpand && !exactMatch) {
+            matchType = 'category';
+          } else if (brandMatch && !exactMatch) {
+            matchType = 'category';
+          }
         }
+
+        final distKm = searchLat != 0
+            ? _geoDistKm(searchLat, searchLng,
+                (store['lat'] as num?)?.toDouble() ?? 0,
+                (store['lng'] as num?)?.toDouble() ?? 0)
+            : 0.0;
+
+        // Skip results outside the search radius.
+        if (searchLat != 0 && distKm > radiusKm) continue;
 
         results.add({
           'listing': l,
           'product': product,
           'store': store,
-          'distance_km': 0,
-          'match_type': 'exact',
+          'distance_km': distKm,
+          'match_type': matchType,
         });
       }
+
+      // Sort: exact matches first, then by distance, then by freshness.
+      results.sort((a, b) {
+        final aExact = a['match_type'] == 'exact' ? 0 : 1;
+        final bExact = b['match_type'] == 'exact' ? 0 : 1;
+        if (aExact != bExact) return aExact.compareTo(bExact);
+        final aDist = (a['distance_km'] as num?)?.toDouble() ?? 0;
+        final bDist = (b['distance_km'] as num?)?.toDouble() ?? 0;
+        if ((aDist - bDist).abs() > 0.1) return aDist.compareTo(bDist);
+        final aDate = '${(a['listing'] as Map)['last_confirmed_at']}';
+        final bDate = '${(b['listing'] as Map)['last_confirmed_at']}';
+        return bDate.compareTo(aDate);
+      });
 
       return {
         'data': results,
@@ -325,6 +388,54 @@ class LocalSpotFirebaseApi {
     final data = await get(path, query);
     return {'data': data};
   }
+
+  /// Expand a query term into category names using the same family/synonym
+  /// map as the client-side [expandedCategories] function in models.dart.
+  List<String> _expandCategories(String query) {
+    if (query.isEmpty) return const [];
+    // Handle family: prefix (from category chip filter).
+    if (query.startsWith('family:')) {
+      final family = query.substring(7);
+      return _categoryFamilies[family] ?? const [];
+    }
+    // Synonym lookup.
+    final cleaned = query
+        .toLowerCase()
+        .replaceAll(RegExp(r'\b(near me|nearby|around here)\b'), ' ')
+        .trim();
+    for (final token in cleaned.split(' ')) {
+      final family = _categorySynonyms[token] ??
+          (_categoryFamilies.containsKey(token) ? token : null);
+      if (family != null) return _categoryFamilies[family] ?? const [];
+    }
+    // Direct category name match.
+    final directMatch = _allCategories
+        .where((c) => c.toLowerCase() == cleaned || c.toLowerCase().contains(cleaned))
+        .toList();
+    return directMatch;
+  }
+
+  static const _categoryFamilies = <String, List<String>>{
+    'food': ['Produce', 'Groceries', 'Staples', 'Bakery', 'Street food', 'Drinks'],
+    'tech': ['Electronics', 'Computers', 'Phones', 'Appliances'],
+    'hardware': ['Hardware', 'Tools', 'Plumbing', 'Electrical'],
+    'clothing': ['Clothing'],
+    'household': ['Household', 'Furniture', 'Appliances'],
+  };
+
+  static const _categorySynonyms = <String, String>{
+    'food': 'food', 'pagkain': 'food', 'grocery': 'food', 'groceries': 'food',
+    'produce': 'food', 'tech': 'tech', 'gadget': 'tech', 'electronics': 'tech',
+    'computer': 'tech', 'phone': 'tech', 'hardware': 'hardware', 'tools': 'hardware',
+    'tool': 'hardware', 'clothing': 'clothing', 'clothes': 'clothing',
+    'household': 'household',
+  };
+
+  static const _allCategories = [
+    'Produce', 'Groceries', 'Staples', 'Bakery', 'Street food', 'Drinks',
+    'Hardware', 'Tools', 'Plumbing', 'Electrical', 'Electronics', 'Computers',
+    'Phones', 'Appliances', 'Household', 'Furniture', 'Clothing', 'Books', 'Automotive',
+  ];
 
   Future<dynamic> post(String path, [Map<String, dynamic>? body]) async {
     final data = body ?? const <String, dynamic>{};
@@ -755,6 +866,16 @@ class LocalSpotFirebaseApi {
     };
   }
 
+  /// Haversine distance in km between two lat/lng points.
+  double _geoDistKm(double lat1, double lng1, double lat2, double lng2) {
+    const r = 6371.0;
+    final dLat = (lat2 - lat1) * pi / 180;
+    final dLng = (lng2 - lng1) * pi / 180;
+    final a = sin(dLat / 2) * sin(dLat / 2) +
+        cos(lat1 * pi / 180) * cos(lat2 * pi / 180) * sin(dLng / 2) * sin(dLng / 2);
+    return r * 2 * atan2(sqrt(a), sqrt(1 - a));
+  }
+
   int _scoreProduct(Map<String, dynamic> product, {required String hint, required String barcode}) {
     if (barcode.isNotEmpty) {
       final bc = '${product['barcode'] ?? ''}'.toLowerCase();
@@ -896,7 +1017,14 @@ class LocalSpotFirebaseApi {
     final staffPatch = RegExp(r'^/stores/(\d+)/staff/(\d+)$').firstMatch(path);
     if (staffPatch != null) {
       final storeId = int.parse(staffPatch.group(1)!);
-      final snap = await _db.collection('storeMembers').where('storeId', isEqualTo: storeId).get();
+      final memberNumericId = int.parse(staffPatch.group(2)!);
+      // Find the specific staff member by their numeric ID, not just the first one.
+      final snap = await _db
+          .collection('storeMembers')
+          .where('storeId', isEqualTo: storeId)
+          .where('userNumericId', isEqualTo: memberNumericId)
+          .limit(1)
+          .get();
       if (snap.docs.isNotEmpty) {
         await snap.docs.first.reference.update({
           if (data['can_inventory'] != null) 'inventory': data['can_inventory'],
