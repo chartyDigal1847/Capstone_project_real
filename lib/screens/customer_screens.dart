@@ -346,26 +346,40 @@ class _SearchPageState extends State<SearchPage> {
         ),
         Expanded(
           child: hits.isEmpty
-              ? Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: Column(
-                    children: [
-                      const EmptyNote('No participating seller listed this yet. Try another name, a parent category, or a wider radius.', icon: Icons.search_off),
-                      const SizedBox(height: 12),
-                      OutlinedButton(onPressed: () => app.setRadius(10), child: const Text('Widen to 10 km')),
-                      TextButton(
-                        onPressed: () {
-                          app.setTypeFilter(null);
-                          app.setCategoryFilter(null);
-                          app.setSearchSort(SearchSort.relevance);
-                          controller.clear();
-                          setState(() => activeQuery = '');
-                          app.fetchSearch('');
-                        },
-                        child: const Text('Clear filters'),
-                      ),
-                    ],
-                  ),
+              ? ListView(
+                  padding: const EdgeInsets.fromLTRB(20, 12, 20, 40),
+                  children: [
+                    const EmptyNote(
+                      'No participating seller listed this yet.\nTry another name, a parent category, or a wider radius.',
+                      icon: Icons.search_off,
+                    ),
+                    const SizedBox(height: 12),
+                    OutlinedButton(
+                      onPressed: () => app.setRadius(10),
+                      child: const Text('Widen to 10 km'),
+                    ),
+                    const SizedBox(height: 8),
+                    OutlinedButton(
+                      onPressed: () {
+                        app.setCategoryFilter(null);
+                        app.setTypeFilter(null);
+                        app.setSearchSort(SearchSort.relevance);
+                      },
+                      child: const Text('Clear filters'),
+                    ),
+                    const SizedBox(height: 8),
+                    TextButton(
+                      onPressed: () {
+                        app.setTypeFilter(null);
+                        app.setCategoryFilter(null);
+                        app.setSearchSort(SearchSort.relevance);
+                        controller.clear();
+                        setState(() => activeQuery = '');
+                        app.fetchSearch('');
+                      },
+                      child: const Text('Clear search and filters'),
+                    ),
+                  ],
                 )
               : ListView.builder(
                   padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
