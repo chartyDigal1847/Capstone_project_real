@@ -75,7 +75,7 @@ class LoginPage extends StatefulWidget {
 
 class _LoginPageState extends State<LoginPage> {
   final email = TextEditingController(text: kReleaseMode ? '' : 'maria@localspot.ph');
-  final password = TextEditingController(text: kReleaseMode ? '' : 'demo');
+  final password = TextEditingController(text: kReleaseMode ? '' : 'demo1234');
   String? error;
   String? emailError;
   String? passwordError;
@@ -88,7 +88,7 @@ class _LoginPageState extends State<LoginPage> {
       padding: const EdgeInsets.fromLTRB(20, 8, 20, 28),
       children: [
         PageHeader('Sign in', onBack: widget.onBack),
-        InfoBanner('${app.connectionNote} Pilot accounts all use the password demo.', icon: Icons.lock_outline),
+        InfoBanner('${app.connectionNote} Pilot accounts all use the password demo1234.', icon: Icons.lock_outline),
         const SizedBox(height: 16),
         SoftCard(
           child: Column(
@@ -96,7 +96,7 @@ class _LoginPageState extends State<LoginPage> {
               LabeledField('Email', email, keyboardType: TextInputType.emailAddress),
               if (emailError != null) Text(emailError!, style: const TextStyle(color: clay, fontSize: 12)),
               const SizedBox(height: 12),
-              LabeledField('Password', password, obscure: true),
+              PasswordField('Password', password),
               if (passwordError != null) Text(passwordError!, style: const TextStyle(color: clay, fontSize: 12)),
             ],
           ),
@@ -145,7 +145,7 @@ class _LoginPageState extends State<LoginPage> {
                     subtitle: '${app.users[i].email} · ${roleLabel(app.users[i].role)}',
                     onTap: () async {
                       final user = app.users[i];
-                      final message = await app.login(user.email, user.password.isEmpty ? 'demo' : user.password);
+                      final message = await app.login(user.email, user.password.isEmpty ? 'demo1234' : user.password);
                       if (!mounted) return;
                       if (message != null) {
                         setState(() => error = message);
@@ -201,7 +201,7 @@ class _RegisterPageState extends State<RegisterPage> {
               LabeledField('Email', email, keyboardType: TextInputType.emailAddress),
               if (emailError != null) Text(emailError!, style: const TextStyle(color: clay, fontSize: 12)),
               const SizedBox(height: 12),
-              LabeledField('Password', password, obscure: true),
+              PasswordField('Password', password),
               if (passwordError != null) Text(passwordError!, style: const TextStyle(color: clay, fontSize: 12)),
               const SizedBox(height: 12),
               FilterMenu<AppRole>(

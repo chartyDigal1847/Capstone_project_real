@@ -1,11 +1,18 @@
-import 'api.dart';
+// repositories.dart — thin repository wrappers over LocalSpotGateway.
+//
+// After the Firebase migration the gateway routes all calls to Firestore
+// and Firebase Auth.  The repositories keep the same interface so that
+// AppState does not need structural changes.
+
+import 'firebase/gateway.dart';
 import 'models.dart';
 
 class AuthRepository {
   AuthRepository(this.api);
-  final LocalSpotApi api;
+  final LocalSpotGateway api;
 
-  Future<Map<String, dynamic>> login({required String email, required String password}) async {
+  Future<Map<String, dynamic>> login(
+      {required String email, required String password}) async {
     final data = await api.post('/auth/login', {'email': email, 'password': password});
     return Map<String, dynamic>.from(data as Map);
   }
@@ -33,7 +40,7 @@ class AuthRepository {
 
 class CatalogRepository {
   CatalogRepository(this.api);
-  final LocalSpotApi api;
+  final LocalSpotGateway api;
 
   Future<Map<String, dynamic>> catalog() async {
     final data = await api.get('/catalog');

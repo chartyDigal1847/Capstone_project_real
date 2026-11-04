@@ -1,26 +1,18 @@
-import 'dart:convert';
-
-import 'package:flutter/foundation.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:http/http.dart' as http;
+// api.dart — shared data-transfer utilities for LocalSpot.
+//
+// The HTTP-based Laravel client has been removed as part of the Firebase
+// migration.  Only the exception type, JSON helpers and from-JSON
+// constructors remain here so the rest of the codebase is unaffected.
 
 import 'models.dart';
-
-String defaultApiBaseUrl() {
-  const override = String.fromEnvironment('API_BASE');
-  if (override.isNotEmpty) return override;
-  if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
-    return 'http://10.0.2.2:8000/api/v1';
-  }
-  return 'http://127.0.0.1:8000/api/v1';
-}
 
 class ApiException implements Exception {
   ApiException(this.message, {this.status, Map<String, String>? fieldErrors})
       : fieldErrors = fieldErrors ?? const {};
 
   factory ApiException.fromResponse(int status, dynamic body) {
-    final map = body is Map ? Map<String, dynamic>.from(body) : <String, dynamic>{};
+    final map =
+        body is Map ? Map<String, dynamic>.from(body) : <String, dynamic>{};
     final errors = <String, String>{};
     final raw = map['errors'];
     if (raw is Map) {
@@ -33,7 +25,9 @@ class ApiException implements Exception {
     }
     final message = map['message'] is String
         ? map['message'] as String
-        : (errors.values.isNotEmpty ? errors.values.first : 'Request failed ($status)');
+        : (errors.values.isNotEmpty
+            ? errors.values.first
+            : 'Request failed ($status)');
     return ApiException(message, status: status, fieldErrors: errors);
   }
 
@@ -47,92 +41,20 @@ class ApiException implements Exception {
   String toString() => message;
 }
 
-class LocalSpotApi {
-  LocalSpotApi({String? baseUrl}) : baseUrl = baseUrl ?? defaultApiBaseUrl();
+// ── JSON helpers ──────────────────────────────────────────────────────
 
-  final String baseUrl;
-  String? token;
-  static const _tokenKey = 'localspot_sanctum_token';
-  final _secure = const FlutterSecureStorage();
-
-  Uri _uri(String path, [Map<String, String>? query]) {
-    final normalized = path.startsWith('/') ? path : '/$path';
-    return Uri.parse('$baseUrl$normalized').replace(queryParameters: query);
-  }
-
-  Map<String, String> _headers() => {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-        if (token != null) 'Authorization': 'Bearer $token',
-      };
-
-  Future<dynamic> get(String path, [Map<String, String>? query]) async {
-    final envelope = await getEnvelope(path, query);
-    return envelope['data'];
-  }
-
-  Future<Map<String, dynamic>> getEnvelope(String path, [Map<String, String>? query]) async {
-    final response = await http.get(_uri(path, query), headers: _headers()).timeout(const Duration(seconds: 8));
-    return _decodeEnvelope(response);
-  }
-
-  Future<dynamic> post(String path, [Map<String, dynamic>? body]) async {
-    final response = await http
-        .post(_uri(path), headers: _headers(), body: jsonEncode(body ?? {}))
-        .timeout(const Duration(seconds: 12));
-    return _decode(response);
-  }
-
-  Future<void> persistToken(String? value) async {
-    token = value;
-    try {
-      if (value == null) {
-        await _secure.delete(key: _tokenKey);
-      } else {
-        await _secure.write(key: _tokenKey, value: value);
-      }
-    } catch (_) {}
-  }
-
-  Future<void> restoreToken() async {
-    try {
-      token = await _secure.read(key: _tokenKey);
-    } catch (_) {}
-  }
-
-  Future<dynamic> delete(String path) async {
-    final response = await http.delete(_uri(path), headers: _headers()).timeout(const Duration(seconds: 8));
-    return _decode(response);
-  }
-
-  Future<dynamic> patch(String path, [Map<String, dynamic>? body]) async {
-    final response = await http
-        .patch(_uri(path), headers: _headers(), body: jsonEncode(body ?? {}))
-        .timeout(const Duration(seconds: 12));
-    return _decode(response);
-  }
-
-  dynamic _decode(http.Response response) {
-    final envelope = _decodeEnvelope(response);
-    return envelope.containsKey('data') ? envelope['data'] : envelope;
-  }
-
-  Map<String, dynamic> _decodeEnvelope(http.Response response) {
-    final body = response.body.isEmpty ? {} : jsonDecode(response.body);
-    if (response.statusCode >= 400) {
-      throw ApiException.fromResponse(response.statusCode, body);
-    }
-    if (body is Map<String, dynamic>) return body;
-    if (body is Map) return Map<String, dynamic>.from(body);
-    return {'data': body};
-  }
+int asInt(dynamic value, [int fallback = 0]) {
+  if (value is int) return value;
+  if (value is num) return value.toInt();
+  return int.tryParse('$value') ?? fallback;
 }
 
 T _enum<T extends Enum>(List<T> values, String raw, T fallback) {
   final compact = raw.replaceAll('_', '');
-  for (final value in values) {
-    if (value.name.toLowerCase() == raw.toLowerCase() || value.name.toLowerCase() == compact.toLowerCase()) {
-      return value;
+  for (final v in values) {
+    if (v.name.toLowerCase() == raw.toLowerCase() ||
+        v.name.toLowerCase() == compact.toLowerCase()) {
+      return v;
     }
   }
   return fallback;
@@ -140,16 +62,16 @@ T _enum<T extends Enum>(List<T> values, String raw, T fallback) {
 
 UserAccount userFromJson(Map<String, dynamic> json) {
   return UserAccount(
-    id: json['id'] as int,
+    id: asInt(json['id']),
     name: json['name'] as String,
     email: json['email'] as String,
     password: '',
     role: _enum(AppRole.values, json['role'] as String, AppRole.customer),
-    ownedStoreIds: [...?(json['owned_store_ids'] as List?)?.map((e) => e as int)],
-    memberStoreIds: [...?(json['member_store_ids'] as List?)?.map((e) => e as int)],
+    ownedStoreIds: [...?(json['owned_store_ids'] as List?)?.map(asInt)],
+    memberStoreIds: [...?(json['member_store_ids'] as List?)?.map(asInt)],
     storeGrants: {
       for (final row in (json['store_grants'] as List? ?? []))
-        (row as Map)['store_id'] as int: StoreGrant(
+        asInt((row as Map)['store_id']): StoreGrant(
           inventory: row['inventory'] == true,
           promotions: row['promotions'] == true,
           location: row['location'] == true,
@@ -160,11 +82,12 @@ UserAccount userFromJson(Map<String, dynamic> json) {
 
 Store storeFromJson(Map<String, dynamic> json) {
   return Store(
-    id: json['id'] as int,
-    ownerId: json['owner_id'] as int,
+    id: asInt(json['id']),
+    ownerId: asInt(json['owner_id']),
     name: json['name'] as String,
     type: _enum(StoreType.values, json['type'] as String, StoreType.other),
-    status: _enum(StoreStatus.values, json['status'] as String, StoreStatus.pending),
+    status:
+        _enum(StoreStatus.values, json['status'] as String, StoreStatus.pending),
     lat: (json['lat'] as num).toDouble(),
     lng: (json['lng'] as num).toDouble(),
     barangay: json['barangay'] as String? ?? '',
@@ -175,8 +98,14 @@ Store storeFromJson(Map<String, dynamic> json) {
     isMobile: json['is_mobile'] == true,
     image: json['image'] as String?,
     verificationNote: json['verification_note'] as String? ?? '',
-    locationMode: _enum(LocationMode.values, json['location_mode'] as String? ?? (json['is_mobile'] == true ? 'regular' : 'fixed'), LocationMode.fixed),
-    locationUpdatedAt: DateTime.tryParse(json['location_updated_at'] as String? ?? ''),
+    locationMode: _enum(
+      LocationMode.values,
+      json['location_mode'] as String? ??
+          (json['is_mobile'] == true ? 'regular' : 'fixed'),
+      LocationMode.fixed,
+    ),
+    locationUpdatedAt:
+        DateTime.tryParse(json['location_updated_at'] as String? ?? ''),
   );
 }
 
@@ -196,20 +125,24 @@ RoutePreview routePreviewFromJson(Map<String, dynamic> json) {
 VendorSession? vendorSessionFromJson(Map<String, dynamic>? json) {
   if (json == null) return null;
   return VendorSession(
-    id: json['id'] as int?,
-    storeId: json['store_id'] as int,
+    id: json['id'] == null ? null : asInt(json['id']),
+    storeId: asInt(json['store_id']),
     lat: (json['lat'] as num).toDouble(),
     lng: (json['lng'] as num).toDouble(),
-    startedAt: DateTime.tryParse(json['started_at'] as String? ?? '') ?? DateTime.now(),
-    lastUpdateAt: DateTime.tryParse(json['last_update_at'] as String? ?? '') ?? DateTime.now(),
-    expiresAt: DateTime.tryParse(json['expires_at'] as String? ?? '') ?? DateTime.now().add(const Duration(hours: 2)),
+    startedAt:
+        DateTime.tryParse(json['started_at'] as String? ?? '') ?? DateTime.now(),
+    lastUpdateAt:
+        DateTime.tryParse(json['last_update_at'] as String? ?? '') ??
+            DateTime.now(),
+    expiresAt: DateTime.tryParse(json['expires_at'] as String? ?? '') ??
+        DateTime.now().add(const Duration(hours: 2)),
     endedAt: DateTime.tryParse(json['ended_at'] as String? ?? ''),
   );
 }
 
 CatalogProduct productFromJson(Map<String, dynamic> json) {
   return CatalogProduct(
-    id: json['id'] as int,
+    id: asInt(json['id']),
     name: json['name'] as String,
     category: json['category'] as String? ?? '',
     brand: json['brand'] as String? ?? '',
@@ -218,7 +151,9 @@ CatalogProduct productFromJson(Map<String, dynamic> json) {
     barcode: json['barcode'] as String?,
     image: json['image'] as String? ?? '',
     attributes: {
-      for (final entry in Map<String, dynamic>.from(json['attributes'] as Map? ?? {}).entries)
+      for (final entry in Map<String, dynamic>.from(
+              json['attributes'] as Map? ?? {})
+          .entries)
         entry.key: '${entry.value}',
     },
   );
@@ -226,45 +161,53 @@ CatalogProduct productFromJson(Map<String, dynamic> json) {
 
 StoreListing listingFromJson(Map<String, dynamic> json) {
   return StoreListing(
-    id: json['id'] as int,
-    storeId: json['store_id'] as int,
-    productId: json['product_id'] as int,
+    id: asInt(json['id']),
+    storeId: asInt(json['store_id']),
+    productId: asInt(json['product_id']),
     price: (json['price'] as num).toDouble(),
     unit: json['unit'] as String,
     quantity: json['quantity'] as int? ?? 0,
-    availability: _enum(Availability.values, json['availability'] as String, Availability.inStock),
-    lastConfirmed: DateTime.tryParse(json['last_confirmed_at'] as String? ?? '') ?? DateTime.now(),
-    status: _enum(ListingStatus.values, json['status'] as String? ?? 'active', ListingStatus.active),
+    availability: _enum(
+        Availability.values, json['availability'] as String, Availability.inStock),
+    lastConfirmed:
+        DateTime.tryParse(json['last_confirmed_at'] as String? ?? '') ??
+            DateTime.now(),
+    status: _enum(ListingStatus.values,
+        json['status'] as String? ?? 'active', ListingStatus.active),
   );
 }
 
 Promotion promotionFromJson(Map<String, dynamic> json) {
   return Promotion(
-    id: json['id'] as int,
-    storeId: json['store_id'] as int,
+    id: asInt(json['id']),
+    storeId: asInt(json['store_id']),
     title: json['title'] as String,
     offer: json['offer'] as String,
-    startsAt: DateTime.tryParse(json['starts_at'] as String? ?? '') ?? DateTime.now(),
-    endsAt: DateTime.tryParse(json['ends_at'] as String? ?? '') ?? DateTime.now(),
+    startsAt:
+        DateTime.tryParse(json['starts_at'] as String? ?? '') ?? DateTime.now(),
+    endsAt:
+        DateTime.tryParse(json['ends_at'] as String? ?? '') ?? DateTime.now(),
     sponsored: json['sponsored'] == true,
-    status: _enum(PromotionStatus.values, json['status'] as String, PromotionStatus.pending),
+    status: _enum(PromotionStatus.values, json['status'] as String,
+        PromotionStatus.pending),
   );
 }
 
 StoreTour tourFromJson(Map<String, dynamic> json) {
   return StoreTour(
-    id: json['id'] as int,
-    storeId: json['store_id'] as int,
+    id: asInt(json['id']),
+    storeId: asInt(json['store_id']),
     title: json['title'] as String,
     status: _enum(TourStatus.values, json['status'] as String, TourStatus.draft),
     nodes: [
       for (final node in (json['nodes'] as List? ?? []))
         TourNode(
-          id: node['id'] as int,
+          id: asInt(node['id']),
           title: node['title'] as String,
           image: node['image'] as String? ?? '',
-          connections: [...?(node['connections'] as List?)?.map((e) => e as int)],
-          privacyStatus: _enum(PrivacyStatus.values, node['privacy_status'] as String? ?? 'ready', PrivacyStatus.ready),
+          connections: [...?(node['connections'] as List?)?.map(asInt)],
+          privacyStatus: _enum(PrivacyStatus.values,
+              node['privacy_status'] as String? ?? 'ready', PrivacyStatus.ready),
           ownerReviewed: node['owner_reviewed'] == true,
           manualBlur: node['manual_blur'] == true,
           originalRetained: node['original_retained'] == true,

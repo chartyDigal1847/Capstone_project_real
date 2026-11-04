@@ -1,0 +1,39 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userDoc() {
+      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isAdmin() {
+      return signedIn() && userDoc().role == 'admin';
+    }
+
+    function isStoreOwner(storeId) {
+      return signedIn() &&
+        firestore.get(/databases/(default)/documents/stores/$(storeId)).data.ownerUid == request.auth.uid;
+    }
+
+    match /products/{uid}/{allPaths=**} {
+      allow read: if signedIn();
+      allow write: if signedIn() && request.auth.uid == uid && request.resource.size < 8 * 1024 * 1024;
+    }
+
+    match /tours/originals/{storeId}/{allPaths=**} {
+      allow read, write: if isStoreOwner(storeId) || isAdmin();
+    }
+
+    match /tours/public/{storeId}/{allPaths=**} {
+      allow read: if signedIn();
+      allow write: if isStoreOwner(storeId) || isAdmin();
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

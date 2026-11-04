@@ -183,6 +183,49 @@ class StoreDetailPage extends StatelessWidget {
                 const EmptyNote('No published store tour yet.', icon: Icons.threesixty_outlined),
               TextButton(onPressed: onReport, child: const Text('Report a problem with this listing')),
               const SizedBox(height: 10),
+              // ── Active promotions ──────────────────────────────────
+              Builder(builder: (context) {
+                final now = DateTime.now();
+                final promos = app.promotions.where((p) =>
+                    p.storeId == store.id &&
+                    p.status == PromotionStatus.approved &&
+                    !now.isBefore(p.startsAt) &&
+                    !now.isAfter(p.endsAt)).toList();
+                if (promos.isEmpty) return const SizedBox.shrink();
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Promotions', style: TextStyle(fontFamily: 'Georgia', fontSize: 22)),
+                    const SizedBox(height: 8),
+                    ...promos.map((p) => Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: SoftCard(
+                            color: sand,
+                            child: Row(
+                              children: [
+                                const Icon(Icons.campaign_outlined, color: leafDark),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Row(children: [
+                                        Expanded(child: Text(p.title, style: const TextStyle(fontWeight: FontWeight.w700))),
+                                        if (p.sponsored) const StatusChip('Sponsored', color: champagne),
+                                      ]),
+                                      const SizedBox(height: 2),
+                                      Text(p.offer, style: const TextStyle(fontSize: 12, color: charcoal)),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        )),
+                    const SizedBox(height: 4),
+                  ],
+                );
+              }),
               const Text('Sold here', style: TextStyle(fontFamily: 'Georgia', fontSize: 22)),
               const SizedBox(height: 8),
               const InfoBanner('These are this store’s listings only.', icon: Icons.inventory_2_outlined),
@@ -494,7 +537,7 @@ class LocationPage extends StatelessWidget {
             centerLng: app.searchLng,
             userLat: app.deviceLat,
             userLng: app.deviceLng,
-            onPick: (lat, lng) => app.setManualCenter(lat, lng, 'Pinned area · Quezon City'),
+            onPick: (lat, lng) => app.setManualCenter(lat, lng, 'Pinned area (${lat.toStringAsFixed(4)}, ${lng.toStringAsFixed(4)})'),
             height: 280,
           ),
         ),

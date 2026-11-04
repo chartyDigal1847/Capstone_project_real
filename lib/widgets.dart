@@ -338,6 +338,63 @@ class CaptureActions extends StatelessWidget {
   }
 }
 
+/// Password field with a built-in show/hide eye icon toggle.
+/// Manages its own visibility state — callers just pass the controller.
+class PasswordField extends StatefulWidget {
+  const PasswordField(this.label, this.controller, {super.key});
+
+  final String label;
+  final TextEditingController controller;
+
+  @override
+  State<PasswordField> createState() => _PasswordFieldState();
+}
+
+class _PasswordFieldState extends State<PasswordField> {
+  bool _visible = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Eyebrow(widget.label),
+        const SizedBox(height: 6),
+        TextField(
+          controller: widget.controller,
+          obscureText: !_visible,
+          maxLines: 1,
+          decoration: InputDecoration(
+            filled: true,
+            fillColor: ivory,
+            contentPadding: const EdgeInsets.fromLTRB(12, 12, 4, 12),
+            border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(14),
+                borderSide: const BorderSide(color: line)),
+            enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(14),
+                borderSide: const BorderSide(color: line)),
+            focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(14),
+                borderSide: const BorderSide(color: leaf, width: 1.4)),
+            suffixIcon: IconButton(
+              onPressed: () => setState(() => _visible = !_visible),
+              icon: Icon(
+                _visible
+                    ? Icons.visibility_off_outlined
+                    : Icons.visibility_outlined,
+                size: 20,
+                color: taupe,
+              ),
+              tooltip: _visible ? 'Hide password' : 'Show password',
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class FilterMenu<T> extends StatelessWidget {
   const FilterMenu({
     super.key,

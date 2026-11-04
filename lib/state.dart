@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 
 import 'api.dart';
+import 'firebase/bootstrap.dart';
+import 'firebase/gateway.dart';
 import 'models.dart';
 import 'repositories.dart';
 
@@ -17,14 +19,17 @@ class AppState extends ChangeNotifier {
     _seed();
   }
 
-  final api = LocalSpotApi();
+  final api = LocalSpotGateway();
   late final authRepo = AuthRepository(api);
   late final catalogRepo = CatalogRepository(api);
+
+  // [apiOnline] is true when Firebase is initialised and reachable.
+  // The app falls back to on-device seeded demo data when false.
   bool apiOnline = false;
   bool usingSeededCatalog = true;
   bool writeBusy = false;
   ApiException? lastApiError;
-  String connectionNote = 'Trying LocalSpot API…';
+  String connectionNote = 'Connecting to Firebase…';
 
   final users = <UserAccount>[];
   final stores = <Store>[];
@@ -119,25 +124,37 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> bootstrap() async {
-    await api.restoreToken();
-    try {
-      final data = await catalogRepo.catalog();
-      _applyCatalog(data);
+    // Initialise Firebase (reads firebase_options.dart).
+    final firebaseReady = await initLocalSpotFirebase();
+
+    if (firebaseReady) {
       apiOnline = true;
-      usingSeededCatalog = false;
-      connectionNote = 'Connected to Laravel API · Cubao pilot';
-      if (api.token != null) {
-        try {
-          await _hydrateSession();
-        } catch (_) {
-          await api.persistToken(null);
-          currentUser = null;
+      try {
+        final data = await catalogRepo.catalog();
+        _applyCatalog(data);
+        usingSeededCatalog = stores.isEmpty;
+        connectionNote = 'Connected to Firebase · Cubao pilot';
+        // Restore session from Firebase Auth persisted state if available.
+        if (api.token != null) {
+          try {
+            await _hydrateSession();
+          } catch (_) {
+            // Auth token may have expired; clear and fall through to guest mode.
+            currentUser = null;
+          }
         }
+      } catch (_) {
+        // Firebase is initialised but Firestore returned an error
+        // (e.g. security rules deny read before sign-in).
+        usingSeededCatalog = stores.isEmpty;
+        connectionNote = 'Firebase ready · sign in to load data';
       }
-    } catch (_) {
+    } else {
+      // Firebase not configured — show seeded demo catalog.
       apiOnline = false;
       usingSeededCatalog = true;
-      connectionNote = 'API offline · using on-device demo data';
+      connectionNote =
+          'Firebase not configured · using on-device demo data · fill in firebase_options.dart to connect';
     }
     notifyListeners();
   }
@@ -230,6 +247,8 @@ class AppState extends ChangeNotifier {
 
   Future<void> refreshNearby() async {
     if (!apiOnline) return;
+    // Firebase catalog is the source of truth — use the full catalog
+    // path which already returns location-aware store data.
     try {
       final query = {
         'lat': searchLat.toString(),
@@ -251,7 +270,8 @@ class AppState extends ChangeNotifier {
           existing.locationUpdatedAt = incoming.locationUpdatedAt;
         }
         final live = map['live_session'];
-        final session = vendorSessionFromJson(live is Map ? Map<String, dynamic>.from(live) : null);
+        final session =
+            vendorSessionFromJson(live is Map ? Map<String, dynamic>.from(live) : null);
         if (session != null) {
           vendorSessions[session.storeId] = session;
         } else {
@@ -295,10 +315,13 @@ class AppState extends ChangeNotifier {
     lastApiError = null;
     if (apiOnline) {
       try {
-        final data = await authRepo.register(name: name, email: email, password: password, role: role);
-        await api.persistToken(data['token'] as String);
-        currentUser = userFromJson(Map<String, dynamic>.from(data['user'] as Map));
-        await _hydrateSession();
+        final data = await authRepo.register(
+            name: name, email: email, password: password, role: role);
+        // Firebase Auth manages the session — token is the UID.
+        currentUser =
+            userFromJson(Map<String, dynamic>.from(data['user'] as Map));
+        // Hydrate catalog/favorites in the background; don't block the UI.
+        unawaited(_hydrateSession().catchError((_) {}));
         notifyListeners();
         return null;
       } on ApiException catch (error) {
@@ -307,6 +330,7 @@ class AppState extends ChangeNotifier {
         return error;
       }
     }
+    // Offline / demo mode.
     final user = UserAccount(
       id: _nextUser++,
       name: name,
@@ -323,29 +347,38 @@ class AppState extends ChangeNotifier {
   Future<String?> login(String email, String password) async {
     if (apiOnline) {
       try {
-        final data = await authRepo.login(email: email, password: password);
-        await api.persistToken(data['token'] as String);
-        currentUser = userFromJson(Map<String, dynamic>.from(data['user'] as Map));
-        await _hydrateSession();
-        if (currentUser!.role == AppRole.admin) {
-          final reportData = await api.get('/admin/reports') as List;
-          reports
-            ..clear()
-            ..addAll(reportData.map((e) => ReportItem(
-                  id: e['id'] as int,
-                  userId: e['user_id'] as int,
-                  target: e['target'] as String,
-                  reason: e['reason'] as String,
-                  resolved: e['resolved'] == true,
-                )));
-        }
+        final data =
+            await authRepo.login(email: email, password: password);
+        currentUser =
+            userFromJson(Map<String, dynamic>.from(data['user'] as Map));
+        // Hydrate in background so the UI navigates immediately.
+        unawaited(() async {
+          try {
+            await _hydrateSession();
+            if (currentUser?.role == AppRole.admin) {
+              final reportData = await api.get('/admin/reports') as List;
+              reports
+                ..clear()
+                ..addAll(reportData.map((e) => ReportItem(
+                      id: e['id'] as int,
+                      userId: e['user_id'] as int,
+                      target: e['target'] as String,
+                      reason: e['reason'] as String,
+                      resolved: e['resolved'] == true,
+                    )));
+              notifyListeners();
+            }
+          } catch (_) {}
+        }());
         notifyListeners();
         return null;
       } on ApiException catch (error) {
         return error.message;
       }
     }
-    final match = users.where((u) => u.email == email && u.password == password);
+    // Offline / demo mode.
+    final match =
+        users.where((u) => u.email == email && u.password == password);
     if (match.isEmpty) return 'Email or password is incorrect.';
     currentUser = match.first;
     notifyListeners();
@@ -353,10 +386,10 @@ class AppState extends ChangeNotifier {
   }
 
   void logout() {
-    if (apiOnline && api.token != null) {
+    // Firebase sign-out is handled inside the gateway's delete('/auth/logout').
+    if (apiOnline) {
       unawaited(api.delete('/auth/logout'));
     }
-    unawaited(api.persistToken(null));
     currentUser = null;
     followMyLocation = false;
     unawaited(stopLocationUpdates());

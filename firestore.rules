@@ -1,0 +1,317 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: Firebase Auth UID
+    // Fields:
+    //   - numericId: number (required, immutable)
+    //   - name: string (1-80)
+    //   - email: string (email)
+    //   - role: string customer|owner|staff|admin
+    //   - ownedStoreIds: list<number> (<=20)
+    //   - memberStoreIds: list<number> (<=20)
+    //   - storeGrants: list<map> (<=20)
+    //
+    // Collection: stores
+    // Document ID: auto id (also stored as docId)
+    // Fields: numericId, ownerId, ownerUid, name, type, status, lat, lng,
+    //   barangay, city, address, landmark, schedule, is_mobile, image,
+    //   verification_note, location_mode, location_updated_at
+    //
+    // Collection: products, listings, promotions, tours, storeMembers,
+    //   favorites, reports, feedback, vendorSessions, stockMovements, auditLogs
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function userPath() {
+      return /databases/$(database)/documents/users/$(request.auth.uid);
+    }
+
+    function currentUser() {
+      return get(userPath()).data;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && exists(userPath()) && currentUser().role == 'admin';
+    }
+
+    function isOwnerRole() {
+      return isAuthenticated() && exists(userPath()) && currentUser().role in ['owner', 'admin'];
+    }
+
+    function validEmail(value) {
+      return value is string && value.size() <= 120 && value.matches('^[^@]+@[^@]+\\.[^@]+$');
+    }
+
+    function validString(value, minLen, maxLen) {
+      return value is string && value.size() >= minLen && value.size() <= maxLen;
+    }
+
+    function validRole(value) {
+      return value in ['customer', 'owner', 'staff', 'admin'];
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasOnly([
+          'numericId', 'name', 'email', 'role', 'ownedStoreIds', 'memberStoreIds', 'storeGrants'
+        ]) &&
+        data.numericId is number &&
+        validString(data.name, 1, 80) &&
+        validEmail(data.email) &&
+        validRole(data.role) &&
+        data.ownedStoreIds is list && data.ownedStoreIds.size() <= 20 &&
+        data.memberStoreIds is list && data.memberStoreIds.size() <= 20 &&
+        data.storeGrants is list && data.storeGrants.size() <= 20;
+    }
+
+    function storeTypes() {
+      return [
+        'sariSari', 'fruitVegetable', 'marketStall', 'streetVendor', 'convenience',
+        'supermarket', 'generalMerchandise', 'hardware', 'electronics', 'appliance',
+        'clothing', 'bookstore', 'autoParts', 'other'
+      ];
+    }
+
+    function isValidStore(data) {
+      return data.keys().hasOnly([
+          'numericId', 'ownerId', 'ownerUid', 'name', 'type', 'status', 'lat', 'lng',
+          'barangay', 'city', 'address', 'landmark', 'schedule', 'is_mobile', 'image',
+          'verification_note', 'location_mode', 'location_updated_at'
+        ]) &&
+        data.numericId is number &&
+        data.ownerId is number &&
+        data.ownerUid is string &&
+        validString(data.name, 1, 80) &&
+        data.type in storeTypes() &&
+        data.status in ['pending', 'approved', 'suspended'] &&
+        data.lat is number && data.lng is number &&
+        validString(data.barangay, 0, 80) &&
+        validString(data.city, 0, 80) &&
+        validString(data.address, 0, 160) &&
+        validString(data.landmark, 0, 160) &&
+        validString(data.schedule, 0, 120) &&
+        data.is_mobile is bool &&
+        data.location_mode in ['fixed', 'regular', 'live', 'stale'];
+    }
+
+    function isValidProduct(data) {
+      return data.keys().hasOnly([
+          'numericId', 'name', 'category', 'brand', 'package_size', 'aliases',
+          'barcode', 'image', 'attributes', 'createdByUid'
+        ]) &&
+        data.numericId is number &&
+        validString(data.name, 1, 80) &&
+        validString(data.category, 1, 40) &&
+        data.aliases is list && data.aliases.size() <= 20 &&
+        data.attributes is map;
+    }
+
+    function isValidListing(data) {
+      return data.keys().hasOnly([
+          'numericId', 'storeId', 'productId', 'price', 'unit', 'quantity',
+          'availability', 'last_confirmed_at', 'status', 'ownerUid'
+        ]) &&
+        data.numericId is number &&
+        data.storeId is number &&
+        data.productId is number &&
+        data.price is number && data.price >= 0 && data.price <= 1000000 &&
+        validString(data.unit, 1, 40) &&
+        data.quantity is number && data.quantity >= 0 && data.quantity <= 100000 &&
+        data.availability in ['in_stock', 'low', 'unavailable'] &&
+        data.status in ['active', 'archived', 'unavailable'];
+    }
+
+    function isValidPromotion(data) {
+      return data.keys().hasOnly([
+          'numericId', 'storeId', 'title', 'offer', 'starts_at', 'ends_at',
+          'sponsored', 'status', 'ownerUid'
+        ]) &&
+        data.numericId is number &&
+        data.storeId is number &&
+        validString(data.title, 1, 80) &&
+        validString(data.offer, 1, 200) &&
+        data.sponsored is bool &&
+        data.status in ['draft', 'pending', 'approved', 'rejected'];
+    }
+
+    function isValidTour(data) {
+      return data.keys().hasOnly([
+          'numericId', 'storeId', 'title', 'status', 'nodes', 'ownerUid'
+        ]) &&
+        data.numericId is number &&
+        data.storeId is number &&
+        validString(data.title, 1, 80) &&
+        data.status in ['draft', 'published'] &&
+        data.nodes is list && data.nodes.size() <= 40;
+    }
+
+    function ownsStore(storeId) {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/stores/$(storeId)) &&
+        get(/databases/$(database)/documents/stores/$(storeId)).data.ownerUid == request.auth.uid;
+    }
+
+    function ownsStoreNumeric(storeNumericId) {
+      return isAuthenticated() &&
+        exists(userPath()) &&
+        currentUser().ownedStoreIds.hasAny([storeNumericId]);
+    }
+
+    match /users/{userId} {
+      allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+      allow create: if isAuthenticated() && request.auth.uid == userId &&
+        isValidUser(request.resource.data) &&
+        request.resource.data.email == request.auth.token.email &&
+        (
+          request.resource.data.role in ['customer', 'owner'] ||
+          (
+            request.resource.data.role == 'admin' &&
+            request.auth.token.email == 'admin@localspot.ph'
+          )
+        );
+      allow update: if isAuthenticated() && isValidUser(request.resource.data) &&
+        request.resource.data.numericId == resource.data.numericId &&
+        request.resource.data.email == resource.data.email &&
+        (
+          (request.auth.uid == userId && request.resource.data.role == resource.data.role) ||
+          isAdmin()
+        );
+      allow delete: if isAdmin();
+    }
+
+    match /stores/{storeId} {
+      allow read: if isAuthenticated();
+      allow create: if isOwnerRole() && isValidStore(request.resource.data) &&
+        request.resource.data.ownerUid == request.auth.uid &&
+        request.resource.data.status == 'pending';
+      allow update: if isValidStore(request.resource.data) &&
+        request.resource.data.numericId == resource.data.numericId &&
+        request.resource.data.ownerUid == resource.data.ownerUid &&
+        (
+          (resource.data.ownerUid == request.auth.uid &&
+            request.resource.data.status == resource.data.status) ||
+          isAdmin()
+        );
+      allow delete: if isAdmin();
+    }
+
+    match /products/{id} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidProduct(request.resource.data) &&
+        request.resource.data.createdByUid == request.auth.uid;
+      allow update: if isAuthenticated() && isValidProduct(request.resource.data) &&
+        request.resource.data.numericId == resource.data.numericId &&
+        (resource.data.createdByUid == request.auth.uid || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    match /listings/{id} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidListing(request.resource.data) &&
+        request.resource.data.ownerUid == request.auth.uid;
+      allow update: if isAuthenticated() && isValidListing(request.resource.data) &&
+        request.resource.data.numericId == resource.data.numericId &&
+        (resource.data.ownerUid == request.auth.uid || isAdmin());
+      allow delete: if resource.data.ownerUid == request.auth.uid || isAdmin();
+    }
+
+    match /promotions/{id} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidPromotion(request.resource.data) &&
+        request.resource.data.ownerUid == request.auth.uid &&
+        request.resource.data.status == 'pending';
+      allow update: if isValidPromotion(request.resource.data) &&
+        request.resource.data.numericId == resource.data.numericId &&
+        (
+          (resource.data.ownerUid == request.auth.uid &&
+            request.resource.data.status == resource.data.status) ||
+          isAdmin()
+        );
+      allow delete: if isAdmin();
+    }
+
+    match /tours/{id} {
+      allow read: if isAuthenticated() &&
+        (resource.data.status == 'published' || resource.data.ownerUid == request.auth.uid || isAdmin());
+      allow create: if isAuthenticated() && isValidTour(request.resource.data) &&
+        request.resource.data.ownerUid == request.auth.uid &&
+        request.resource.data.status == 'draft';
+      allow update: if isValidTour(request.resource.data) &&
+        request.resource.data.numericId == resource.data.numericId &&
+        request.resource.data.ownerUid == resource.data.ownerUid &&
+        (resource.data.ownerUid == request.auth.uid || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    match /storeMembers/{id} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated() &&
+        request.resource.data.keys().hasOnly([
+          'storeId', 'email', 'userUid', 'userNumericId', 'inventory', 'promotions', 'location'
+        ]) &&
+        (ownsStoreNumeric(request.resource.data.storeId) || isAdmin());
+      allow delete: if isAdmin() || ownsStoreNumeric(resource.data.storeId);
+    }
+
+    match /favorites/{id} {
+      allow read, delete: if isAuthenticated() && resource.data.uid == request.auth.uid;
+      allow create: if isAuthenticated() &&
+        request.resource.data.uid == request.auth.uid &&
+        request.resource.data.keys().hasOnly(['uid', 'favoritable_type', 'favoritable_id']) &&
+        request.resource.data.favoritable_type in ['store', 'product'] &&
+        request.resource.data.favoritable_id is number;
+    }
+
+    match /reports/{id} {
+      allow read: if isAdmin();
+      allow create: if isAuthenticated() &&
+        request.resource.data.keys().hasOnly(['numericId', 'userId', 'uid', 'target', 'reason', 'resolved']) &&
+        request.resource.data.uid == request.auth.uid &&
+        request.resource.data.resolved == false &&
+        validString(request.resource.data.target, 1, 120) &&
+        validString(request.resource.data.reason, 1, 400);
+      allow update: if isAdmin() && request.resource.data.resolved is bool;
+    }
+
+    match /feedback/{id} {
+      allow read: if isAdmin() || (isAuthenticated() && resource.data.uid == request.auth.uid);
+      allow create: if isAuthenticated() &&
+        request.resource.data.keys().hasOnly(['numericId', 'userId', 'uid', 'topic', 'body', 'area']) &&
+        request.resource.data.uid == request.auth.uid &&
+        validString(request.resource.data.topic, 1, 80) &&
+        validString(request.resource.data.body, 1, 1000);
+    }
+
+    match /vendorSessions/{id} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated() &&
+        request.resource.data.keys().hasOnly([
+          'numericId', 'storeId', 'lat', 'lng', 'started_at', 'last_update_at',
+          'expires_at', 'ended_at', 'ownerUid'
+        ]) &&
+        request.resource.data.ownerUid == request.auth.uid;
+      allow delete: if isAuthenticated() && resource.data.ownerUid == request.auth.uid;
+    }
+
+    match /stockMovements/{id} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() &&
+        request.resource.data.keys().hasOnly([
+          'listingId', 'kind', 'quantity_delta', 'note', 'created_at', 'ownerUid'
+        ]) &&
+        request.resource.data.ownerUid == request.auth.uid;
+    }
+
+    match /auditLogs/{id} {
+      allow read: if isAdmin();
+      allow create: if isAdmin();
+    }
+  }
+}

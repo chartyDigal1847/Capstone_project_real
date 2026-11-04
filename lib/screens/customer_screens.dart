@@ -67,8 +67,35 @@ class HomePage extends StatelessWidget {
             ),
           ),
         ),
-        if (sponsored.isNotEmpty || hot.isNotEmpty) ...[
-          const SizedBox(height: 8),
+        // ── Category browse chips ─────────────────────────────────
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 6, 0, 0),
+          child: SizedBox(
+            height: 36,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              children: [
+                for (final family in browseFamilies)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: ActionChip(
+                      label: Text(family.$1),
+                      onPressed: () {
+                        AppScope.of(context)
+                          ..setCategoryFilter(familyFilterValue(family.$2))
+                          ..applySearchDraft(family.$1);
+                        onSearch();
+                      },
+                      backgroundColor: paper,
+                      side: const BorderSide(color: line),
+                      labelStyle: const TextStyle(fontSize: 12, color: charcoal),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        if (sponsored.isNotEmpty || hot.isNotEmpty) ...[          const SizedBox(height: 8),
           SectionHeading('Hot & sponsored', onTap: onMap, action: 'Open map'),
           SizedBox(
             height: 168,
@@ -261,8 +288,16 @@ class _SearchPageState extends State<SearchPage> {
         if (app.searchBusy) const LinearProgressIndicator(minHeight: 2, color: leaf),
         if (app.searchNote.isNotEmpty)
           Padding(
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
-            child: Text(app.searchNote, style: const TextStyle(color: taupe, fontSize: 12)),
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 4),
+            child: Row(
+              children: [
+                Expanded(child: Text(app.searchNote, style: const TextStyle(color: taupe, fontSize: 12))),
+                TextButton(
+                  onPressed: () => app.fetchSearch(activeQuery.isEmpty ? controller.text : activeQuery),
+                  child: const Text('Retry'),
+                ),
+              ],
+            ),
           ),
         Padding(
           padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
@@ -680,7 +715,32 @@ class ProfilePage extends StatelessWidget {
             padding: EdgeInsets.zero,
             child: Column(
               children: [
-                MenuRow(icon: Icons.flag_outlined, title: 'Reports you filed', subtitle: '${app.reports.where((r) => r.userId == user.id).length} reports'),
+                MenuRow(icon: Icons.flag_outlined, title: 'Reports you filed', subtitle: '${app.reports.where((r) => r.userId == user.id).length} reports',
+                  onTap: () {
+                    final mine = app.reports.where((r) => r.userId == user.id).toList();
+                    showDialog<void>(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                        title: const Text('Your reports'),
+                        content: mine.isEmpty
+                            ? const Text('You have not filed any reports yet.')
+                            : SizedBox(
+                                width: 340,
+                                child: ListView(shrinkWrap: true, children: [
+                                  for (final r in mine)
+                                    ListTile(
+                                      dense: true,
+                                      title: Text(r.target, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                                      subtitle: Text(r.reason, style: const TextStyle(fontSize: 12)),
+                                      trailing: r.resolved ? const StatusChip('Resolved', color: leaf) : const StatusChip('Pending', color: champagne),
+                                    ),
+                                ]),
+                              ),
+                        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close'))],
+                      ),
+                    );
+                  },
+                ),
                 const Divider(height: 1),
                 MenuRow(icon: Icons.forum_outlined, title: 'Pilot feedback', subtitle: 'Failed search, wrong pin, or stale stock', onTap: onFeedback),
                 if (user.role == AppRole.admin) ...[
