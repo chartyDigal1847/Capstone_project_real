@@ -212,11 +212,21 @@ class SeededDataBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
-    if (!app.usingSeededCatalog) return const SizedBox.shrink();
+    // Hide the banner once Firebase is connected and has real data.
+    if (app.apiOnline && !app.usingSeededCatalog) return const SizedBox.shrink();
+    if (app.apiOnline && app.usingSeededCatalog) {
+      return const Padding(
+        padding: EdgeInsets.fromLTRB(20, 0, 20, 10),
+        child: InfoBanner(
+          'Connected to Firebase but no catalog data yet. Register a store and add products to get started.',
+          icon: Icons.cloud_outlined,
+        ),
+      );
+    }
     return const Padding(
       padding: EdgeInsets.fromLTRB(20, 0, 20, 10),
       child: InfoBanner(
-        'Bundled Cubao sample listings. This is demo data, not a live nationwide catalog. Connect the LocalSpot API for participating stores.',
+        'Showing bundled Cubao sample data. Connect Firebase to use real store listings.',
         icon: Icons.science_outlined,
       ),
     );

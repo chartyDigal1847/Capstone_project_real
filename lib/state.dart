@@ -264,9 +264,13 @@ class AppState extends ChangeNotifier {
 
   Future<void> refreshCatalog() async {
     if (!apiOnline) return;
-    final data = await catalogRepo.catalog();
-    _applyCatalog(data);
-    notifyListeners();
+    try {
+      final data = await catalogRepo.catalog();
+      _applyCatalog(data);
+      usingSeededCatalog = false;
+      connectionNote = 'Connected to Firebase · Cubao pilot';
+      notifyListeners();
+    } catch (_) {}
   }
 
   Future<void> refreshNearby() async {

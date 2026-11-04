@@ -4,13 +4,14 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../api.dart';
 import '../map_view.dart';
 import '../models.dart';
 import '../state.dart';
 import '../theme.dart';
 import '../widgets.dart';
 
-class ProductDetailPage extends StatelessWidget {
+class ProductDetailPage extends StatefulWidget {
   const ProductDetailPage({
     super.key,
     required this.product,
@@ -22,21 +23,81 @@ class ProductDetailPage extends StatelessWidget {
   final ValueChanged<Store> onStore;
 
   @override
+  State<ProductDetailPage> createState() => _ProductDetailPageState();
+}
+
+class _ProductDetailPageState extends State<ProductDetailPage> {
+  List<SearchHit>? _remoteHits;
+  bool _loading = false;
+  AppState? _app;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _app = AppScope.of(context);
+    if (_remoteHits == null && !_loading) _loadRemote();
+  }
+
+  @override
+  void dispose() {
+    _app?.cancelSearch();
+    super.dispose();
+  }
+
+  Future<void> _loadRemote() async {
+    final app = AppScope.of(context);
+    if (!app.apiOnline) return;
+    setState(() => _loading = true);
+    try {
+      final envelope = await app.catalogRepo.searchListings({
+        'q': widget.product.name,
+        'lat': app.searchLat.toString(),
+        'lng': app.searchLng.toString(),
+        'radius_km': app.radiusKm.toString(),
+      });
+      if (!mounted) return;
+      final rows = envelope['data'];
+      if (rows is List) {
+        final hits = <SearchHit>[];
+        for (final row in rows) {
+          try {
+            final r = Map<String, dynamic>.from(row as Map);
+            final p = productFromJson(Map<String, dynamic>.from(r['product'] as Map));
+            // Only show results for this exact product.
+            if (p.id != widget.product.id && p.name.toLowerCase() != widget.product.name.toLowerCase()) continue;
+            hits.add(SearchHit(
+              listing: listingFromJson(Map<String, dynamic>.from(r['listing'] as Map)),
+              store: storeFromJson(Map<String, dynamic>.from(r['store'] as Map)),
+              product: p,
+              distanceKm: (r['distance_km'] as num?)?.toDouble() ?? 0,
+              matchType: SearchMatchType.exact,
+            ));
+          } catch (_) {}
+        }
+        setState(() { _remoteHits = hits; _loading = false; });
+        return;
+      }
+    } catch (_) {}
+    if (mounted) setState(() => _loading = false);
+  }
+
+  @override
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
-    final hits = app.listingsForProduct(product.id);
-    final saved = app.favoriteProductIds.contains(product.id);
+    final localHits = app.listingsForProduct(widget.product.id);
+    final hits = _remoteHits ?? localHits;
+    final saved = app.favoriteProductIds.contains(widget.product.id);
     return ListView(
       children: [
         Stack(
           children: [
-            NetworkPhoto(product.image, height: 240, width: double.infinity, radius: 0),
-            Positioned(top: 12, left: 8, child: IconButton.filledTonal(onPressed: onBack, icon: const Icon(Icons.arrow_back))),
+            NetworkPhoto(widget.product.image, height: 240, width: double.infinity, radius: 0),
+            Positioned(top: 12, left: 8, child: IconButton.filledTonal(onPressed: widget.onBack, icon: const Icon(Icons.arrow_back))),
             Positioned(
               top: 12,
               right: 8,
               child: IconButton.filledTonal(
-                onPressed: () => app.toggleFavoriteProduct(product.id),
+                onPressed: () => app.toggleFavoriteProduct(widget.product.id),
                 icon: Icon(saved ? Icons.favorite : Icons.favorite_border),
               ),
             ),
@@ -51,38 +112,54 @@ class ProductDetailPage extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Eyebrow(product.category.toUpperCase()),
+                    Eyebrow(widget.product.category.toUpperCase()),
                     const SizedBox(height: 6),
-                    Text(product.name, style: const TextStyle(fontFamily: 'Georgia', fontSize: 28, height: 1.1)),
-                    if (product.brand.isNotEmpty) Text(product.brand, style: const TextStyle(color: taupe)),
-                    Text(product.packageSize, style: const TextStyle(fontSize: 13)),
-                    if (product.attributes.isNotEmpty) ...[
+                    Text(widget.product.name, style: const TextStyle(fontFamily: 'Georgia', fontSize: 28, height: 1.1)),
+                    if (widget.product.brand.isNotEmpty) Text(widget.product.brand, style: const TextStyle(color: taupe)),
+                    Text(widget.product.packageSize, style: const TextStyle(fontSize: 13)),
+                    if (widget.product.attributes.isNotEmpty) ...[
                       const SizedBox(height: 8),
-                      for (final entry in product.attributes.entries)
+                      for (final entry in widget.product.attributes.entries)
                         Text('${entry.key}: ${entry.value}', style: const TextStyle(fontSize: 12, color: taupe)),
                     ],
                     const SizedBox(height: 10),
-                    Text('Also searched as: ${product.aliases.join(', ')}', style: const TextStyle(color: taupe, fontSize: 11, height: 1.4)),
+                    Text('Also searched as: ${widget.product.aliases.join(', ')}', style: const TextStyle(color: taupe, fontSize: 11, height: 1.4)),
                   ],
                 ),
               ),
               const SizedBox(height: 18),
-              const Text('Participating sellers', style: TextStyle(fontFamily: 'Georgia', fontSize: 22)),
+              Row(
+                children: [
+                  const Expanded(child: Text('Participating sellers', style: TextStyle(fontFamily: 'Georgia', fontSize: 22))),
+                  if (_loading) const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
+                  if (!_loading && app.apiOnline)
+                    IconButton(icon: const Icon(Icons.refresh, size: 20), tooltip: 'Refresh sellers', onPressed: _loadRemote),
+                ],
+              ),
               const SizedBox(height: 8),
-              if (hits.isEmpty)
+              if (hits.isEmpty && !_loading)
                 const EmptyNote('No approved nearby store has listed this product yet.', icon: Icons.storefront_outlined)
               else
                 ...hits.map((hit) => Padding(
                       padding: const EdgeInsets.only(bottom: 10),
                       child: SoftCard(
-                        onTap: () => onStore(hit.store),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                        onTap: () => widget.onStore(hit.store),
+                        child: Row(
                           children: [
-                            Text(hit.store.name, style: const TextStyle(fontWeight: FontWeight.w700)),
-                            Text('${hit.store.type.label} · ${hit.distanceKm.toStringAsFixed(1)} km'),
-                            Text('${peso(hit.listing.price)} / ${hit.listing.unit} · ${availabilityLabel(hit.listing.availability)}'),
-                            Text(freshness(hit.listing.lastConfirmed), style: const TextStyle(color: taupe, fontSize: 11)),
+                            NetworkPhoto(hit.store.image, width: 60, height: 60, radius: 10),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(hit.store.name, style: const TextStyle(fontWeight: FontWeight.w700)),
+                                  Text('${hit.store.type.label} · ${hit.distanceKm.toStringAsFixed(1)} km', style: const TextStyle(color: taupe, fontSize: 11)),
+                                  Text('${peso(hit.listing.price)} / ${hit.listing.unit} · ${availabilityLabel(hit.listing.availability)}'),
+                                  Text(freshness(hit.listing.lastConfirmed), style: const TextStyle(color: taupe, fontSize: 11)),
+                                ],
+                              ),
+                            ),
+                            const Icon(Icons.chevron_right, color: taupe),
                           ],
                         ),
                       ),

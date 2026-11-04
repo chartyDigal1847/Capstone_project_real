@@ -142,6 +142,32 @@ class _StoreRegisterPageState extends State<StoreRegisterPage> {
   double lat = defaultCenterLat;
   double lng = defaultCenterLng;
 
+  // Field-level validation errors.
+  String? nameError;
+  String? landmarkError;
+  String? verificationError;
+  bool submitting = false;
+
+  @override
+  void dispose() {
+    name.dispose();
+    barangay.dispose();
+    city.dispose();
+    address.dispose();
+    landmark.dispose();
+    schedule.dispose();
+    verification.dispose();
+    super.dispose();
+  }
+
+  void _validate() {
+    nameError = name.text.trim().isEmpty ? 'Enter a store name.' : null;
+    landmarkError = landmark.text.trim().isEmpty ? 'Enter a landmark so customers can find you.' : null;
+    verificationError = verification.text.trim().isEmpty ? 'Add a verification note (e.g. business permit number).' : null;
+  }
+
+  bool get _hasErrors => nameError != null || landmarkError != null || verificationError != null;
+
   @override
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
@@ -156,6 +182,10 @@ class _StoreRegisterPageState extends State<StoreRegisterPage> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               LabeledField('Store name', name),
+              if (nameError != null) Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(nameError!, style: const TextStyle(color: clay, fontSize: 12)),
+              ),
               const SizedBox(height: 12),
               FilterMenu<StoreType>(
                 label: 'Seller type',
@@ -200,21 +230,28 @@ class _StoreRegisterPageState extends State<StoreRegisterPage> {
               LabeledField('Street address (if any)', address),
               const SizedBox(height: 8),
               LabeledField('Landmark', landmark),
+              if (landmarkError != null) Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(landmarkError!, style: const TextStyle(color: clay, fontSize: 12)),
+              ),
               const SizedBox(height: 8),
               LabeledField('Operating schedule', schedule),
               const SizedBox(height: 8),
               LabeledField('Verification details', verification),
+              if (verificationError != null) Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(verificationError!, style: const TextStyle(color: clay, fontSize: 12)),
+              ),
             ],
           ),
         ),
         const SizedBox(height: 16),
-        PrimaryButton('Submit for review', onPressed: app.writeBusy
+        PrimaryButton('Submit for review', onPressed: submitting || app.writeBusy
             ? null
             : () {
-          if (name.text.trim().isEmpty || landmark.text.trim().isEmpty || verification.text.trim().isEmpty) {
-            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Add a store name, landmark and verification note.')));
-            return;
-          }
+          setState(_validate);
+          if (_hasErrors) return;
+          setState(() => submitting = true);
           app.registerStore(
             name: name.text.trim(),
             type: type,

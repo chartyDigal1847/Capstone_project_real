@@ -695,7 +695,7 @@ class ProfilePage extends StatelessWidget {
               children: [
                 MenuRow(
                   icon: Icons.cloud_outlined,
-                  title: app.apiOnline ? 'API connected' : 'Retry API connection',
+                  title: app.apiOnline ? 'Firebase connected' : 'Firebase not connected',
                   subtitle: app.connectionNote,
                   onTap: () => app.bootstrap(),
                 ),
