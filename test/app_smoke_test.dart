@@ -22,7 +22,8 @@ void main() {
     expect(find.text('Home'), findsWidgets);
     expect(find.textContaining('Cubao'), findsWidgets);
     expect(find.text('BROWSE CATEGORIES'), findsNothing);
-    expect(find.text('Food'), findsNothing);
+    // Category chips are now present on the home screen (Food, Tech, Hardware…)
+    expect(find.text('Food'), findsOneWidget);
     await tester.scrollUntilVisible(find.text('Stores near you'), 240, scrollable: find.byType(Scrollable).first);
     expect(find.text('Stores near you'), findsOneWidget);
     expect(find.textContaining('Sponsored'), findsWidgets);
