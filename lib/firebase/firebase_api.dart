@@ -222,7 +222,28 @@ class LocalSpotFirebaseApi {
           },
       ];
     }
+    if (path == '/admin/feedback') {
+      final snap = await _db.collection('feedback').orderBy('topic').get();
+      return [
+        for (final doc in snap.docs)
+          {
+            'id': doc.data()['numericId'] ?? doc.id.hashCode,
+            'user_id': doc.data()['userId'],
+            'topic': doc.data()['topic'],
+            'body': doc.data()['body'],
+            'area': doc.data()['area'],
+          },
+      ];
+    }
     if (path == '/stores/nearby') return (await catalog())['stores'];
+
+    // Recognition job status poll — return immediately as 'ready' since
+    // Firebase recognition is synchronous in _recognitionSuggest.
+    final recognitionJob = RegExp(r'^/product-recognition/jobs/(\d+)$').firstMatch(path);
+    if (recognitionJob != null) {
+      return {'id': int.parse(recognitionJob.group(1)!), 'status': 'ready', 'suggestions': const []};
+    }
+
     final movement = RegExp(r'^/store-products/(\d+)/movements$').firstMatch(path);
     if (movement != null) {
       final listingId = int.parse(movement.group(1)!);
@@ -393,15 +414,51 @@ class LocalSpotFirebaseApi {
 
     final staff = RegExp(r'^/stores/(\d+)/staff$').firstMatch(path);
     if (staff != null) {
-      await _db.collection('storeMembers').add({
-        'storeId': int.parse(staff.group(1)!),
-        'email': data['email'],
-        'userUid': '',
-        'userNumericId': 0,
+      final storeId = int.parse(staff.group(1)!);
+      final email = '${data['email']}'.trim().toLowerCase();
+      // Look up the invitee's Firestore user doc by email
+      String userUid = '';
+      int userNumericId = 0;
+      try {
+        final snap = await _db.collection('users').where('email', isEqualTo: email).limit(1).get();
+        if (snap.docs.isEmpty) {
+          throw ApiException('No LocalSpot account uses that email.');
+        }
+        userUid = snap.docs.first.id;
+        userNumericId = _toInt(snap.docs.first.data()['numericId']);
+        // Add storeId to their memberStoreIds
+        await _db.runTransaction((tx) async {
+          final ref = snap.docs.first.reference;
+          final current = await tx.get(ref);
+          final existing = (current.data()?['memberStoreIds'] as List? ?? []);
+          if (!existing.contains(storeId)) {
+            tx.update(ref, {'memberStoreIds': [...existing, storeId], 'role': 'staff'});
+          }
+        });
+      } catch (e) {
+        if (e is ApiException) rethrow;
+        // If lookup fails, proceed with empty uid (offline-ish fallback)
+      }
+      // Upsert storeMember record
+      final existing = await _db.collection('storeMembers')
+          .where('storeId', isEqualTo: storeId)
+          .where('email', isEqualTo: email)
+          .limit(1)
+          .get();
+      final memberData = {
+        'storeId': storeId,
+        'email': email,
+        'userUid': userUid,
+        'userNumericId': userNumericId,
         'inventory': data['can_inventory'] == true,
         'promotions': data['can_promotions'] == true,
         'location': data['can_location'] == true,
-      });
+      };
+      if (existing.docs.isNotEmpty) {
+        await existing.docs.first.reference.update(memberData);
+      } else {
+        await _db.collection('storeMembers').add(memberData);
+      }
       return {'ok': true};
     }
 
@@ -604,7 +661,152 @@ class LocalSpotFirebaseApi {
       });
     }
 
+    // ── Product recognition (catalog keyword/alias ranking) ───────────────
+    if (path == '/product-recognition/suggest') {
+      return _recognitionSuggest(data);
+    }
+
+    // ── Route preview (straight-line fallback) ────────────────────────────
+    if (path == '/routes/preview') {
+      return _routePreview(data);
+    }
+
+    // ── Visual / image search ─────────────────────────────────────────────
+    if (path == '/search/by-image') {
+      final suggestions = await _recognitionSuggest(data);
+      final catalogData = await catalog();
+      final allListings = catalogData['listings'] as List? ?? [];
+      final allProducts = catalogData['products'] as List? ?? [];
+      final allStores = catalogData['stores'] as List? ?? [];
+      final productMap = <int, Map<String, dynamic>>{
+        for (final p in allProducts) _toInt((p as Map)['id']): Map<String, dynamic>.from(p),
+      };
+      final storeMap = <int, Map<String, dynamic>>{
+        for (final s in allStores) _toInt((s as Map)['id']): Map<String, dynamic>.from(s),
+      };
+      final suggestedIds = <int>{
+        for (final s in (suggestions['suggestions'] as List? ?? []))
+          if ((s as Map)['product'] != null) _toInt(s['product']['id']),
+      };
+      final hits = <Map<String, dynamic>>[];
+      for (final listing in allListings) {
+        final l = Map<String, dynamic>.from(listing as Map);
+        final productId = _toInt(l['product_id']);
+        if (!suggestedIds.contains(productId)) continue;
+        final product = productMap[productId];
+        final store = storeMap[_toInt(l['store_id'])];
+        if (product == null || store == null) continue;
+        if (store['status'] != 'approved') continue;
+        hits.add({'listing': l, 'product': product, 'store': store, 'distance_km': 0});
+      }
+      return {
+        'suggestions': suggestions['suggestions'],
+        'hits': hits,
+        'uncertain': suggestions['uncertain'] ?? true,
+      };
+    }
+
     throw ApiException('Unsupported Firebase POST $path');
+  }
+
+  /// Rank the catalog by keyword/alias/category match against hint + barcode.
+  /// This is the on-device recognition pipeline (no external vision API).
+  Future<Map<String, dynamic>> _recognitionSuggest(Map<String, dynamic> data) async {
+    final hint = (data['hint'] as String? ?? '').toLowerCase().trim();
+    final barcode = (data['barcode'] as String? ?? '').trim();
+    final catalogData = await catalog();
+    final allProducts = catalogData['products'] as List? ?? [];
+
+    // Score each product
+    final scored = <(int score, Map<String, dynamic> product)>[];
+    for (final p in allProducts) {
+      final product = Map<String, dynamic>.from(p as Map);
+      final score = _scoreProduct(product, hint: hint, barcode: barcode);
+      if (score < 100) scored.add((score, product));
+    }
+    scored.sort((a, b) => a.$1.compareTo(b.$1));
+
+    final suggestions = <Map<String, dynamic>>[];
+    for (final item in scored.take(4)) {
+      final product = item.$2;
+      final confidence = item.$1 == 0 ? 0.92 : item.$1 <= 3 ? 0.75 : 0.45;
+      suggestions.add({
+        'product': product,
+        'label': '${product['name']} · ${product['category']}',
+        'confidence': confidence,
+        'unknown_fields': ['price', 'stock'],
+        'ocr': barcode.isNotEmpty ? 'barcode: $barcode' : null,
+      });
+    }
+
+    if (suggestions.isEmpty) {
+      suggestions.add({
+        'product': null,
+        'label': 'No catalog match · encode manually',
+        'confidence': 0.0,
+        'unknown_fields': ['identity', 'price', 'stock'],
+        'ocr': null,
+      });
+    }
+
+    return {
+      'suggestions': suggestions,
+      'uncertain': suggestions.every((s) => (s['confidence'] as double) < 0.5),
+      'status': 'ready',
+    };
+  }
+
+  int _scoreProduct(Map<String, dynamic> product, {required String hint, required String barcode}) {
+    if (barcode.isNotEmpty) {
+      final bc = '${product['barcode'] ?? ''}'.toLowerCase();
+      if (bc == barcode.toLowerCase()) return 0;
+    }
+    if (hint.isEmpty) return 100;
+    final name = '${product['name']}'.toLowerCase();
+    final category = '${product['category']}'.toLowerCase();
+    final brand = '${product['brand']}'.toLowerCase();
+    final aliases = (product['aliases'] as List? ?? []).map((a) => '$a'.toLowerCase()).toList();
+    if (name == hint) return 0;
+    if (name.startsWith(hint)) return 1;
+    if (name.contains(hint)) return 2;
+    if (aliases.any((a) => a == hint || a.contains(hint))) return 3;
+    if (brand.contains(hint)) return 4;
+    if (category.contains(hint)) return 5;
+    // Token overlap for multi-word hints
+    final hintTokens = hint.split(RegExp(r'\s+')).where((t) => t.length >= 2).toSet();
+    final productTokens = '$name $category $brand ${aliases.join(' ')}'
+        .split(RegExp(r'[^a-z0-9]+'))
+        .where((t) => t.length >= 2)
+        .toSet();
+    final overlap = hintTokens.intersection(productTokens).length;
+    if (overlap > 0) return 6 + (hintTokens.length - overlap);
+    return 100;
+  }
+
+  Map<String, dynamic> _routePreview(Map<String, dynamic> data) {
+    final originLat = (data['origin_lat'] as num?)?.toDouble() ?? 0.0;
+    final originLng = (data['origin_lng'] as num?)?.toDouble() ?? 0.0;
+    final destLat = (data['destination_lat'] as num?)?.toDouble() ?? 0.0;
+    final destLng = (data['destination_lng'] as num?)?.toDouble() ?? 0.0;
+    const steps = 16;
+    final coordinates = <List<double>>[
+      for (var i = 0; i <= steps; i++)
+        [
+          originLat + (destLat - originLat) * (i / steps),
+          originLng + (destLng - originLng) * (i / steps),
+        ],
+    ];
+    final dLat = destLat - originLat;
+    final dLng = destLng - originLng;
+    final distKm = 6371.0 * 2 * (0.5 - (dLat * dLat + dLng * dLng) / 4);
+    final km = distKm.abs().clamp(0.01, 9999.0);
+    return {
+      'coordinates': coordinates,
+      'distance_km': km,
+      'duration_minutes': (km / 20 * 60).ceil().clamp(1, 9999),
+      'provider': 'localspot-firebase',
+      'fallback': true,
+    };
   }
 
   Future<Map<String, dynamic>> _mutateTour(int tourId, void Function(Map<String, dynamic> tour) mutate) async {

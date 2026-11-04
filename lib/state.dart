@@ -203,6 +203,31 @@ class AppState extends ChangeNotifier {
               createdAt: DateTime.tryParse(row['created_at'] as String? ?? ''),
             ),
         ]);
+      // Also refresh reports and feedback from Firestore for admin view.
+      try {
+        final reportRows = await api.get('/admin/reports') as List;
+        reports
+          ..clear()
+          ..addAll(reportRows.map((e) => ReportItem(
+                id: (e as Map)['id'] as int? ?? 0,
+                userId: e['user_id'] as int? ?? 0,
+                target: e['target'] as String? ?? '',
+                reason: e['reason'] as String? ?? '',
+                resolved: e['resolved'] == true,
+              )));
+      } catch (_) {}
+      try {
+        final feedbackRows = await api.get('/admin/feedback') as List;
+        feedback
+          ..clear()
+          ..addAll(feedbackRows.map((e) => PilotFeedback(
+                id: (e as Map)['id'] as int? ?? 0,
+                userId: e['user_id'] as int? ?? 0,
+                topic: e['topic'] as String? ?? '',
+                body: e['body'] as String? ?? '',
+                area: e['area'] as String?,
+              )));
+      } catch (_) {}
       notifyListeners();
     } catch (_) {}
   }
