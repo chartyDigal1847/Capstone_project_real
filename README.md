@@ -4,32 +4,38 @@ Philippine local store and product locator. Vendors publish listings; customers 
 
 **Pilot area:** Cubao, Quezon City.
 
+**Backend:** Firebase Authentication, Cloud Firestore, and Cloud Storage. The Flutter app talks to Firebase with Security Rules; it does not embed database credentials. The Laravel API in `backend/` is kept as a legacy fallback until Firebase is fully configured.
+
 ## Layout
 
 - Flutter app at the repository root (`lib/`)
-- Laravel API in `backend/` (Laravel Sail / Docker for MySQL)
-
-The mobile app talks only to `/api/v1`. Database credentials stay on the server.
+- Firebase rules and indexes at the repository root (`firebase.json`, `firestore.rules`, `storage.rules`)
+- Legacy Laravel API in `backend/` (optional)
 
 ## Local development
 
-1. Start Docker Desktop.
-2. From `backend/`: copy `.env.example` to `.env`, then `./vendor/bin/sail up -d`, `sail artisan migrate --seed`.
-3. API: `http://127.0.0.1:8000/api/v1` (Android emulator: `http://10.0.2.2:8000/api/v1`).
-4. From the repo root: `flutter pub get` then `flutter run`.
-5. Demo password for seeded accounts: `demo`.
+1. Install Flutter and Node.js 20+.
+2. Sign in to Firebase: `npx -y firebase-tools@latest login`
+3. Create or select a Firebase project, then run `flutterfire configure` (or fill `lib/firebase_options.dart` and set `configured` to `true`).
+4. Enable Email/Password auth, create Firestore in `asia-southeast1`, and deploy rules:
+   `npx -y firebase-tools@latest deploy --only auth,firestore,storage`
+5. From the repo root: `flutter pub get` then `flutter run`.
 
-Health check: `GET /api/v1/health` and `GET /up`.
+Until Firebase options are filled in, the app uses on-device demo data (password `demo1234`).
+
+Official setup references:
+- Add Firebase to Flutter: https://firebase.google.com/docs/flutter/setup
+- FlutterFire Auth: https://firebase.google.com/docs/auth/flutter/start
+- Cloud Firestore Flutter: https://firebase.google.com/docs/firestore/quickstart
 
 ## Tests
 
 ```bash
-cd backend && php artisan test
 flutter analyze && flutter test
 ```
 
-CI runs both suites and builds the production API image.
+Legacy API tests remain at `cd backend && php artisan test`.
 
 ## Production
 
-Use `backend/docker/production/Dockerfile` and `backend/compose.production.yaml`. Put secrets in the host environment, not in git. Terminate HTTPS at a reverse proxy. Do not publish MySQL. See [docs/OPERATIONS.md](docs/OPERATIONS.md) for backup, restore, release, and rollback.
+Deploy Firestore/Storage/Auth rules with the Firebase CLI. Keep client config in `lib/firebase_options.dart` / `android/app/google-services.json`. Do not put service-account keys in the app. See [docs/OPERATIONS.md](docs/OPERATIONS.md).

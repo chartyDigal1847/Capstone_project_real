@@ -784,7 +784,7 @@ class LocalSpotFirebaseApi {
     // ── Visual / image search ─────────────────────────────────────────────
     if (path == '/search/by-image') {
       final suggestions = await _recognitionSuggest(data);
-      final catalogData = await catalog();
+      final catalogData = await _cachedCatalog();
       final allListings = catalogData['listings'] as List? ?? [];
       final allProducts = catalogData['products'] as List? ?? [];
       final allStores = catalogData['stores'] as List? ?? [];
@@ -819,12 +819,28 @@ class LocalSpotFirebaseApi {
     throw ApiException('Unsupported Firebase POST $path');
   }
 
+  // Catalog cache for recognition — refreshed at most once per minute.
+  Map<String, dynamic>? _catalogCache;
+  DateTime? _catalogCachedAt;
+
+  Future<Map<String, dynamic>> _cachedCatalog() async {
+    final now = DateTime.now();
+    if (_catalogCache != null &&
+        _catalogCachedAt != null &&
+        now.difference(_catalogCachedAt!) < const Duration(minutes: 2)) {
+      return _catalogCache!;
+    }
+    _catalogCache = await catalog();
+    _catalogCachedAt = now;
+    return _catalogCache!;
+  }
+
   /// Rank the catalog by keyword/alias/category match against hint + barcode.
   /// This is the on-device recognition pipeline (no external vision API).
   Future<Map<String, dynamic>> _recognitionSuggest(Map<String, dynamic> data) async {
     final hint = (data['hint'] as String? ?? '').toLowerCase().trim();
     final barcode = (data['barcode'] as String? ?? '').trim();
-    final catalogData = await catalog();
+    final catalogData = await _cachedCatalog();
     final allProducts = catalogData['products'] as List? ?? [];
 
     // Score each product
@@ -952,11 +968,17 @@ class LocalSpotFirebaseApi {
     if (storePatch != null) {
       final doc = await _storeByNumeric(int.parse(storePatch.group(1)!));
       await doc.reference.update({
+        if (data['name'] != null) 'name': data['name'],
+        if (data['type'] != null) 'type': data['type'],
         if (data['lat'] != null) 'lat': data['lat'],
         if (data['lng'] != null) 'lng': data['lng'],
+        if (data['barangay'] != null) 'barangay': data['barangay'],
+        if (data['city'] != null) 'city': data['city'],
+        if (data['address'] != null) 'address': data['address'],
         if (data['landmark'] != null) 'landmark': data['landmark'],
         if (data['schedule'] != null) 'schedule': data['schedule'],
         if (data['is_mobile'] != null) 'is_mobile': data['is_mobile'],
+        if (data['image'] != null) 'image': data['image'],
         'location_updated_at': DateTime.now().toIso8601String(),
       });
       return {'ok': true};
@@ -978,6 +1000,7 @@ class LocalSpotFirebaseApi {
     final listingPatch = RegExp(r'^/store-products/(\d+)$').firstMatch(path);
     if (listingPatch != null) {
       final doc = await _docByNumeric('listings', int.parse(listingPatch.group(1)!));
+      final prevData = doc.data();
       await doc.reference.update({
         if (data['price'] != null) 'price': data['price'],
         if (data['unit'] != null) 'unit': data['unit'],
@@ -985,6 +1008,19 @@ class LocalSpotFirebaseApi {
         if (data['availability'] != null) 'availability': data['availability'],
         if (data['status'] != null) 'status': data['status'],
         'last_confirmed_at': DateTime.now().toIso8601String(),
+      });
+      // Write a stock movement entry so history is visible.
+      final prevQty = (prevData?['quantity'] as num?)?.toInt() ?? 0;
+      final newQty = (data['quantity'] as num?)?.toInt() ?? prevQty;
+      final delta = newQty - prevQty;
+      final kind = data['status'] == 'archived' ? 'archive' : 'adjust';
+      await _db.collection('stockMovements').add({
+        'listingId': _toInt(prevData?['numericId']),
+        'kind': kind,
+        'quantity_delta': delta,
+        'note': data['status'] == 'unavailable' ? 'Marked unavailable' : 'Stock update',
+        'created_at': DateTime.now().toIso8601String(),
+        'ownerUid': uid,
       });
       return {'ok': true};
     }
