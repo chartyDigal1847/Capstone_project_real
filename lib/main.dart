@@ -77,6 +77,59 @@ class _LocalSpotShellState extends State<LocalSpotShell> {
   StoreTour? tour;
   String reportTarget = '';
 
+  // For "press back again to exit" behaviour on the root tab.
+  DateTime? _lastBackPress;
+
+  /// Returns true if the back event was consumed (stay in app),
+  /// false if the app should exit.
+  bool _handleBack() {
+    final app = AppScope.of(context);
+
+    // ── Auth screens ──────────────────────────────────────────────
+    if (!app.signedIn) {
+      if (authView != AuthView.welcome) {
+        setState(() => authView = AuthView.welcome);
+        return true;
+      }
+      return false; // let the system exit at the welcome screen
+    }
+
+    // ── Nested overlays: route → store, tour → store ─────────────
+    if (overlay == OverlayView.route || overlay == OverlayView.tour) {
+      setState(() => overlay = OverlayView.store);
+      return true;
+    }
+
+    // ── Any other overlay → close it ─────────────────────────────
+    if (overlay != OverlayView.none) {
+      setState(() => overlay = OverlayView.none);
+      return true;
+    }
+
+    // ── On a non-home tab → go to tab 0 ──────────────────────────
+    if (tab != 0) {
+      setState(() => tab = 0);
+      return true;
+    }
+
+    // ── Already at root (tab 0, no overlay) ──────────────────────
+    // Show a "press back again to exit" snackbar.
+    final now = DateTime.now();
+    if (_lastBackPress == null ||
+        now.difference(_lastBackPress!) > const Duration(seconds: 2)) {
+      _lastBackPress = now;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Press back again to exit'),
+          duration: Duration(seconds: 2),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return true; // consumed — don't exit yet
+    }
+    return false; // second press within 2 s → exit
+  }
+
   void _openProduct(CatalogProduct value) => setState(() {
         product = value;
         overlay = OverlayView.product;
@@ -172,7 +225,13 @@ class _LocalSpotShellState extends State<LocalSpotShell> {
     final destinations = _destinations(app.role);
     if (tab >= destinations.length) tab = 0;
 
-    return LayoutBuilder(builder: (context, constraints) {
+    return PopScope(
+      // canPop: false means we always intercept and decide ourselves.
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _handleBack();
+      },
+      child: LayoutBuilder(builder: (context, constraints) {
       final wide = constraints.maxWidth > 700;
       return Scaffold(
         body: SizedBox.expand(
@@ -213,7 +272,8 @@ class _LocalSpotShellState extends State<LocalSpotShell> {
               )
             : null,
       );
-    });
+    }),   // LayoutBuilder
+    );    // PopScope
   }
 
   Widget _tabBody(AppState app) {
