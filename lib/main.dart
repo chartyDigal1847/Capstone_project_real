@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import 'models.dart';
@@ -226,10 +228,14 @@ class _LocalSpotShellState extends State<LocalSpotShell> {
     if (tab >= destinations.length) tab = 0;
 
     return PopScope(
-      // canPop: false means we always intercept and decide ourselves.
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) _handleBack();
+        if (didPop) return;
+        final consumed = _handleBack();
+        if (!consumed) {
+          // Nothing left to go back to — exit the app.
+          exit(0);
+        }
       },
       child: LayoutBuilder(builder: (context, constraints) {
       final wide = constraints.maxWidth > 700;
