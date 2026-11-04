@@ -1683,13 +1683,13 @@ class AppState extends ChangeNotifier {
 
   void _seed() {
     users.addAll([
-      UserAccount(id: 1, name: 'Maria Santos', email: 'maria@localspot.ph', password: 'demo', role: AppRole.customer),
-      UserAccount(id: 2, name: 'Aling Nena', email: 'nena@localspot.ph', password: 'demo', role: AppRole.owner, ownedStoreIds: [1]),
-      UserAccount(id: 3, name: 'Mang Tonyo', email: 'tonyo@localspot.ph', password: 'demo', role: AppRole.owner, ownedStoreIds: [2]),
-      UserAccount(id: 4, name: 'Ana Cruz', email: 'ana@localspot.ph', password: 'demo', role: AppRole.staff, memberStoreIds: [1], storeGrants: {1: StoreGrant(inventory: true)}),
-      UserAccount(id: 5, name: 'Admin Reyes', email: 'admin@localspot.ph', password: 'demo', role: AppRole.admin),
-      UserAccount(id: 6, name: 'Lito Mercado', email: 'lito@localspot.ph', password: 'demo', role: AppRole.owner, ownedStoreIds: [6]),
-      UserAccount(id: 7, name: 'Bea Tan', email: 'bea@localspot.ph', password: 'demo', role: AppRole.owner, ownedStoreIds: [7]),
+      UserAccount(id: 1, name: 'Maria Santos', email: 'maria@localspot.ph', password: 'demo1234', role: AppRole.customer),
+      UserAccount(id: 2, name: 'Aling Nena', email: 'nena@localspot.ph', password: 'demo1234', role: AppRole.owner, ownedStoreIds: [1]),
+      UserAccount(id: 3, name: 'Mang Tonyo', email: 'tonyo@localspot.ph', password: 'demo1234', role: AppRole.owner, ownedStoreIds: [2]),
+      UserAccount(id: 4, name: 'Ana Cruz', email: 'ana@localspot.ph', password: 'demo1234', role: AppRole.staff, memberStoreIds: [1], storeGrants: {1: StoreGrant(inventory: true)}),
+      UserAccount(id: 5, name: 'Admin Reyes', email: 'admin@localspot.ph', password: 'demo1234', role: AppRole.admin),
+      UserAccount(id: 6, name: 'Lito Mercado', email: 'lito@localspot.ph', password: 'demo1234', role: AppRole.owner, ownedStoreIds: [6]),
+      UserAccount(id: 7, name: 'Bea Tan', email: 'bea@localspot.ph', password: 'demo1234', role: AppRole.owner, ownedStoreIds: [7]),
     ]);
 
     stores.addAll([

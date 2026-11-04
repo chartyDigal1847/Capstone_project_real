@@ -223,17 +223,16 @@ class LocalSpotFirebaseApi {
       ];
     }
     if (path == '/admin/feedback') {
-      final snap = await _db.collection('feedback').orderBy('topic').get();
-      return [
-        for (final doc in snap.docs)
-          {
-            'id': doc.data()['numericId'] ?? doc.id.hashCode,
-            'user_id': doc.data()['userId'],
-            'topic': doc.data()['topic'],
-            'body': doc.data()['body'],
-            'area': doc.data()['area'],
-          },
-      ];
+      final snap = await _db.collection('feedback').get();
+      final docs = snap.docs.map((doc) => <String, dynamic>{
+        'id': doc.data()['numericId'] ?? doc.id.hashCode,
+        'user_id': doc.data()['userId'],
+        'topic': doc.data()['topic'],
+        'body': doc.data()['body'],
+        'area': doc.data()['area'],
+      }).toList();
+      docs.sort((a, b) => '${a['topic']}'.compareTo('${b['topic']}'));
+      return docs;
     }
     if (path == '/stores/nearby') return (await catalog())['stores'];
 

@@ -15,6 +15,31 @@
         { "fieldPath": "storeId", "order": "ASCENDING" },
         { "fieldPath": "email", "order": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "stockMovements",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "listingId", "order": "ASCENDING" },
+        { "fieldPath": "created_at", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "favorites",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "uid", "order": "ASCENDING" },
+        { "fieldPath": "favoritable_type", "order": "ASCENDING" },
+        { "fieldPath": "favoritable_id", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "vendorSessions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "storeId", "order": "ASCENDING" },
+        { "fieldPath": "ended_at", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []
