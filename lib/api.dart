@@ -84,12 +84,12 @@ Store storeFromJson(Map<String, dynamic> json) {
   return Store(
     id: asInt(json['id']),
     ownerId: asInt(json['owner_id']),
-    name: json['name'] as String,
-    type: _enum(StoreType.values, json['type'] as String, StoreType.other),
+    name: json['name'] as String? ?? '',
+    type: _enum(StoreType.values, json['type'] as String? ?? 'other', StoreType.other),
     status:
-        _enum(StoreStatus.values, json['status'] as String, StoreStatus.pending),
-    lat: (json['lat'] as num).toDouble(),
-    lng: (json['lng'] as num).toDouble(),
+        _enum(StoreStatus.values, json['status'] as String? ?? 'pending', StoreStatus.pending),
+    lat: (json['lat'] as num?)?.toDouble() ?? 0.0,
+    lng: (json['lng'] as num?)?.toDouble() ?? 0.0,
     barangay: json['barangay'] as String? ?? '',
     city: json['city'] as String? ?? '',
     address: json['address'] as String? ?? '',
@@ -164,11 +164,11 @@ StoreListing listingFromJson(Map<String, dynamic> json) {
     id: asInt(json['id']),
     storeId: asInt(json['store_id']),
     productId: asInt(json['product_id']),
-    price: (json['price'] as num).toDouble(),
-    unit: json['unit'] as String,
-    quantity: json['quantity'] as int? ?? 0,
+    price: (json['price'] as num?)?.toDouble() ?? 0.0,
+    unit: json['unit'] as String? ?? 'piece',
+    quantity: (json['quantity'] as num?)?.toInt() ?? 0,
     availability: _enum(
-        Availability.values, json['availability'] as String, Availability.inStock),
+        Availability.values, json['availability'] as String? ?? 'in_stock', Availability.inStock),
     lastConfirmed:
         DateTime.tryParse(json['last_confirmed_at'] as String? ?? '') ??
             DateTime.now(),

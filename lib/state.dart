@@ -768,27 +768,35 @@ class AppState extends ChangeNotifier {
         if (!nextPage) remoteSearchHits = null;
         searchNote = 'Search API unavailable · showing on-device results';
       } else {
-        final pageHits = [
-          for (final row in rows)
-            SearchHit(
-              listing: listingFromJson(Map<String, dynamic>.from((row as Map)['listing'] as Map)),
-              store: storeFromJson(Map<String, dynamic>.from(row['store'] as Map)),
-              product: productFromJson(Map<String, dynamic>.from(row['product'] as Map)),
-              distanceKm: (row['distance_km'] as num?)?.toDouble() ?? 0,
-              matchType: _parseMatchType(row['match_type'] as String?),
-            ),
-        ];
+        final pageHits = <SearchHit>[];
+        for (final row in rows) {
+          try {
+            final r = Map<String, dynamic>.from(row as Map);
+            pageHits.add(SearchHit(
+              listing: listingFromJson(Map<String, dynamic>.from(r['listing'] as Map)),
+              store: storeFromJson(Map<String, dynamic>.from(r['store'] as Map)),
+              product: productFromJson(Map<String, dynamic>.from(r['product'] as Map)),
+              distanceKm: (r['distance_km'] as num?)?.toDouble() ?? 0,
+              matchType: _parseMatchType(r['match_type'] as String?),
+            ));
+          } catch (_) {
+            // Skip malformed rows rather than dropping the whole result.
+          }
+        }
         if (nextPage && remoteSearchHits != null) {
           remoteSearchHits = [...remoteSearchHits!, ...pageHits];
         } else {
           remoteSearchHits = pageHits;
         }
-        searchNote = '';
+        searchNote = pageHits.isEmpty && rows.isNotEmpty
+            ? 'Some results could not be parsed · showing what loaded'
+            : '';
       }
-    } catch (_) {
+    } catch (e) {
       if (generation != _searchGeneration) return;
       if (!nextPage) remoteSearchHits = null;
-      searchNote = 'Search API unavailable · showing on-device results';
+      // Show the actual error message so it's visible in the UI during development.
+      searchNote = 'Search unavailable · ${e.toString().length > 80 ? e.toString().substring(0, 80) : e} · showing on-device results';
     }
     if (generation != _searchGeneration) return;
     searchBusy = false;
