@@ -3,83 +3,94 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
-use App\Models\Store;
-use App\Models\VendorLocationSession;
-use App\Support\Audit;
+use App\Services\FirestoreService;
+use App\Services\UserResolver;
 use Illuminate\Http\Request;
 
+/** Vendor location sessions — Firestore-backed. */
 class VendorLocationSessionController extends Controller
 {
-    public function start(Request $request, Store $store)
+    public function __construct(
+        private readonly FirestoreService $firestore,
+        private readonly UserResolver $userResolver,
+    ) {
+    }
+
+    public function start(Request $request, int $storeId)
     {
-        $this->authorize('shareLiveLocation', $store);
-        abort_unless($store->is_mobile, 422, 'Live location is only available for mobile vendors.');
+        $user = $this->userResolver->resolve($request);
+        $store = $this->firestore->findByNumericId('stores', $storeId);
+        abort_if($store === null, 404, 'Store not found.');
+        abort_unless($this->userResolver->hasStoreGrant($user, $storeId, 'location'), 403, 'Not authorized for location sharing.');
+        abort_unless(($store['is_mobile'] ?? false), 422, 'Live location is only available for mobile vendors.');
 
         $data = $request->validate([
             'lat' => ['required', 'numeric', 'between:-90,90'],
             'lng' => ['required', 'numeric', 'between:-180,180'],
         ]);
 
-        $store->locationSessions()->active()->update(['ended_at' => now()]);
-
+        $now = now();
         $minutes = max(15, (int) config('localspot.vendor_session_minutes', 120));
-        $session = VendorLocationSession::create([
-            'store_id' => $store->id,
-            'started_by' => $request->user()->id,
-            'lat' => $data['lat'],
-            'lng' => $data['lng'],
-            'started_at' => now(),
-            'last_update_at' => now(),
-            'expires_at' => now()->addMinutes($minutes),
-        ]);
 
-        Audit::record($request->user(), 'store.location_session.start', Store::class, $store->id, [
-            'session_id' => $session->id,
-        ]);
+        $payload = [
+            'numericId' => abs(crc32(uniqid())) & 0x7fffffff,
+            'storeId' => $storeId,
+            'lat' => (float) $data['lat'],
+            'lng' => (float) $data['lng'],
+            'started_at' => $now->toIso8601String(),
+            'last_update_at' => $now->toIso8601String(),
+            'expires_at' => $now->addMinutes($minutes)->toIso8601String(),
+            'ended_at' => null,
+            'ownerUid' => $request->attributes->get('firebase_uid'),
+        ];
 
-        return response()->json(['data' => $session->toApi()], 201);
+        $this->firestore->set('vendorSessions', (string) $storeId, $payload);
+
+        return response()->json(['data' => $payload], 201);
     }
 
-    public function updateCurrent(Request $request, Store $store)
+    public function updateCurrent(Request $request, int $storeId)
     {
-        $this->authorize('update', $store);
-        $session = $store->locationSessions()->active()->latest('id')->first();
-        abort_if($session === null, 404, 'No active location session.');
+        $user = $this->userResolver->resolve($request);
+        abort_unless($this->userResolver->canManageStore($user, $storeId), 403, 'Not authorized.');
+
+        $session = $this->firestore->get('vendorSessions', (string) $storeId);
+        abort_if($session === null || ($session['ended_at'] ?? null) !== null, 404, 'No active location session.');
 
         $data = $request->validate([
             'lat' => ['required', 'numeric', 'between:-90,90'],
             'lng' => ['required', 'numeric', 'between:-180,180'],
         ]);
 
-        $session->update([
-            'lat' => $data['lat'],
-            'lng' => $data['lng'],
-            'last_update_at' => now(),
+        $this->firestore->merge('vendorSessions', (string) $storeId, [
+            'lat' => (float) $data['lat'],
+            'lng' => (float) $data['lng'],
+            'last_update_at' => now()->toIso8601String(),
         ]);
 
-        return response()->json(['data' => $session->fresh()->toApi()]);
+        return response()->json(['data' => true]);
     }
 
-    public function current(Store $store)
+    public function current(int $storeId)
     {
-        $this->authorize('update', $store);
-        $session = $store->locationSessions()->active()->latest('id')->first();
-        abort_if($session === null, 404, 'No active location session.');
+        $session = $this->firestore->get('vendorSessions', (string) $storeId);
+        abort_if($session === null || ($session['ended_at'] ?? null) !== null, 404, 'No active location session.');
 
-        return response()->json(['data' => $session->toApi()]);
+        return response()->json(['data' => $session]);
     }
 
-    public function stop(Request $request, Store $store)
+    public function stop(Request $request, int $storeId)
     {
-        $this->authorize('shareLiveLocation', $store);
-        $session = $store->locationSessions()->active()->latest('id')->first();
-        abort_if($session === null, 404, 'No active location session.');
+        $user = $this->userResolver->resolve($request);
+        abort_unless($this->userResolver->hasStoreGrant($user, $storeId, 'location'), 403, 'Not authorized.');
 
-        $session->update(['ended_at' => now()]);
-        Audit::record($request->user(), 'store.location_session.stop', Store::class, $store->id, [
-            'session_id' => $session->id,
+        $session = $this->firestore->get('vendorSessions', (string) $storeId);
+        abort_if($session === null || ($session['ended_at'] ?? null) !== null, 404, 'No active location session.');
+
+        $this->firestore->merge('vendorSessions', (string) $storeId, [
+            'ended_at' => now()->toIso8601String(),
         ]);
 
-        return response()->json(['data' => $session->fresh()->toApi()]);
+        return response()->json(['data' => true]);
     }
 }

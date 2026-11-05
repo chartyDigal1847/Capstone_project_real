@@ -2,12 +2,12 @@
 
 **Philippine Local Store & Product Locator**
 
-*Firebase-first Flutter app · Version 1.8 · Updated 4 November 2026*
+*Firebase-backed Flutter app with Laravel trusted API · Version 1.8 Final · Updated 4 November 2026*
 
-**Platform:** Flutter mobile app · Firebase Authentication · Cloud Firestore · Cloud Storage  
-**Development environment:** Flutter SDK + Firebase CLI + FlutterFire CLI  
+**Platform:** Flutter mobile app · Laravel REST API · Firebase Authentication · Cloud Firestore · Cloud Storage  
+**Development environment:** Flutter SDK + Firebase CLI + FlutterFire CLI + Docker Desktop/WSL 2  
 **Working product name:** LocalSpot (renameable)  
-**Revision focus:** The Flutter app has been fully migrated to Firebase (Authentication + Firestore + Cloud Storage). The Laravel REST API in `backend/` is retained as a reference/legacy codebase but is **no longer used by the Flutter app**. All reads and writes go directly from Flutter through `LocalSpotFirebaseApi` → Firestore Security Rules. This document reflects the completed Firebase-first Flutter architecture and the remaining production hardening items.
+**Revision focus:** This finalized Version 1.8 adopts one consistent target architecture: Flutter uses Firebase Authentication for account identity, Laravel is the trusted API and business-logic layer, Cloud Firestore is the only primary application-record database, and Cloud Storage holds media. Flutter sends Firebase ID tokens to Laravel for application operations. Flutter may upload files to private, UID-scoped Cloud Storage quarantine paths only after Laravel authorizes an upload intent; Laravel verifies, processes and controls publication. Flutter does not directly read or write business records in Firestore. MySQL and Laravel Sanctum are not part of the target production architecture. The current direct-Firestore Flutter implementation is treated as a transitional development baseline that must be moved behind Laravel before production.
 
 ---
 
@@ -36,7 +36,7 @@
 ---
 
 ## 1. Executive Summary
-LocalSpot is a location-based product discovery platform for the Philippines. It connects searches for products with participating physical stores and vendors near the customer. The app is for browsing, store discovery, advertising and navigation—not online ordering or delivery. The selected target architecture uses Flutter, a Laravel REST API, Firebase Authentication, Cloud Firestore and Cloud Storage.
+LocalSpot is a location-based product discovery platform for the Philippines. It connects searches for products with participating physical stores and vendors near the customer. The app is for browsing, store discovery, advertising and navigation—not online ordering or delivery. The finalized target architecture uses Flutter, Firebase Authentication, a Laravel REST API, Cloud Firestore, Cloud Storage and a dedicated derived search service. Laravel is the trusted application backend; Firestore is the only primary application-record database.
 
 The core audience includes sari-sari stores, market stalls, mobile street vendors, hardware stores, electronics and technology shops, appliance retailers, clothing and footwear stores, bookstores, auto-parts sellers, general-merchandise shops, supermarkets and other physical retailers. LocalSpot supports any lawful product category with a monetary value that is offered by a participating physical seller—not just food. Sellers can publish products with photos, AI-assisted suggestions and manual confirmation. Customers can search by text or picture and find participating sellers around their current location.
 
@@ -60,7 +60,7 @@ This revision adds a functional-completion standard: LocalSpot must be a working
 - No third-party Street View or street-imagery integration in this release. The owner-created 360° store tour is the only immersive-view feature in scope.
 
 #### Current project status
-The Flutter app has been **fully migrated to Firebase**. Firebase Authentication handles all sign-in/registration. Cloud Firestore is the sole database — all stores, products, listings, promotions, tours, favorites, reports, feedback, vendor sessions and audit logs are read from and written to Firestore. The Laravel backend in `backend/` is **not used** by the Flutter app; it is retained as a legacy reference. The remaining work is production hardening: proper Firestore Security Rules refinement, geohash-based nearby queries, Cloud Storage for media, a dedicated search index for semantic/vector retrieval, and the full production operations checklist.
+The project has a working Firebase-based Flutter development implementation, according to the current project notes: Firebase Authentication is configured, a development Firestore project is in use, `LocalSpotFirebaseApi` currently handles the reported 39 data/API paths directly against Firestore, and a demo seeder has populated sample accounts and catalog records. This is a useful implementation baseline, but it is **not yet the finalized target architecture**. The direct Flutter-to-Firestore business-data path is transitional and must be refactored so protected application reads and writes go through Laravel. Firebase Storage uploads, geohash-based backend queries, dedicated advanced search, actual AI image processing, the panorama privacy worker, and production operations remain incomplete or require verification as listed in the backlog. Existing Firebase project/rule/test claims are project-reported implementation status, not an independent security or production-readiness audit.
 
 #### PRIMARY ENHANCEMENT GOAL
 A customer can search using a product name, broad category, natural-language description or product photo, then discover relevant listings near their current or selected location. Owners can identify products with AI assistance, confirm or correct details, and publish store tours only after privacy processing and review. Every screen and interactive control must be connected to actual data and behavior; static pictures or nonfunctional buttons do not count as completed features.
@@ -70,7 +70,7 @@ This table describes the current product direction for the enhancement release. 
 
 | **Feature** | **Current target** | **Implementation notes** |
 |---|---|---|
-| Accounts and roles | Migrate identity to Firebase Authentication; retain customer, owner, staff and admin roles | Laravel validates Firebase ID tokens and reads authoritative roles from Firestore; never trust client-supplied roles. |
+| Accounts and roles | Firebase Authentication identity; customer, owner, staff and admin authorization | Laravel validates Firebase ID tokens and reads authoritative roles/memberships from Firestore; never trust client-supplied roles. |
 | Store directory and products | Store all primary application records in Cloud Firestore | Seller records in Firestore remain the source of product-location results; do not limit the catalog to food or groceries. |
 | Product text search | Retain and improve current search | Support aliases, misspellings, local names and category fallback. |
 | In-app 2D map | **Required** | Map rendered inside Flutter; show current location, store pins and selected-store details. Do not launch an external map by default. |
@@ -108,7 +108,7 @@ This table describes the current product direction for the enhancement release. 
 | Store staff | Perform explicitly granted inventory, listing and location tasks for assigned stores | Cannot change owner/admin privileges or start public location sharing unless the owner has granted that permission. |
 | Administrator | Review stores, moderate content/promotions, handle reports, suspend accounts and inspect audit records | Administrative actions should be logged and restricted to authorized admins. |
 
-Access control must be enforced in Laravel policies or equivalent backend authorization checks. Hiding a button in Flutter is not sufficient security.
+Access control must be enforced in Laravel policies or equivalent server-side authorization checks. Hiding a button or checking a role only in Flutter is not sufficient security.
 
 ### Store types and location modes
 Support sari-sari stores, fruit and vegetable vendors, public-market stalls, street/mobile vendors, hardware stores, construction-supply shops, electronics/technology stores, appliance retailers, clothing and footwear stores, bookstores, auto/motorcycle-parts shops, general-merchandise stores, convenience stores, supermarkets and other physical sellers. Allow landmarks and barangay/city information where formal street addresses are incomplete. Product categories must cover lawful retail goods across these businesses, not food only.
@@ -150,15 +150,15 @@ Customer: Home · Search · Map · Saved · Profile. Owner: Dashboard · Invento
 
 ### Functional interaction contract — no static-only screens
 Every button, category chip, product/store card, map marker, filter, camera control, form, toggle and tour arrow must have a defined, tested behavior.
-- Wire every control to a callback/state transition, navigation route, repository call or Firestore write. Remove controls that do nothing; if a future feature is not implemented, label it unavailable instead of making it appear functional.
-- Use persisted Firestore data in normal app flows. Hardcoded or seeded demo records are allowed only in clearly identified development/test environments.
+- Wire every control to a callback/state transition, navigation route, repository call or Laravel API request. Flutter must not directly write application/business documents to Firestore in the target architecture. Remove controls that do nothing; if a future feature is not implemented, label it unavailable instead of making it appear functional.
+- Use persisted Firestore data returned through Laravel in normal app flows. Hardcoded or seeded demo records are allowed only in clearly identified development/test environments.
 - Represent loading/progress, success, empty results, validation errors, permission denial, stale information, offline/network failure, server errors and retry/cancel behavior where relevant.
 - Validate forms, display field-level errors, avoid duplicate submissions, preserve safe input after recoverable errors, and confirm destructive changes.
 - Debounce text search, cancel stale requests, paginate large result sets, and preserve filters when returning to search results.
 - Map controls must actually recenter/follow the user, toggle follow mode, filter stores, open selected-store details, request route previews and support manual area selection.
 - The 360° viewer must support panorama drag/look, supported zoom gestures, connected viewpoint navigation, progress/loading indicators, privacy status and failed-image recovery.
-- Owner edits to products, prices, availability, promotions and tours must persist through the API and refresh affected screens after success.
-- Test actual user journeys with Flutter widget/integration tests and Firestore rules/emulator tests. A clickable mockup is not a completed implementation.
+- Owner edits to products, prices, availability, promotions and tours must persist through Laravel and refresh affected screens after success.
+- Test actual user journeys with Flutter widget/integration tests, Laravel authorization/API tests, Firebase Emulator Suite tests and Firestore/Storage security tests. A clickable mockup is not a completed implementation.
 
 Use a feature-based Flutter architecture with one consistent state-management approach (for example, Riverpod or Bloc), repositories for data access, typed request/response models and separated UI/controller logic.
 
@@ -168,19 +168,19 @@ Use a feature-based Flutter architecture with one consistent state-management ap
 
 1. Customer/owner creates an account or signs in using Firebase Authentication from Flutter.
 2. Firebase Auth returns the signed-in user and a short-lived ID token; the Firebase SDK refreshes tokens when needed.
-3. Flutter sends the ID token to Laravel as a Bearer token over HTTPS.
+3. Flutter sends the ID token to Laravel as a Bearer token over HTTPS for all protected application API requests.
 4. Laravel verifies the token signature and claims, extracts the Firebase UID, and loads the authoritative user profile and role from Firestore.
 5. If the profile does not exist, Laravel creates a minimal `users/{uid}` profile with the least-privileged default role (customer). Store-owner privileges are granted only after the store registration/verification workflow.
 6. Laravel returns the LocalSpot profile, permissions and onboarding status. It does not issue a competing Sanctum token.
 7. Logout signs out through Firebase Auth on the client and applies the configured server-side revocation/session policy where required.
 
 ### B. Owner registration and store publishing
-1. Create an account and select the store-owner role.
+1. Create a Firebase Auth account and submit a request to register as a store owner. Selecting an owner option in Flutter is only an onboarding request; it does not grant owner privileges.
 2. Enter store details and select a business category.
 3. Use the device location as a suggestion if permission is granted, or pin the location manually.
 4. Enter barangay/city, street address where available, landmark and operating schedule.
 5. Submit verification details required by the platform.
-6. Publish the approved store profile and add products.
+6. Laravel/admin approval grants the appropriate store-owner membership. Only then can the owner publish the approved store profile and add products.
 
 ### C. AI-assisted product entry
 1. Open Add Product and take a clear photo, choose an existing image, or use the optional barcode scanner.
@@ -209,7 +209,7 @@ Use a feature-based Flutter architecture with one consistent state-management ap
 2. Capture or upload compatible 360° panoramas at the entrance and selected interior points.
 3. Position each viewpoint on a simple tour path or store layout, then connect viewpoints with navigation arrows.
 4. Preview transitions on a normal phone and correct images or links.
-5. Publish after checking image privacy and content. The customer opens the tour inside LocalSpot.
+5. Publish only after all panorama assets have completed server-side privacy processing, the owner has reviewed sanitized previews, and Laravel confirms every asset is approved. The customer opens only sanitized tour assets inside LocalSpot.
 
 ### F. Customer real-time location behavior
 1. Check whether device location services are enabled and request permission with a clear explanation.
@@ -227,7 +227,7 @@ Use a feature-based Flutter architecture with one consistent state-management ap
 5. Customer map displays the reported position only while the session is active and fresh; otherwise show the regular selling area or last known location clearly labelled as stale.
 
 ### H. 360° store-tour privacy processing and publication gate
-1. Owner uploads/captures the original panorama into a private, non-public staging area with status `pending_privacy_processing`.
+1. Owner requests an upload intent from Laravel. After Laravel authorizes the store owner and returns a scoped quarantine object path, Flutter uploads/captures the original panorama into private, non-public Cloud Storage staging with status `pending_privacy_processing`.
 2. A background job validates file type/size/dimensions and orientation, strips unnecessary EXIF/location metadata from public derivatives, and converts the equirectangular panorama into overlapping perspective crops or cubemap faces for detection. This reduces distortion-related misses at seams and poles.
 3. Run person detection/segmentation to identify the full visible person where supported, plus face detection as an additional pass. Optionally detect license plates, documents, screens and other configured sensitive regions. Project masks back onto the source panorama and add a small safety margin before blurring/pixelating.
 4. Recheck seams and poles and generate all public previews, thumbnails and viewer tiles only from the sanitized derivative. Never serve the unblurred original from a public URL.
@@ -391,54 +391,58 @@ Automatic detection can miss people behind shelves/glass, small or distant peopl
 
 | **Layer** | **Recommended technology** | **Responsibilities** |
 |---|---|---|
-| Mobile client | Flutter + Dart | Customer UI, owner UI, camera, map, GPS, 360° tours and API client. |
-| Identity provider | Firebase Authentication | Account creation/sign-in, credential management, password reset and ID-token issuance. |
-| Trusted backend | Laravel REST API in Docker | Verifies Firebase ID tokens; enforces roles/store ownership; owns business rules, product search coordination, inventory writes, AI workflows, moderation and publication. |
-| Primary application database | Cloud Firestore (Standard edition unless requirements dictate otherwise) | All primary application records: users/profiles, roles, stores, categories, products, store listings, promotions, tour metadata, recognition jobs, location sessions and audit records. |
-| Media/object storage | Cloud Storage for Firebase | Product photos, store images, private original panoramas, sanitized panorama derivatives and generated previews. Firestore stores metadata and object paths, not image bytes. |
-| Search index | Dedicated search service behind a `SearchProvider` interface | Derived index for full-text, semantic and visual retrieval. Firestore remains the source of truth; index updates are asynchronous and rebuildable. |
-| Image/AI services | Server-side image-understanding model, OCR, embeddings and panorama person/face detection | Product candidates, visual search embeddings and privacy-processed 360° derivatives. Secrets remain server-side. |
-| Map rendering and data | MapLibre Flutter + a commercially suitable tile/style provider | In-app 2D map, store pins and route rendering. |
+| Mobile client | Flutter + Dart | Customer and owner interfaces, camera, map, GPS, 360° viewer, Firebase Auth SDK, Firebase Storage SDK for authorized quarantine uploads, and Laravel API client. |
+| Identity provider | Firebase Authentication | Account registration/sign-in, credential management, password reset and Firebase ID-token issuance. Firebase UID is the canonical identity key. |
+| Trusted backend | Laravel REST API in Docker/Cloud Run | Verifies Firebase ID tokens; enforces roles, store ownership and staff grants; owns business rules, validated writes, search coordination, AI workflows, moderation, media finalization and publication. |
+| Primary application database | Cloud Firestore | The only primary database for application records: user profiles/roles, stores, categories, products, listings, promotions, tour metadata, recognition jobs, location sessions, reports and audit records. |
+| Media/object storage | Cloud Storage for Firebase / Google Cloud Storage | Product photos, store images, private original panoramas, sanitized derivatives, thumbnails and viewer tiles. Firestore stores object paths and metadata, not image bytes. |
+| Search index | Dedicated search service behind a `SearchProvider` interface | Derived full-text, semantic/vector and visual retrieval index. Firestore remains the source of truth; index updates are asynchronous, retryable and rebuildable. |
+| Image/AI services | Server-side model/API integrations coordinated by Laravel workers | Product candidates, OCR, embeddings, image moderation and panorama person/face privacy processing. Provider credentials remain server-side. |
+| Map rendering and data | MapLibre Flutter + a commercially suitable tile/style provider | In-app 2D map, LocalSpot store pins and route rendering. |
 | Location services | Flutter `geolocator` or equivalent maintained plugin | Initial location and foreground position stream; permission handling and map-follow state. |
-| Routing services | Compatible hosted or self-managed routing engine/API | In-app route geometry and ETA where supported. |
-| Background jobs | Laravel queue worker + Redis/managed queue or an explicitly selected Google Cloud task/queue service | Image recognition, 360° privacy processing, search-index updates, notifications and cleanup. Do not use Laravel's database queue driver because there is no SQL database in this target architecture. |
-| Deployment | Production Laravel container on Cloud Run or a secured container host | Runs Laravel API and workers with service identity and least-privilege access to Firebase/Google Cloud services. |
-| CI and release checks | Git-based CI pipeline | Flutter tests, Laravel tests, Firestore rules/index checks, security checks and production image builds. |
+| Routing services | Compatible hosted or self-managed routing API | Route geometry and ETA where supported. Keep privileged provider credentials on the server when the provider's terms/API design require it. |
+| Background jobs | Laravel queue workers + Redis/managed queue or an explicitly selected Google Cloud task/queue service | Image recognition, panorama privacy processing, search-index updates, notifications and cleanup. Do not use Laravel's SQL database queue driver in the target architecture. |
+| Deployment | Laravel API and worker containers on Cloud Run or a secured container host | Runs the trusted API and asynchronous workers with a least-privilege Google service identity. |
+| CI and release checks | Git-based CI pipeline | Flutter tests, Laravel tests, token-verification tests, Firebase Emulator Suite tests, Firestore/Storage rules and index checks, security scans and production image builds. |
 
 ### Request and trust boundaries
 
 1. Flutter signs the user in through Firebase Authentication. Firebase issues an ID token.
-2. Flutter sends that ID token as `Authorization: Bearer <Firebase-ID-Token>` to Laravel over HTTPS.
-3. Laravel verifies the token signature and required claims, resolves the Firebase `uid`, loads the authoritative user/role record from Firestore, then authorizes the requested operation.
-4. Laravel reads and writes Firestore through the Google Cloud Firestore PHP server client using IAM/Application Default Credentials.
-5. Firestore is not accessed directly by Flutter for business records in this design. This avoids bypassing Laravel policies and prevents client-side role escalation.
-6. For media uploads, Flutter first obtains an upload intent from Laravel, then uses Firebase Storage SDK to upload into the returned private `quarantine/{uid}/...` path under restrictive Storage Rules (authenticated UID, allowed image content types and configured size limits). Laravel verifies the Firebase ID token, the matching upload intent, store ownership and object metadata before processing. Laravel controls all processing, review and publication. Customers never receive access to raw quarantine objects.
-7. Search results are generated from Firestore-backed data and a derived search index. The index is not the authoritative record store.
+2. Flutter sends that ID token as `Authorization: Bearer <Firebase-ID-Token>` to Laravel over HTTPS for protected application operations.
+3. Laravel verifies the token signature and required claims, resolves the Firebase `uid`, loads the authoritative `users/{uid}` profile and store memberships from Firestore, and checks the requested permission.
+4. Laravel reads and writes Firestore through the Google Cloud Firestore PHP server client using Application Default Credentials (ADC) and Google Cloud IAM.
+5. Normal business-data reads and writes do **not** go directly from Flutter to Firestore. Firestore Security Rules deny direct client access to application/business collections. Laravel performs the document-level authorization before each protected operation.
+6. For media uploads, Flutter first requests an upload intent from Laravel. Laravel verifies the user and store permissions, creates an intent with a narrowly scoped UID-owned quarantine path, allowed content types, size limits and expiry, then returns only the upload information needed by the client.
+7. Flutter uses the Firebase Storage SDK to upload to that private quarantine path. Storage Rules restrict the authenticated UID/path, accepted MIME types and file size; clients cannot read raw originals or write to published/sanitized paths. After upload, Flutter calls Laravel's finalize endpoint.
+8. Laravel verifies the upload intent, object path, owner/store association and uploaded object metadata, then queues processing. Only Laravel-controlled jobs or authorized admin workflows can mark approved derivatives as publishable. Never accept a client-supplied path or `published` flag as proof of authorization.
+9. Search results are generated from Firestore-backed data and a derived search index. The index is not the authoritative record store. Laravel coordinates search and validates result visibility/status.
+10. Map, routing, AI and search providers are accessed through controlled service boundaries. Secrets and privileged API keys must not be embedded in Flutter.
 
 ### Important PHP/Firebase integration decision
 
-Google provides an official PHP client library for Cloud Firestore (`google/cloud-firestore`), and it requires the PHP gRPC extension. Install and enable that extension in the Laravel Docker image. Google does **not** list PHP among the Firebase Admin SDK's supported languages. For Firebase Authentication ID-token verification in Laravel, follow Firebase's documented third-party JWT-verification procedure with a maintained PHP JWT library: validate RS256 signature against Google's published Secure Token public keys, `kid`, `aud`, `iss`, `sub`, `exp`, `iat` and `auth_time`; cache signing keys according to their cache headers. Do not decode a JWT without verifying its signature. If full Firebase Auth user administration is later required, use the supported Identity Toolkit/Admin APIs or a small separately maintained service using an official Firebase Admin SDK, rather than pretending a PHP Admin SDK exists.
+Google provides an official PHP client library for Cloud Firestore (`google/cloud-firestore`), and it requires the PHP gRPC extension. Google does **not** list PHP among the Firebase Admin SDK's supported languages. Laravel therefore verifies Firebase Authentication ID tokens using Firebase's documented third-party JWT-verification procedure with a maintained PHP JWT library: validate the RS256 signature against Google's published Secure Token public keys, key ID (`kid`), audience (`aud`), issuer (`iss`), subject (`sub`), expiration (`exp`), issued-at (`iat`) and authentication-time (`auth_time`) claims; cache signing keys according to their cache headers. Do not decode a JWT without verifying its signature. If future work requires Firebase Auth administration beyond the APIs available to the PHP implementation, use the supported Identity Toolkit/Admin APIs or a small separately maintained service using an officially supported Firebase Admin SDK. Do not assume an official Firebase Admin SDK for PHP exists.
 
 ### Architecture principles
 
-- Firestore is the single source of truth for application records. Do not keep parallel MySQL tables or duplicate authoritative records in a second database.
-- Use Firebase Authentication as the sole account identity provider in the target architecture. Remove Laravel Sanctum as the mobile login/token issuer after migration; do not run two independent login systems.
-- Use the Firebase Auth `uid` as the stable account identifier and the document ID for `users/{uid}`. Role and store-membership data must be written only by trusted backend/admin operations.
-- Laravel remains the policy enforcement and business-logic layer. Firebase Authentication proves identity; it does not decide whether a user owns a store or may edit inventory.
-- Use the official Google Cloud Firestore PHP client (`google/cloud-firestore`) with gRPC enabled. Server client libraries authenticate with Application Default Credentials (ADC) and IAM.
-- Firestore server client libraries bypass Firestore Security Rules. Therefore, give the Laravel runtime a narrowly scoped service identity, keep direct client Firestore access denied unless a future feature explicitly requires it, and enforce authorization in Laravel for every request.
-- Use Cloud Storage for media bytes. Keep original 360° uploads private; publish only sanitized derivatives after privacy processing and owner review.
-- Use short-lived signed download URLs or another deliberately secured media-delivery method. Do not expose long-lived public URLs for private originals.
-- Keep production secrets and service-account credentials out of Git, container images, Flutter assets and logs. Prefer attached service identities/workload identity in production instead of long-lived JSON keys.
+- Firestore is the single source of truth for application records. Do not keep parallel MySQL tables or duplicate authoritative records in a second database after migration.
+- Use Firebase Authentication as the sole account identity provider. Remove Laravel Sanctum as the mobile login/token issuer after cutover; do not run two independent primary login systems.
+- Use the Firebase Auth `uid` as the stable account identifier and the document ID for `users/{uid}`. Role, ownership, approval and store-membership data are granted only by trusted backend/admin operations.
+- Laravel is the policy enforcement and business-logic layer. Firebase Authentication proves identity; it does not decide whether a user owns a store or may edit inventory.
+- Use the official Google Cloud Firestore PHP client (`google/cloud-firestore`) with gRPC enabled. Server client libraries authenticate with ADC and IAM.
+- Firestore server client libraries bypass Firestore Security Rules. Give the Laravel runtime a narrowly scoped service identity and enforce authorization in Laravel for every request.
+- Deny direct Flutter reads/writes to Firestore business collections by default. Any future direct client feature must be separately designed, protected by narrowly scoped Security Rules, tested and documented before it is enabled.
+- Use Firebase Storage SDK only for approved client uploads to private quarantine paths. Keep original 360° uploads private; publish only sanitized derivatives after processing and review.
+- Use short-lived signed download URLs or another deliberately secured delivery method for approved media. Never expose unblurred originals through public URLs or API responses.
+- Keep production secrets, search keys, AI credentials and service-account credentials out of Git, container images, Flutter assets and logs. Prefer attached service identities/workload identity in production instead of long-lived JSON keys.
 - Use Firestore document schemas with explicit `schemaVersion`, timestamps, bounded document size and clear ownership. A Firestore document has a 1 MiB maximum size; never store image bytes or an entire store inventory in one document.
 - Design for Firestore query limitations: denormalize fields needed for common queries, store geohash plus latitude/longitude for nearby lookup, create composite indexes, and use a search service for full-text/semantic retrieval.
-- Use idempotent asynchronous jobs with retry limits, dead-letter/failed-job handling and status documents for AI processing, panorama privacy processing and search-index synchronization.
+- Use idempotent asynchronous jobs with retry limits, failed-job handling and status documents for AI processing, panorama privacy processing and search-index synchronization.
 - Keep development, staging and production Firebase projects separate. Never point a development app at production data.
-- Do not claim production readiness until Firebase rules, IAM, authentication verification, backups/exports, restore tests, billing alerts and service monitoring are verified.
+- Do not claim production readiness until token verification, Laravel authorization, IAM, Firestore/Storage rules, indexes, backups/exports, restore tests, billing alerts and service monitoring are verified.
 
 ### Deployment approach
 
-Use Docker for Laravel and queue workers, not for the Firebase database. Local development can run the Firebase Local Emulator Suite for Authentication, Firestore and Storage, while Flutter runs natively and Laravel runs in Docker. In production, Firestore, Firebase Authentication and Cloud Storage are managed services; deploy the Laravel container with a service identity and no embedded service-account key. A managed container platform such as Cloud Run is a natural option, but a secured container host with workload identity or carefully managed credentials is also possible. Kubernetes is not required for the MVP.
+Use Docker for the Laravel API and queue workers, not for the Firebase database. Local development can run the Firebase Local Emulator Suite for Authentication, Firestore and Storage while Flutter runs natively and Laravel runs in Docker. In production, Firebase Authentication, Firestore and Cloud Storage are managed services; deploy Laravel containers with an attached service identity and no embedded service-account key. Cloud Run is a natural option, but a secured container host with an appropriate workload-identity/secret-management arrangement is also possible. Kubernetes is not required for the MVP.
 
 ## 9. Firestore Data Model
 
@@ -448,13 +452,13 @@ Firestore is a document database, not a relational SQL database. Model each inde
 |---|---|
 | `users/{uid}` | Firebase Auth UID, display profile, account status, role summary, created/updated timestamps. Roles are server-managed, not client-editable. |
 | `stores/{storeId}` | Owner UID, name, type, approval status, address/landmark, lat/lng, geohash, schedule, fixed/mobile mode. |
-| `stores/{storeId}/members/{uid}` | Membership role and granular grants for inventory, promotions, staff and vendor-location actions. |
+| `storeMembers/{membershipId}` | Top-level store membership record with `storeId`, member UID, role, granular grants, status and timestamps. Use a deterministic ID or enforce uniqueness for each store/member pair. Roles and grants are server-managed. |
 | `categories/{categoryId}` | Hierarchical taxonomy: slug, name, parent ID, ancestor IDs, active status and display order. |
 | `categorySynonyms/{synonymId}` | Broad phrases and local/alternate terms mapped to category IDs or category subtrees. |
 | `products/{productId}` | Shared identity: canonical name, brand, model/variant, category IDs, identifiers, general attributes and moderation status. |
 | `productAliases/{aliasId}` | Alternate spellings, brand/model variations and Filipino/English/local names linked to a product or category. |
 | `storeListings/{listingId}` | Query-friendly top-level store listing: store ID, product ID, category/ancestor IDs, geohash, lat/lng, price in integer centavos, currency `PHP`, unit, quantity/availability, condition, listing status and last-confirmed time. |
-| `stores/{storeId}/stockMovements/{movementId}` | Optional audit history of stock additions, removals and adjustments. |
+| `stockMovements/{movementId}` | Inventory audit history with `storeId`, `listingId`, actor UID, movement type, quantity/unit and timestamp. Client writes are denied; Laravel creates records. |
 | `productAttributeSchemas/{categoryId}` | Category-specific attribute definitions, types, units, validation and display rules. |
 | `productRecognitionJobs/{jobId}` | Private input object path, owner UID, status, candidates, model/version, confidence, error and owner decision. |
 | `mediaAssets/{assetId}` | Cloud Storage object paths, media type, owner/store, private/public state, processing status, blur status, metadata-stripped flag and retention deadline. |
@@ -463,8 +467,9 @@ Firestore is a document database, not a relational SQL database. Model each inde
 | `storeTours/{tourId}/connections/{connectionId}` | From-node, to-node and arrow/hotspot placement metadata. |
 | `promotions/{promotionId}` | Store ID, offer, date range, sponsored status, approval state, targeting constraints and limits. |
 | `vendorLocationSessions/{sessionId}` | Owner/store, start/end/expiry, active status, last position, geohash and last update. Only explicit active public sessions are returned to customers. |
-| `favorites/{favoriteId}` or `users/{uid}/favorites/{favoriteId}` | User-saved stores/products. Choose one canonical pattern and use it consistently. |
+| `favorites/{favoriteId}` | User-saved stores/products with an owner UID and target type/ID. Enforce owner-only access through Laravel. |
 | `reports/{reportId}` | Customer reports for incorrect products, prices, stores, images or promotions. |
+| `feedback/{feedbackId}` | Customer/store-owner feedback, including category, message, status and timestamps. Laravel validates and records submissions. |
 | `auditLogs/{logId}` | Append-only record of important owner/admin actions. Client writes are denied. |
 | `searchOutbox/{eventId}` | Optional durable events for asynchronous search-index updates and retry status. Not a user-facing source of truth. |
 
@@ -475,11 +480,27 @@ Firestore is a document database, not a relational SQL database. Model each inde
 - For nearby queries, query geohash ranges, then calculate exact distance and discard false positives. Keep the result set bounded and paginated.
 - Store money as integer minor units (for PHP, centavos) plus an explicit currency code; do not use binary floating point for prices.
 - Use timestamps consistently (server timestamps for authoritative changes) and record `lastConfirmedAt` separately from `updatedAt`.
-- Use subcollections for store memberships, stock movements and tour nodes/connections where parent ownership is meaningful. Remember that deleting a parent document does not automatically delete its subcollections; implement explicit recursive cleanup.
+- Use the canonical top-level collections `storeMembers` and `stockMovements` to support the current project query/index patterns; store the parent `storeId` on each document and enforce uniqueness/ownership in Laravel. Tour nodes and connections may remain subcollections of `storeTours`. Remember that deleting a parent document does not automatically delete its subcollections; implement explicit recursive cleanup.
 - Create and commit `firestore.indexes.json` and `firestore.rules` to source control. Deploy indexes/rules through CI or a documented release step.
 - Define document contracts and a `schemaVersion` for records that may evolve. Use idempotent scripts/Cloud Tasks for large document migrations; do not treat Firestore as a schemaless free-for-all.
 - Keep image bytes, embedding arrays of large size, and panorama derivatives out of regular profile/listing documents. Store media in Cloud Storage and store only paths/metadata in Firestore.
 - The external search index is a derived copy for retrieval only. Firestore remains the source of truth; provide retry and full re-index operations.
+
+### Prototype-to-target collection naming map
+
+The current Flutter prototype notes use some shorter collection names. Use the following canonical names in the finalized target schema and migrate records rather than maintaining parallel duplicate collections:
+
+| Current prototype name | Target canonical name |
+|---|---|
+| `listings` | `storeListings` |
+| `tours` | `storeTours` |
+| `vendorSessions` | `vendorLocationSessions` |
+| `storeMembers` | `storeMembers` |
+| `stockMovements` | `stockMovements` |
+| `feedback` | `feedback` |
+| `stores`, `products`, `promotions`, `users`, `favorites`, `reports`, `auditLogs` | Keep the same name, subject to field/schema validation |
+
+Create one mapping/migration script and one canonical collection per entity. Do not leave both old and new names active as competing sources of truth after cutover.
 
 ### Data model rule
 
@@ -487,7 +508,7 @@ One shared product can appear in many stores. Each `storeListings` document owns
 
 ## 10. Suggested API Endpoints
 
-These are proposed route patterns for planning, not proof that routes already exist. Flutter uses Firebase Authentication to sign in and obtains a Firebase ID token. It sends that token in the HTTPS `Authorization: Bearer` header to Laravel. Laravel verifies the token, resolves the Firebase UID, loads the user's profile/roles from Firestore, and authorizes each request. Laravel then performs Firestore reads/writes with its server identity. Do not expose Firestore service credentials or privileged Cloud Storage credentials to Flutter.
+These are proposed route patterns for planning, not proof that routes already exist. Flutter uses Firebase Authentication to sign in and obtains a Firebase ID token. It sends that token in the HTTPS `Authorization: Bearer` header to Laravel for protected application operations. Laravel verifies the token, resolves the Firebase UID, loads the user's profile/roles/memberships from Firestore, authorizes each request and performs Firestore reads/writes with its server identity. Flutter does not receive Firestore service credentials or privileged Cloud Storage credentials.
 
 | **Area** | **Example endpoint** | **Purpose** |
 |---|---|---|
@@ -548,11 +569,11 @@ Firebase ID tokens are short-lived and refreshed by the Firebase client SDK. Lar
 ### Firestore rules and IAM
 
 - Commit `firestore.rules`, `firestore.indexes.json` and `storage.rules` to version control.
-- Storage Rules should permit only authenticated users to create uploads under their own `quarantine/{uid}/...` path; restrict file size and accepted image MIME types, deny reads of raw originals, and deny writes to published/sanitized paths from clients.
-- In the selected architecture, normal business reads/writes go through Laravel's server client. Begin with restrictive Firestore Security Rules that deny direct client data access; do not open rules just to make the Flutter app work.
-- Understand that server-side PHP Firestore client requests are authorized by Google Cloud IAM and bypass Firestore Security Rules. Use a dedicated runtime service account and grant only the required Firestore and Storage permissions.
+- Firestore Security Rules should deny direct Flutter client reads/writes to application/business collections in this architecture. Do not open Firestore rules merely to make a direct client query work.
+- Storage Rules should permit only authenticated users to create uploads under an authorized UID-scoped `quarantine/{uid}/...` path; restrict file size and accepted image MIME types, deny client reads of raw originals, and deny client writes to published/sanitized paths. Laravel must still verify the upload intent and store ownership before processing.
+- Server-side PHP Firestore client requests are authorized by Google Cloud IAM and bypass Firestore Security Rules. Use a dedicated runtime service account and grant only the required Firestore and Storage permissions.
 - Separate development, staging and production Firebase projects. Never use production credentials or real customer records in the local emulator environment.
-- Test role/ownership authorization in Laravel independently of Firestore Security Rules.
+- Test role/ownership authorization in Laravel independently of Firebase Rules, and test quarantine upload boundaries with Storage Rules emulator tests.
 
 ### Data protection, backups and recovery
 
@@ -599,35 +620,37 @@ Firebase ID tokens are short-lived and refreshed by the Firebase client SDK. Lar
 
 ## 12. Development Roadmap and Milestones
 
-### Status of the original six phases
+### Current implementation snapshot and target-architecture status
 
-The original six phases are complete on the Firebase-first Flutter architecture. The Firebase migration of the Flutter app is **done** — all API calls go through `LocalSpotFirebaseApi` and Firestore. Remaining work is production hardening.
+The current project notes report a working Flutter/Firebase development implementation. The app currently has direct Firestore repository operations through `LocalSpotFirebaseApi`. This is a **transitional implementation**, not the final trust boundary adopted in this plan. The finalized target is that Flutter calls Laravel for application records and privileged business operations; Laravel verifies Firebase ID tokens, enforces authorization and accesses Firestore using IAM. The current code must be refactored and retested before the target architecture can be marked complete.
 
-| **Status** | **Scope** | **Action** |
+| **Status** | **Scope** | **Current evidence / next action** |
 |---|---|---|
-| ✅ Phases 1–6 | Foundation, locator, inventory/photo scan, advertising/tours, search, pilot baseline | Complete on Firebase architecture. |
-| ✅ Firebase migration 1 | Firebase project, Authentication, Firestore, Security Rules | Done — `capstone-project-561a2` configured; rules deployed; seeder script run. |
-| ✅ Firebase migration 2 | Flutter uses Firebase directly | `LocalSpotFirebaseApi` handles all 39 API paths. No Laravel dependency in Flutter. |
-| ✅ Firebase migration 3 | Demo data seeded to Firestore | `scripts/seed_firestore.js` seeds 7 stores, 12 products, 15 listings, 7 auth accounts. |
-| ⬜ Firebase migration 4 | Cloud Storage for media | Product photos and panoramas still use external URLs. Upload-to-Storage not yet wired. |
-| ⬜ Firebase migration 5 | Geohash nearby queries + search index | Currently uses in-app Haversine distance filter. No geohash index or vector search yet. |
-| ⬜ Firebase migration 6 | Production ops | Rules hardening, backups, monitoring, CI full pass, billing alerts. |
+| ⚠️ Transitional baseline | Original product phases | The project reports the original feature phases as built on the previous MySQL/Sanctum baseline and then adapted in the Firebase Flutter codebase. Regression-test every journey against the finalized Laravel-backed architecture; do not treat the previous phase status as production acceptance. |
+| ✅ Development setup reported | Firebase project, Authentication and Firestore | Development project `capstone-project-561a2` is reported configured; rules deployed and demo seeder run. Review project configuration, rules and account setup before production. |
+| ⚠️ Transitional implementation | Flutter Firestore access | `LocalSpotFirebaseApi` reportedly handles 39 data/API paths directly against Firestore. Refactor protected business reads/writes to Laravel API repositories; remove direct Firestore client access from production Flutter flows. |
+| ✅ Development fixture | Demo data seeded | `scripts/seed_firestore.js` reportedly seeds 7 stores, 12 products, 15 listings and 7 auth accounts. This is test data, not proof that the full MySQL dataset or real user accounts have been migrated. |
+| ⬜ Pending | Cloud Storage for media | Product photos and panoramas are still reported to use external URLs; Storage upload-to-quarantine and Laravel finalization are not yet wired. |
+| ⬜ Pending | Backend geohash queries and advanced search | Current implementation is reported to use in-app Haversine distance filtering. Add bounded geohash queries in Laravel and a dedicated derived index for full-text/semantic/vector retrieval. |
+| ⬜ Pending | Server-side AI and panorama privacy processing | Wire actual AI/OCR/embedding services and the panorama person/face privacy pipeline through Laravel workers; keep publication blocked until review passes. |
+| ⬜ Pending | Production operations | Harden rules/IAM, backups/restores, monitoring, CI, billing alerts, rate limits, security tests and rollback procedures. |
 
-### Recommended migration sequence
+### Recommended migration and implementation sequence
 
-1. Inventory the existing MySQL schema, Laravel models, queries, migrations, Sanctum authentication, file paths, jobs and tests. Freeze schema changes during the migration window.
-2. Create a Firebase development project and configure Auth, Firestore, Storage and Emulator Suite. Do not start with production data.
-3. Finalize Firestore collection/document design, query/index requirements, Security Rules and IAM roles before importing records.
-4. Add the Firestore PHP client and gRPC extension to Laravel's container. Implement repository interfaces so the rest of the business logic is not tightly coupled to raw Firestore calls.
-5. Integrate Firebase Authentication: Flutter signs in with Firebase; Laravel verifies ID tokens and resolves the UID; remove Sanctum as the primary identity flow only after end-to-end tests pass.
-6. Write idempotent export/transform/import scripts for stores, products, listings, categories, roles, promotions, tours, reports and audit records. Validate counts, references, amounts, coordinates and ownership.
-7. Plan account migration separately. Do not assume existing Laravel password hashes can be imported unchanged. Confirm whether the current hash algorithm is supported by Firebase Auth import; otherwise use a secure staged reauthentication/password-reset process.
-8. Migrate media to Cloud Storage using private staging paths. Verify original/sanitized relationships, signed access, metadata stripping, privacy-processing status and retention jobs.
-9. Replace SQL full-text and geospatial queries. Use Firestore geohashes for bounded nearby lookup and an external derived search index for full-text/semantic/visual retrieval.
-10. Configure queue/cache infrastructure without a SQL database driver. Test image jobs, privacy jobs, search-index retries and scheduled cleanup.
-11. Run parity tests against the old and new backends with a controlled dataset. Check category search, product search, nearby listings, ownership policies, inventory writes, promotion moderation and tour publication.
-12. Run a staging cutover rehearsal and restore drill. Keep the old MySQL database read-only and backed up until the rollback window has closed.
-13. Cut over production only after a documented approval. Monitor errors, read/write costs, storage traffic, search latency and failed jobs closely.
+1. Back up the existing MySQL database and media. Inventory the old schema, Laravel models, queries, Sanctum authentication, file paths, jobs and tests. Freeze schema changes during the migration window.
+2. Keep the Firebase development project separate from staging/production. Confirm Auth providers, Firestore location, Storage bucket location, Emulator Suite configuration, document model, indexes and security policies.
+3. Implement Firebase ID-token verification middleware in Laravel. Verify RS256 signature and required claims/key rotation; resolve Firebase UID and check current account status on protected requests.
+4. Configure the official Google Cloud Firestore PHP client and gRPC in Laravel. Implement repositories for users, stores, products, listings, promotions, tours, reports and audit records. Use ADC/IAM, not credentials shipped to Flutter.
+5. Establish Laravel policies for customer, owner, staff and administrator permissions. Grant owner/admin/membership roles only through trusted workflows. Add authorization tests for both permitted and forbidden operations.
+6. Refactor Flutter repositories away from direct Firestore business reads/writes. Use `dio` or an equivalent HTTP client to call Laravel with a refreshed Firebase ID token. Remove the Flutter `cloud_firestore` dependency from production flows unless a separately approved, narrowly rules-protected client feature is required.
+7. Implement media upload intents: Laravel authorizes the owner and returns a scoped quarantine path; Flutter uploads through Firebase Storage SDK; Laravel verifies/finalizes and queues processing. Keep raw originals private.
+8. Write idempotent MySQL export/transform/import scripts for stores, products, listings, categories, roles, promotions, tours, reports and audit records. Validate counts, references, amounts, coordinates and ownership. Treat demo seeding separately from real-data migration.
+9. Plan account migration separately. Do not assume existing Laravel password hashes can be imported unchanged. Confirm whether the current hash algorithm is supported by Firebase Auth import; otherwise use a secure staged reauthentication/password-reset process.
+10. Replace SQL full-text and geospatial queries. Use Firestore geohash ranges plus exact-distance filtering for bounded nearby lookup and an external derived search index for full-text/semantic/visual retrieval.
+11. Configure durable queue/cache infrastructure without a SQL database queue driver. Test image jobs, privacy jobs, search-index retries, scheduled cleanup, idempotency and failed-job recovery.
+12. Run parity tests against the old and new implementations with a controlled dataset. Check category/product search, nearby listings, ownership policies, inventory writes, promotion moderation, media access and tour publication.
+13. Run a staging cutover rehearsal, security review and restore drill. Keep the old MySQL database read-only and backed up until the rollback window has closed.
+14. Cut over production only after documented approval. Monitor API errors, token failures, Firestore reads/writes, storage traffic, search latency, job failures and billing closely.
 
 ## 13. Enhanced Acceptance Checklist
 
@@ -651,6 +674,7 @@ The original six phases are complete on the Firebase-first Flutter architecture.
 - ☐ Firebase UID is the canonical account identifier and maps to `users/{uid}` in Firestore.
 - ☐ Store roles and memberships are server-managed; clients cannot self-assign owner/admin permissions.
 - ☐ Laravel reads/writes Firestore through IAM using the PHP Firestore client; service credentials are not embedded in Flutter or Docker images.
+- ☐ Normal Flutter application flows do not read or write Firestore business collections directly; all such operations use authenticated Laravel API endpoints.
 - ☐ Firestore client access is denied by default when Flutter is not intended to access business documents directly.
 - ☐ Firestore document sizes remain below the hard 1 MiB limit; image bytes are stored in Cloud Storage, not documents.
 - ☐ `firestore.rules`, `firestore.indexes.json` and document schema contracts are version-controlled and deployed/tested.
@@ -747,27 +771,30 @@ LocalSpot/
 
 ### Flutter packages
 
-The app currently uses direct Firebase SDK packages — no `dio` or HTTP client for a backend API:
+The target Flutter app uses Firebase Authentication for identity, `dio` (or an equivalent maintained HTTP client) for Laravel API requests, and Firebase Storage SDK for authorized uploads. It does **not** use the Flutter Firestore SDK for normal application/business reads and writes.
 
 ```powershell
 flutter pub add firebase_core
 flutter pub add firebase_auth
-flutter pub add cloud_firestore
 flutter pub add firebase_storage
+flutter pub add dio
 ```
 
 - `firebase_core`: initializes Firebase.
 - `firebase_auth`: user sign-in, registration, logout and ID-token management.
-- `cloud_firestore`: all application reads and writes go directly from Flutter to Firestore.
-- `firebase_storage`: authenticated uploads into private Storage paths (to be wired in Wave 1).
+- `firebase_storage`: uploads files only to authorized private quarantine paths after Laravel issues an upload intent.
+- `dio`: calls Laravel API endpoints; attach a current Firebase ID token as a Bearer token and handle token refresh, timeouts and errors.
+- Do **not** add `cloud_firestore` to normal production Flutter flows. Laravel owns Firestore business-data access through its server client. Add direct client Firestore access only for a separately approved feature with its own narrow Security Rules and tests.
 
-Additional packages already in use:
+Additional packages already in use or planned for their respective features:
 ```powershell
 flutter pub add geolocator
 flutter pub add maplibre_gl
 flutter pub add image_picker
 flutter pub add url_launcher
 ```
+
+Use the exact MapLibre package/version already validated in the project; do not add a second map package unnecessarily.
 
 Optional future integrations:
 ```powershell
@@ -787,7 +814,7 @@ firebase login
 
 dart pub global activate flutterfire_cli
 
-flutter pub add firebase_core firebase_auth firebase_storage
+flutter pub add firebase_core firebase_auth firebase_storage dio
 flutterfire configure
 ```
 
@@ -810,7 +837,7 @@ Start emulators for local work:
 firebase emulators:start --only auth,firestore,storage
 ```
 
-The Emulator Suite uses local Node/Java processes and is for development/CI only; it is not a production database or a self-hosted Firebase replacement. Configure Flutter and Laravel separately to use emulator hosts. On an Android emulator, the host computer is normally reached through `10.0.2.2`; inside a Docker container, use a reachable host/service name such as `host.docker.internal` where supported, not the container's own `127.0.0.1`. The Flutter Firebase Storage SDK can use the Storage emulator; for Laravel's Google Cloud Storage PHP client, confirm emulator API compatibility or use a separate isolated development bucket with test data. Keep emulator flags and unsigned test-token acceptance strictly limited to local/test environments.
+The Emulator Suite uses local Node/Java processes and is for development/CI only; it is not a production database or a self-hosted Firebase replacement. Configure Flutter and Laravel separately to use emulator hosts. Flutter uses the Auth emulator for sign-in tests and the Storage emulator for quarantine-upload tests. Laravel integration tests should target the Firestore emulator where the selected PHP client configuration supports it; verify emulator compatibility instead of assuming every Google Cloud PHP client setting is identical. On an Android emulator, the host computer is normally reached through `10.0.2.2`; inside a Docker container, use a reachable host/service name such as `host.docker.internal` where supported, not the container's own `127.0.0.1`. Keep emulator flags and unsigned test-token acceptance strictly limited to local/test environments.
 
 ### Laravel Firebase dependencies and credentials
 
@@ -823,7 +850,7 @@ composer require google/cloud-storage
 
 Install and enable the PHP `grpc` extension in the Laravel image before using the Firestore PHP client. Use Composer and the official Google Cloud PHP libraries. For local development, configure Application Default Credentials (`gcloud auth application-default login`) or a dedicated development service account; never commit the JSON credential file. In production, prefer an attached service account/workload identity and least-privilege IAM rather than a long-lived downloaded key.
 
-Example local environment variables (names are illustrative; use config/services.php and the actual deployment environment):
+Example local environment variables (names are illustrative; use config/services.php and the actual deployment environment). The API must not enable emulator/test-token bypasses outside local/test environments:
 
 ```dotenv
 FIREBASE_PROJECT_ID=your-localspot-dev-project
@@ -856,9 +883,9 @@ docker compose stop
 
 Laravel may use Redis for cache and queue jobs; if so, add a Redis service locally and use managed Redis or another durable queue provider in production. Do not configure Laravel's database queue/cache/session drivers to depend on MySQL after the migration. Keep the API stateless where practical; store operational cache/queue state in the selected service.
 
-### Data persistence warning
+### Data persistence and client-access boundary
 
-Use Emulator Suite export/import for repeatable local test data. Emulator state is separate from production Firebase. Never run a production import/export, delete or cleanup command against the wrong project. Confirm the active Firebase project with `firebase use` and verify the project ID before running destructive operations.
+Use Emulator Suite export/import for repeatable local test data. Emulator state is separate from production Firebase. Never run a production import/export, delete or cleanup command against the wrong project. Confirm the active Firebase project with `firebase use` and verify the project ID before running destructive operations. In the target architecture, Flutter uses Firebase Auth and restricted Storage uploads, but application records are read/written through Laravel. Do not re-enable direct Firestore business-data access just to simplify local development.
 
 ## 16. Production Readiness and Deployment
 
@@ -989,51 +1016,61 @@ Check current official documentation and pricing during implementation because F
 - **OpenStreetMap tile usage policy:** https://operations.osmfoundation.org/policies/tiles/
 
 ## 18. Implementation Backlog — What to Build Next
-## 18. Implementation Backlog — What to Build Next
 
-Use this section as the working queue. Items marked ✅ are complete in the current Flutter codebase. Items marked ⬜ are next priorities.
+Use this section as the working queue. The items below describe the current project-reported Firebase Flutter prototype, not production acceptance of the finalized Laravel-backed architecture. Items marked ✅ are reported implemented in the current prototype; items marked ⬜ remain pending. The data-access boundary, server-side authorization and relevant tests must be migrated and verified before production.
 
-### Already complete in the current Firebase Flutter codebase
+### Reported implemented in the current transitional Flutter prototype
+
+The items below describe the existing prototype only. In particular, the currently reported public catalog reads/authenticated writes and client-side role checks must not be carried into production unchanged. The finalized Laravel-backed target uses deny-by-default direct Firestore client rules and moves privileged reads/writes behind the API.
 
 | Area | Status | Notes |
 |---|---|---|
 | Firebase Authentication | ✅ | Email/Password sign-in, register, logout, session persistence. |
-| Firestore catalog reads | ✅ | All 13 collections: stores, products, listings, promotions, tours, users, storeMembers, favorites, reports, feedback, vendorSessions, stockMovements, auditLogs. |
-| Firestore writes | ✅ | Store register, listing add/edit/archive, promotion, tour, staff invite, vendor session, report, feedback, favorites, audit log. |
+| Firestore catalog reads | ✅ Transitional | Current prototype reads 13 collections directly from Flutter. Refactor protected reads to Laravel API responses before production; apply the canonical collection-name map in Section 9. |
+| Firestore writes | ✅ Transitional | Current prototype writes these records directly from Flutter. Move business writes behind Laravel authorization and server-side repositories before production. |
 | Firebase search | ✅ | Keyword + category expansion (food/tech/hardware), seller-type filter, radius filter, sort by match-type then distance. |
 | Product recognition | ✅ | Keyword/alias/barcode catalog scoring; owner confirmation required; no external vision API. |
-| Route preview | ✅ | Straight-line Haversine fallback; handled in-app. |
-| Firestore Security Rules | ✅ | Public read for catalog collections; authenticated writes; deployed. |
+| Route preview | ⚠️ Basic fallback | Straight-line Haversine preview is implemented in-app; this is not road routing or reliable road ETA. Integrate a licensed routing service for production route geometry. |
+| Firestore Security Rules | ⚠️ Transitional | Current development rules are reported deployed with public catalog reads/authenticated writes. Replace with deny-by-default direct client business-data access for the Laravel-backed target; test Storage quarantine rules separately. |
 | Firestore indexes | ✅ | Composite indexes for listings, storeMembers, stockMovements, favorites, vendorSessions deployed. |
 | Demo seeder | ✅ | `scripts/seed_firestore.js` — 7 auth accounts (password: `demo1234`), 7 stores, 12 products, 15 listings. |
 | Android back navigation | ✅ | `PopScope` with overlay/tab/exit logic. |
-| Roles and access control | ✅ | Customer, owner, staff, admin; inventory/promotion/location grants enforced. |
+| Roles and access control | ⚠️ Client prototype | Role-aware UI and prototype grants are reported implemented. Re-enforce every privilege in Laravel; client-side role checks are not a security boundary. |
 | Catalog and search UI | ✅ | Category chips, search retry, overflow fix, load more, debounce, cancel stale. |
 | Map and location | ✅ | MapLibre in-app, GPS permission, follow-my-location, nearby refresh, route drawn on map. |
 | Owner inventory | ✅ | Photo suggestion, confirm, category attributes, archive, stock history writes to Firestore. |
-| Tours | ✅ | Process → review → publish gate; private originals; manual blur; Firestore-persisted. |
+| Tours | ⚠️ Partial | Tour metadata and review/publish workflow are reported implemented. Real Cloud Storage originals, automated person/face processing and sanitized derivative delivery remain pending. Do not publish unprocessed panoramas. |
 | Admin | ✅ | Store/promo/report/feedback review; audit log; Firestore writes. |
-| Smoke tests | ✅ | 20 tests pass in CI. |
+| Smoke tests | ✅ Reported | 20 smoke tests are reported passing in CI. Add Laravel API/authorization tests and end-to-end migration tests for the finalized architecture. |
 
-### Wave 1 — Cloud Storage for media (next priority)
+### Wave 0 — Finalize the Laravel trust boundary (highest priority)
 
-1. ⬜ Wire `Add Product` photo upload to Firebase Storage (`products/{productId}/image.jpg`).
-2. ⬜ Wire tour panorama upload to private Storage path (`tours/originals/{uid}/{nodeId}.jpg`).
-3. ⬜ Wire store image upload for store registration and profile editing.
-4. ⬜ Add upload-intent flow in `firebase_api.dart` — return a Storage path; upload using `firebase_storage` SDK; show progress.
+1. ⬜ Implement and test Firebase ID-token verification middleware in Laravel.
+2. ⬜ Add Laravel Firestore repositories using the official PHP client and a least-privilege runtime service identity.
+3. ⬜ Move protected store, product, listing, promotion, favorite, report, feedback, staff, vendor-session, tour and admin reads/writes behind Laravel API endpoints.
+4. ⬜ Refactor Flutter repositories to call Laravel with `dio` and a refreshed Firebase ID token; remove direct `cloud_firestore` business-data access from production flows.
+5. ⬜ Enforce customer/owner/staff/admin permissions and ownership checks in Laravel; add positive and negative authorization tests.
+6. ⬜ Replace permissive direct-client Firestore rules with deny-by-default rules for business collections; keep Storage quarantine upload rules narrowly scoped.
+
+### Wave 1 — Cloud Storage for media (next priority after the trust boundary)
+
+1. ⬜ Wire `Add Product` photo upload through a Laravel-authorized intent to a private path such as `quarantine/{uid}/products/{uploadId}/original.jpg`; Laravel verifies/processes it and controls the approved derivative path.
+2. ⬜ Wire tour panorama upload through an authorized intent to a private path such as `quarantine/{uid}/tours/{uploadId}/original.jpg`; never let Flutter write directly to a published path.
+3. ⬜ Wire store image upload for store registration and profile editing through the same controlled quarantine upload-intent flow.
+4. ⬜ Add upload-intent and finalize API calls in the Flutter API client; Laravel returns the scoped Storage path, verifies the uploaded object and queues processing; Flutter uploads with `firebase_storage` and shows progress.
 5. ⬜ Replace external Unsplash placeholder URLs in seeder with real Storage uploads for production data.
 
 ### Wave 2 — Search quality and geohash
 
 1. ⬜ Add `geohash` field to store and listing documents; update seeder and store-register write.
-2. ⬜ Replace Haversine in-app filter with Firestore geohash range query in search and nearby endpoints.
-3. ⬜ Evaluate a dedicated full-text search service (Algolia/Typesense via Firebase Extension or Cloud Function) as catalog grows.
+2. ⬜ Replace broad in-app Haversine filtering with bounded Firestore geohash range queries in Laravel search/nearby endpoints, followed by exact-distance filtering.
+3. ⬜ Evaluate and integrate a dedicated full-text/semantic/vector search service behind Laravel `SearchProvider`; synchronize it from Firestore with retryable jobs.
 
 ### Wave 3 — 360° privacy processing (required before public tours)
 
 1. ⬜ Replace URL-based panorama placeholder with real Cloud Storage upload + processing job.
-2. ⬜ Implement actual person/face detection via a server-side worker (Cloud Function or external API).
-3. ⬜ Write sanitized derivative to a public Storage path and update the Firestore node document.
+2. ⬜ Implement actual person/face detection via a Laravel queue worker or another explicitly selected trusted server-side processor.
+3. ⬜ Write sanitized derivative to a controlled delivery path and update the Firestore media/node document through Laravel; never expose the original panorama.
 4. ⬜ Block publication if processing has not succeeded — the gate exists in code; the ML pipeline is not yet wired.
 
 ### Wave 4 — Production operations
@@ -1042,7 +1079,7 @@ Use this section as the working queue. Items marked ✅ are complete in the curr
 2. ⬜ Configure Firestore scheduled backups/exports.
 3. ⬜ Set Firebase billing budget alerts.
 4. ⬜ Add Firebase Crashlytics and Analytics.
-5. ⬜ Harden Firestore Security Rules — restrict direct Flutter writes to sensitive collections.
+5. ⬜ Harden Firestore Security Rules to deny direct Flutter business-data access; harden Storage Rules for UID-scoped quarantine uploads and deny client writes to published media.
 6. ⬜ CI: add Firestore rules emulator test step.
 7. ⬜ Documented rollback and recovery procedure.
 
@@ -1106,9 +1143,9 @@ dart pub global activate flutterfire_cli
 flutterfire configure
 ```
 
-Select the development Firebase project and the platforms actually supported. This generates `lib/firebase_options.dart`. Initialize Firebase before `runApp`. Use Firebase Auth for account sign-in, retrieve the current ID token, and attach it to Laravel API requests as `Authorization: Bearer <token>`.
+Select the development Firebase project and the platforms actually supported. This generates `lib/firebase_options.dart`. Initialize Firebase before `runApp`. Use Firebase Auth for account sign-in, retrieve the current ID token and attach it to Laravel API requests as `Authorization: Bearer <token>`.
 
-Do not install the `cloud_firestore` Flutter plugin in the default architecture because business reads/writes go through Laravel. Add it only if a specific future feature needs direct, rules-protected client listeners. Use `firebase_storage` for authenticated uploads into private quarantine paths and `dio` for Laravel API calls/finalization. Laravel can issue short-lived signed download URLs for approved sanitized derivatives.
+Do not install the `cloud_firestore` Flutter plugin for normal business-data access because reads/writes go through Laravel. Add it only if a specific future feature is formally approved for direct, narrowly rules-protected access. Use `firebase_storage` for authenticated uploads into private quarantine paths only after Laravel issues an upload intent; use `dio` for Laravel API calls and upload finalization. Laravel can issue short-lived signed download URLs for approved sanitized derivatives.
 
 Optional packages if included in the scope:
 
@@ -1181,21 +1218,23 @@ Configure Flutter to use emulator endpoints only in debug/test builds. Android E
 
 ## Final Architecture Decision
 
-Use **Flutter + Laravel REST API + Firebase Authentication + Cloud Firestore + Cloud Storage + a dedicated search service**.
+Use **Flutter + Firebase Authentication + Laravel REST API + Cloud Firestore + Cloud Storage + a dedicated search service**, with Docker for the Laravel API and workers.
 
-- Flutter is the mobile client. Firebase Authentication handles account identity and issues ID tokens.
-- Laravel is the trusted backend. It verifies Firebase ID tokens, loads authoritative user roles from Firestore, enforces store ownership/permissions and performs all privileged business operations.
-- Cloud Firestore is the only primary application-record database after migration. It stores users/profiles, roles, stores, categories, products, store listings, promotions, vendor sessions, tour metadata, recognition jobs and audit records.
-- Cloud Storage stores product images and 360° media. Original panoramas stay private; only privacy-processed and owner-reviewed derivatives can be published.
-- A dedicated search index provides full-text, semantic and visual retrieval. It is derived from Firestore and can be rebuilt; Firestore remains the source of truth.
-- Docker remains for Laravel API/worker development and production images. It no longer needs to run MySQL. Use Firebase Local Emulator Suite for local Auth/Firestore/Storage testing.
-- Do not use Laravel Sanctum as a second primary identity system after Firebase Auth cutover. Laravel must validate Firebase ID tokens on every protected API request.
-- Use Google IAM/ADC for server access. Firestore server clients bypass Security Rules, so Laravel authorization and least-privilege IAM are mandatory.
+- **Flutter** is the mobile client. It handles customer/owner interfaces, camera, map, GPS, the 360° viewer and user interactions.
+- **Firebase Authentication** is the sole primary identity provider. Flutter signs users in and sends refreshed Firebase ID tokens to Laravel over HTTPS. Laravel verifies each protected request.
+- **Laravel** is the trusted application backend. It enforces roles, store ownership and staff permissions; validates business operations; coordinates AI/search/map integrations; controls moderation, media finalization and publication; and runs background jobs.
+- **Cloud Firestore** is the only primary application-record database after migration. It stores profiles/roles, stores, categories, products, store listings, promotions, vendor sessions, tour metadata, recognition jobs, reports and audit records. It is not a relational MySQL replacement; collections/documents and query patterns must be deliberately designed.
+- **Cloud Storage** stores product images, store photos, private original panoramas and sanitized derivatives. Flutter may upload only to authorized private quarantine paths after Laravel creates an upload intent. Laravel verifies and processes uploads; only approved derivatives are delivered to customers.
+- **A dedicated search service** provides full-text, semantic/vector and visual retrieval. It is a derived, rebuildable index; Firestore remains the source of truth and Laravel coordinates index synchronization and result authorization.
+- **Docker** runs Laravel API and queue workers. It does not run Firestore or require a MySQL container in the target production architecture. Firebase Local Emulator Suite is used for local Auth/Firestore/Storage testing.
+- **Laravel Sanctum** is not retained as a second primary mobile identity system after Firebase Auth cutover. MySQL is not retained as the production application database. The old MySQL database is kept read-only and backed up only through the agreed migration/rollback period.
+- **Security boundary:** Flutter does not directly read/write Firestore business collections. Firestore Security Rules deny those client operations. Laravel uses Google IAM/ADC through its server client, which bypasses Firestore Security Rules; therefore Laravel authorization and least-privilege IAM are mandatory. Storage Rules allow only limited authenticated quarantine uploads and deny access to raw originals/published writes from clients.
+- **PHP/Firebase integration:** use the Google Cloud Firestore and Storage PHP clients, enable gRPC where required, and verify Firebase ID tokens using the documented third-party JWT procedure because Firebase's official Admin SDK does not list PHP as a supported language.
 
-The original six phases are reported by the project owner as complete on the previous MySQL/Sanctum baseline. The Firebase conversion is a separate migration and is not complete until data, accounts, media, search, rules, indexes, tests, costs, backups and rollback have been verified.
+The current direct-Firestore Flutter code is a transitional implementation baseline. It should be refactored behind Laravel repositories/API endpoints before production rather than discarded wholesale. Retain working UI/features and migrate one workflow at a time, with tests for customer, owner, staff and administrator permissions.
 
-The app must remain fully functional, not static: every visible control performs a tested action and production screens use persisted API results with loading, empty, validation, permission and error states. Search supports all lawful physical-product categories and combines exact identifiers, category expansion, aliases, semantic text retrieval, attributes and visual similarity. AI outputs remain suggestions until confirmed.
+The app must remain fully functional, not static: every visible control performs a tested action, and production screens use persisted API results with loading, empty, validation, permission and error states. Search supports all lawful physical-product categories and combines exact identifiers, category expansion, aliases, semantic text retrieval, attributes and visual similarity. AI outputs remain suggestions until confirmed.
 
-The owner's 360° store tour remains app-owned. Original panoramas remain private while queued processing detects/blurs people where feasible, produces sanitized derivatives, and blocks publication on failure or uncertainty. Owners review sanitized results and may add manual masks. Do not promise perfect anonymity.
+The owner's 360° store tour remains app-owned. Original panoramas remain private while server-side processing detects/blurs people where feasible, produces sanitized derivatives and blocks publication on failure or uncertainty. Owners review sanitized results and may add manual masks. Do not promise perfect anonymity.
 
-For production, select the Firestore and Storage regions deliberately, configure IAM, token verification, billing alerts, backups/exports, restore tests, queue monitoring and controlled releases. Production readiness depends on security, testing, recovery and operations—not on choosing Firebase alone.
+For production, select Firestore and Storage regions deliberately, configure token verification, Laravel authorization, IAM, Firestore/Storage rules and indexes, billing alerts, backups/exports, restore tests, queue monitoring and controlled releases. Production readiness depends on security, testing, recovery and operations—not on choosing Firebase alone.

@@ -3,96 +3,186 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
-use App\Models\Store;
-use App\Models\User;
+use App\Services\FirestoreService;
+use App\Services\UserResolver;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Hash;
-use Illuminate\Validation\Rule;
-use Laravel\Sanctum\PersonalAccessToken;
 
+/**
+ * Authentication controller for the Firebase-backed target architecture.
+ *
+ * Firebase Authentication is the sole identity provider. Flutter signs
+ * users in with the Firebase Auth SDK and sends the Firebase ID token to
+ * Laravel as Authorization: Bearer <token>. Laravel verifies the token
+ * (via VerifyFirebaseToken middleware) and resolves the Firestore user
+ * profile.
+ *
+ * There are no Sanctum tokens, no password hashes on the server, and no
+ * competing login system. The register endpoint syncs a profile into
+ * Firestore after Firebase account creation; login is handled entirely
+ * by the Firebase client SDK.
+ */
 class AuthController extends Controller
 {
+    public function __construct(
+        private readonly FirestoreService $firestore,
+        private readonly UserResolver $userResolver,
+    ) {
+    }
+
+    /**
+     * Sync/create a Firestore user profile after Firebase account creation.
+     * Flutter creates the Firebase Auth account first, then calls this
+     * endpoint with the Firebase ID token to ensure a Firestore profile exists.
+     *
+     * The onboarding role request (customer/owner/staff) is just an intent —
+     * actual owner/staff privileges are granted only by trusted backend/admin
+     * workflows after store registration/verification.
+     */
     public function register(Request $request)
     {
         $data = $request->validate([
-            'name' => ['required', 'string', 'max:120'],
-            'email' => ['required', 'email', 'max:190', 'unique:users,email'],
-            'password' => ['required', 'string', 'min:4'],
-            'role' => ['required', Rule::in(['customer', 'owner', 'staff'])],
+            'name' => ['sometimes', 'string', 'max:120'],
+            'role' => ['sometimes', 'string', 'in:customer,owner,staff'],
         ]);
 
-        $user = User::create([
-            'name' => $data['name'],
-            'email' => $data['email'],
-            'password' => $data['password'],
-            'role' => $data['role'],
-            'status' => 'active',
-        ]);
+        $uid = $request->attributes->get('firebase_uid');
+        $token = $request->attributes->get('firebase_token', []);
 
-        return response()->json(['data' => $this->tokenPayload($user)], 201);
+        // Check if profile already exists
+        $existing = $this->firestore->get('users', $uid);
+
+        if ($existing !== null) {
+            // Profile already exists — return it
+            $user = $this->userResolver->resolve($request);
+            return response()->json(['data' => ['user' => $user]]);
+        }
+
+        // Create minimal profile with least-privileged default role (customer)
+        $profile = [
+            'numericId' => abs(crc32($uid)) & 0x7fffffff,
+            'name' => $data['name'] ?? $token['email'] ?? '',
+            'email' => $token['email'] ?? '',
+            // Role stays 'customer' regardless of request — owner/staff
+            // privileges are granted only by trusted backend workflows.
+            'role' => 'customer',
+            'ownedStoreIds' => [],
+            'memberStoreIds' => [],
+            'storeGrants' => [],
+        ];
+
+        $this->firestore->set('users', $uid, $profile);
+
+        $user = $this->userResolver->resolve($request);
+
+        return response()->json(['data' => ['user' => $user, 'stores' => []]], 201);
     }
 
+    /**
+     * With Firebase Auth, login is handled by the Firebase client SDK.
+     * This endpoint verifies the token and returns the user profile and
+     * managed stores, matching the /me endpoint format. It does NOT issue
+     * a server-side token.
+     */
     public function login(Request $request)
     {
-        $data = $request->validate([
-            'email' => ['required', 'email'],
-            'password' => ['required', 'string'],
-        ]);
+        $user = $this->userResolver->resolve($request);
 
-        $user = User::where('email', $data['email'])->first();
-        if (! $user || ! Hash::check($data['password'], $user->password)) {
-            return response()->json(['message' => 'Email or password is incorrect.'], 422);
+        // Fetch managed stores (same logic as me())
+        $ownedIds = $user['ownedStoreIds'] ?? [];
+        $memberIds = $user['memberStoreIds'] ?? [];
+        $allStoreIds = array_unique(array_merge($ownedIds, $memberIds));
+
+        $stores = [];
+        if (! empty($allStoreIds) || UserResolver::isAdmin($user)) {
+            $allStores = $this->firestore->all('stores');
+            foreach ($allStores as $store) {
+                $storeNumericId = $store['numericId'] ?? null;
+                if ($storeNumericId === null) continue;
+                if (UserResolver::isAdmin($user) || in_array($storeNumericId, $allStoreIds, true)) {
+                    $stores[] = $this->storeToApi($store);
+                }
+            }
         }
-        if ($user->status !== 'active') {
-            return response()->json(['message' => 'This account is suspended.'], 403);
-        }
-
-        $user->tokens()->delete();
-
-        return response()->json(['data' => $this->tokenPayload($user)]);
-    }
-
-    public function me(Request $request)
-    {
-        $user = $request->user();
-        $stores = $user->isAdmin()
-            ? Store::orderBy('name')->get()
-            : Store::query()
-                ->where(function ($query) use ($user) {
-                    $query->where('owner_id', $user->id)
-                        ->orWhereIn('id', $user->memberStores()->pluck('stores.id'));
-                })
-                ->get();
+        usort($stores, fn ($a, $b) => ($a['name'] ?? '') <=> ($b['name'] ?? ''));
 
         return response()->json([
             'data' => [
-                'user' => $user->toApi(),
-                'stores' => $stores->map->toApi()->values(),
+                'user' => $user,
+                'stores' => $stores,
             ],
         ]);
     }
 
+    /**
+     * Return the authenticated user's profile and managed stores.
+     * Protected by firebase.auth middleware.
+     */
+    public function me(Request $request)
+    {
+        $user = $this->userResolver->resolve($request);
+
+        // Fetch stores owned or managed by this user
+        $ownedIds = $user['ownedStoreIds'] ?? [];
+        $memberIds = $user['memberStoreIds'] ?? [];
+        $allStoreIds = array_unique(array_merge($ownedIds, $memberIds));
+
+        $stores = [];
+        if (! empty($allStoreIds) || UserResolver::isAdmin($user)) {
+            $allStores = $this->firestore->all('stores');
+            foreach ($allStores as $store) {
+                $storeNumericId = $store['numericId'] ?? null;
+                if ($storeNumericId === null) continue;
+                if (UserResolver::isAdmin($user) || in_array($storeNumericId, $allStoreIds, true)) {
+                    $stores[] = $this->storeToApi($store);
+                }
+            }
+        }
+
+        // Sort by name
+        usort($stores, fn ($a, $b) => ($a['name'] ?? '') <=> ($b['name'] ?? ''));
+
+        return response()->json([
+            'data' => [
+                'user' => $user,
+                'stores' => $stores,
+            ],
+        ]);
+    }
+
+    /**
+     * Logout is primarily a client-side Firebase Auth signOut. The server
+     * can optionally record session state. No Sanctum token to delete.
+     */
     public function logout(Request $request)
     {
-        $user = $request->user();
-        $plain = $request->bearerToken();
-        if ($plain) {
-            PersonalAccessToken::findToken($plain)?->delete();
-        }
-        $user?->tokens()->delete();
-
+        // Client signs out via Firebase Auth SDK. Server-side revocation
+        // can be added here if required (e.g., Firebase Admin revokeRefreshTokens).
         return response()->json(['data' => true]);
     }
 
-    private function tokenPayload(User $user): array
+    /**
+     * Convert a Firestore store document to the API response format.
+     */
+    private function storeToApi(array $data): array
     {
-        $minutes = (int) config('sanctum.expiration', 10080);
-        $expiresAt = now()->addMinutes($minutes);
-
         return [
-            'token' => $user->createToken('mobile', ['*'], $expiresAt)->plainTextToken,
-            'token_expires_at' => $expiresAt->toIso8601String(),
-            'user' => $user->toApi(),
+            'id' => $data['numericId'] ?? 0,
+            'owner_id' => $data['ownerId'] ?? 0,
+            'name' => $data['name'] ?? '',
+            'type' => $data['type'] ?? 'other',
+            'status' => $data['status'] ?? 'pending',
+            'lat' => $data['lat'] ?? 0.0,
+            'lng' => $data['lng'] ?? 0.0,
+            'barangay' => $data['barangay'] ?? '',
+            'city' => $data['city'] ?? '',
+            'address' => $data['address'] ?? '',
+            'landmark' => $data['landmark'] ?? '',
+            'schedule' => $data['schedule'] ?? '',
+            'is_mobile' => $data['is_mobile'] ?? false,
+            'image' => $data['image'] ?? null,
+            'verification_note' => $data['verification_note'] ?? '',
+            'location_mode' => $data['location_mode'] ?? 'fixed',
+            'location_updated_at' => $data['location_updated_at'] ?? null,
         ];
     }
 }

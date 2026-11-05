@@ -2,10 +2,21 @@
 
 namespace App\Support;
 
-use App\Models\Product;
+use App\Services\FirestoreService;
 
+/**
+ * Product recognition service — Firestore-backed.
+ *
+ * Uses keyword/alias/barcode catalog scoring against the Firestore products
+ * collection. No external vision API. AI outputs are suggestions only;
+ * owner confirms before saving.
+ */
 class RecognitionService
 {
+    public function __construct(private readonly FirestoreService $firestore)
+    {
+    }
+
     public function analyze(?string $hint, ?string $barcode, mixed $image = null): array
     {
         $extracted = ImageText::extract($hint, $barcode, $image);
@@ -48,10 +59,13 @@ class RecognitionService
         }
 
         if (! empty($barcode)) {
-            $exact = Product::with('aliases')->where('barcode', $barcode)->first();
-            if ($exact) {
+            $products = $this->firestore->query('products', [
+                ['field' => 'barcode', 'op' => '==', 'value' => $barcode],
+            ]);
+            if (! empty($products)) {
+                $product = $products[0];
                 return [[
-                    'product' => $exact->toApi(),
+                    'product' => $this->productJson($product),
                     'label' => 'Barcode match · confirm before saving',
                     'confidence' => 0.94,
                     'ocr' => $barcode,
@@ -67,17 +81,20 @@ class RecognitionService
             ]];
         }
 
-        $matches = Product::with('aliases')->get()->filter(function (Product $product) use ($hint) {
-            return SearchText::matches($hint, self::fields($product), $product->category);
-        })->sortBy(fn (Product $product) => SearchText::relevance(
-            $hint,
-            (string) $product->name,
-            $product->aliases->pluck('alias')->all(),
-            $product->category,
-            self::fields($product),
-        ))->take(3)->values();
+        $allProducts = $this->firestore->all('products');
+        $matched = array_filter($allProducts, function ($product) use ($hint) {
+            return SearchText::matches($hint, self::fields($product), $product['category'] ?? null);
+        });
 
-        if ($matches->isEmpty()) {
+        usort($matched, fn ($a, $b) => SearchText::relevance(
+            $hint, $a['name'] ?? '', $a['aliases'] ?? [], $a['category'] ?? null, self::fields($a)
+        ) <=> SearchText::relevance(
+            $hint, $b['name'] ?? '', $b['aliases'] ?? [], $b['category'] ?? null, self::fields($b)
+        ));
+
+        $matched = array_slice($matched, 0, 3);
+
+        if (empty($matched)) {
             return [[
                 'product' => null,
                 'label' => 'Uncertain match · encode manually',
@@ -86,25 +103,40 @@ class RecognitionService
             ]];
         }
 
-        return $matches->map(fn (Product $product, $i) => [
-            'product' => $product->toApi(),
+        return array_map(fn ($product, $i) => [
+            'product' => $this->productJson($product),
             'label' => 'Suggested from catalog · owner confirmation required',
             'confidence' => max(0.4, 0.86 - ($i * 0.15)),
-            'ocr' => $product->brand ?: $hint,
+            'ocr' => $product['brand'] ?: $hint,
             'unknown_fields' => ['price', 'stock', 'compatibility'],
-        ])->all();
+        ], array_values($matched), array_keys($matched));
     }
 
-    public static function fields(Product $product): array
+    public static function fields(array $product): array
     {
         return [
-            $product->name,
-            $product->brand,
-            $product->category,
-            $product->package_size,
-            $product->barcode,
-            ...$product->aliases->pluck('alias')->all(),
-            ...array_values($product->specs ?? []),
+            $product['name'] ?? '',
+            $product['brand'] ?? '',
+            $product['category'] ?? '',
+            $product['package_size'] ?? '',
+            $product['barcode'] ?? '',
+            ...($product['aliases'] ?? []),
+            ...array_values($product['attributes'] ?? []),
+        ];
+    }
+
+    private function productJson(array $data): array
+    {
+        return [
+            'id' => $data['numericId'] ?? 0,
+            'name' => $data['name'] ?? '',
+            'category' => $data['category'] ?? '',
+            'brand' => $data['brand'] ?? '',
+            'package_size' => $data['package_size'] ?? '',
+            'aliases' => $data['aliases'] ?? [],
+            'barcode' => $data['barcode'] ?? null,
+            'image' => $data['image'] ?? '',
+            'attributes' => $data['attributes'] ?? [],
         ];
     }
 }

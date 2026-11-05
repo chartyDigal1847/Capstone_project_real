@@ -1,37 +1,83 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
+
     function signedIn() {
       return request.auth != null;
     }
 
-    function userDoc() {
-      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data;
+    // ===============================================================
+    // Target architecture: UID-scoped quarantine upload paths only.
+    // ===============================================================
+    //
+    // Flutter may upload files ONLY to private, UID-scoped quarantine
+    // paths after Laravel authorizes an upload intent. The path pattern
+    // is quarantine/{uid}/... and the authenticated UID must match.
+    //
+    // Originals (panoramas, product photos, store images) are uploaded to
+    // quarantine and remain private. Laravel verifies, processes, and
+    // controls publication of sanitized derivatives.
+    //
+    // Clients cannot:
+    //   - Read raw originals (private staging)
+    //   - Write to published/sanitized paths (Laravel-controlled)
+    //   - Upload without authentication
+    //   - Upload to a path owned by another user
+
+    // ── Quarantine uploads: authenticated UID must match path ─────────
+    // Products: quarantine/{uid}/products/{uploadId}/original.jpg
+    match /quarantine/{uid}/products/{allPaths=**} {
+      allow read: if false;  // originals are private — Laravel-only access
+      allow write: if signedIn() &&
+        request.auth.uid == uid &&
+        request.resource.contentType.matches('image/(jpeg|jpg|png|webp)') &&
+        request.resource.size < 10 * 1024 * 1024;  // 10 MB max
     }
 
-    function isAdmin() {
-      return signedIn() && userDoc().role == 'admin';
+    // Tours (panoramas): quarantine/{uid}/tours/{uploadId}/original.jpg
+    match /quarantine/{uid}/tours/{allPaths=**} {
+      allow read: if false;  // originals are private — Laravel-only access
+      allow write: if signedIn() &&
+        request.auth.uid == uid &&
+        request.resource.contentType.matches('image/(jpeg|jpg|png)') &&
+        request.resource.size < 50 * 1024 * 1024;  // 50 MB max panorama
     }
 
-    function isStoreOwner(storeId) {
-      return signedIn() &&
-        firestore.get(/databases/(default)/documents/stores/$(storeId)).data.ownerUid == request.auth.uid;
+    // Store images: quarantine/{uid}/stores/{uploadId}/original.jpg
+    match /quarantine/{uid}/stores/{allPaths=**} {
+      allow read: if false;
+      allow write: if signedIn() &&
+        request.auth.uid == uid &&
+        request.resource.contentType.matches('image/(jpeg|jpg|png|webp)') &&
+        request.resource.size < 10 * 1024 * 1024;
     }
 
-    match /products/{uid}/{allPaths=**} {
-      allow read: if signedIn();
-      allow write: if signedIn() && request.auth.uid == uid && request.resource.size < 8 * 1024 * 1024;
+    // ── Published/sanitized derivatives: read-only for clients ────────
+    // Only Laravel (via IAM/signed URLs) writes to these paths.
+    // Approved product images
+    match /products/{allPaths=**} {
+      allow read: if true;  // public approved derivatives
+      allow write: if false;  // Laravel-controlled publication only
     }
 
-    match /tours/originals/{storeId}/{allPaths=**} {
-      allow read, write: if isStoreOwner(storeId) || isAdmin();
+    // Published store images
+    match /stores/{allPaths=**} {
+      allow read: if true;
+      allow write: if false;
     }
 
-    match /tours/public/{storeId}/{allPaths=**} {
-      allow read: if signedIn();
-      allow write: if isStoreOwner(storeId) || isAdmin();
+    // Published 360° tour panorama tiles/derivatives
+    match /tours/public/{allPaths=**} {
+      allow read: if true;  // sanitized derivatives are public
+      allow write: if false;  // Laravel-controlled publication only
     }
 
+    // Private tour originals (retention period)
+    match /tours/originals/{allPaths=**} {
+      allow read, write: if false;  // Laravel/IAM-only access
+    }
+
+    // ── Deny everything else ──────────────────────────────────────────
     match /{allPaths=**} {
       allow read, write: if false;
     }

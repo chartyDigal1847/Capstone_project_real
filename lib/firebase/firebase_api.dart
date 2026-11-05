@@ -1,3 +1,19 @@
+// firebase_api.dart — DEPRECATED direct Firestore access.
+//
+// This class was the transitional direct-Firestore data layer. It is no
+// longer used by LocalSpotGateway (which now routes ALL business reads and
+// writes through the Laravel REST API). It is retained only so that any
+// legacy code paths or tests that still reference it do not break during
+// the transition.
+//
+// In the target architecture:
+//   - Firebase Authentication remains directly integrated (allowed exception).
+//   - Firebase Storage SDK remains directly integrated (allowed exception).
+//   - cloud_firestore is NOT used for business data — Laravel owns Firestore.
+//
+// This file can be removed once all references are confirmed gone, and the
+// `cloud_firestore` dependency removed from pubspec.yaml.
+
 import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -89,13 +105,24 @@ class LocalSpotFirebaseApi {
   }
 
   Future<Map<String, dynamic>> catalog() async {
-    final stores = await _collectionMaps('stores');
-    final products = await _collectionMaps('products');
-    final listings = await _collectionMaps('listings');
-    final promotions = await _collectionMaps('promotions');
-    final tours = await _collectionMaps('tours');
+    // Fetch all collections in parallel instead of sequentially.
+    // Previously 6 sequential round-trips; now a single parallel wait.
+    final results = await Future.wait([
+      _collectionMaps('stores'),
+      _collectionMaps('products'),
+      _collectionMaps('listings'),
+      _collectionMaps('promotions'),
+      _collectionMaps('tours'),
+      _collectionMaps('vendorSessions'),
+    ]);
+
+    final stores = results[0];
+    final products = results[1];
+    final listings = results[2];
+    final promotions = results[3];
+    final tours = results[4];
     final sessions = {
-      for (final row in await _collectionMaps('vendorSessions')) row['storeId']: row,
+      for (final row in results[5]) row['storeId']: row,
     };
     return {
       'stores': [
@@ -181,7 +208,7 @@ class LocalSpotFirebaseApi {
     return {
       'user': await _userPayload(user),
       'stores': [
-        for (final row in (await catalog())['stores'] as List)
+        for (final row in (await _cachedCatalog())['stores'] as List)
           if (row is Map && (row['owner_id'] == _userNumericId(user.uid))) row,
       ],
     };
@@ -240,7 +267,7 @@ class LocalSpotFirebaseApi {
       final lat = double.tryParse(query?['lat'] ?? '') ?? 0;
       final lng = double.tryParse(query?['lng'] ?? '') ?? 0;
       final radiusKm = double.tryParse(query?['radius_km'] ?? '5') ?? 5;
-      final allStores = (await catalog())['stores'] as List? ?? [];
+      final allStores = (await _cachedCatalog())['stores'] as List? ?? [];
       if (lat == 0 && lng == 0) return allStores; // no coords, return all
       return [
         for (final s in allStores)
@@ -284,7 +311,7 @@ class LocalSpotFirebaseApi {
       final searchLng = double.tryParse(query?['lng'] ?? '') ?? 0;
       final radiusKm = double.tryParse(query?['radius_km'] ?? '10') ?? 10;
 
-      final catalogData = await catalog();
+      final catalogData = await _cachedCatalog();
       final allProducts = catalogData['products'] as List? ?? [];
       final allListings = catalogData['listings'] as List? ?? [];
       final allStores = catalogData['stores'] as List? ?? [];
@@ -819,7 +846,9 @@ class LocalSpotFirebaseApi {
     throw ApiException('Unsupported Firebase POST $path');
   }
 
-  // Catalog cache for recognition — refreshed at most once per minute.
+  // Catalog cache — refreshed at most once every 5 minutes.
+  // This means repeated searches and recognition calls reuse the same
+  // in-memory snapshot instead of going back to Firestore each time.
   Map<String, dynamic>? _catalogCache;
   DateTime? _catalogCachedAt;
 
@@ -827,7 +856,7 @@ class LocalSpotFirebaseApi {
     final now = DateTime.now();
     if (_catalogCache != null &&
         _catalogCachedAt != null &&
-        now.difference(_catalogCachedAt!) < const Duration(minutes: 2)) {
+        now.difference(_catalogCachedAt!) < const Duration(minutes: 5)) {
       return _catalogCache!;
     }
     _catalogCache = await catalog();

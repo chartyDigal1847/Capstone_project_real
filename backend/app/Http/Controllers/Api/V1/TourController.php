@@ -3,202 +3,335 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
-use App\Jobs\ProcessTourNodeJob;
-use App\Models\Product;
-use App\Models\Store;
-use App\Models\StoreTour;
-use App\Models\TourConnection;
-use App\Models\TourHotspot;
-use App\Models\TourNode;
-use App\Support\Audit;
-use App\Support\TourPrivacy;
+use App\Services\FirestoreService;
+use App\Services\UserResolver;
+use App\Support\CatalogCache;
 use Illuminate\Http\Request;
 
+/**
+ * Tour controller — Firestore-backed.
+ *
+ * Tours are stored as Firestore documents with an embedded `nodes` array.
+ * Privacy processing status is tracked per node. Publication is blocked
+ * until every node has a sanitized derivative and owner review.
+ *
+ * Actual person/face detection and Cloud Storage upload are pending
+ * (plan Wave 3). The publication gate logic is implemented here.
+ */
 class TourController extends Controller
 {
-    public function store(Request $request, Store $store)
+    public function __construct(
+        private readonly FirestoreService $firestore,
+        private readonly UserResolver $userResolver,
+    ) {
+    }
+
+    public function store(Request $request, int $storeId)
     {
-        $this->authorize('create', [StoreTour::class, $store]);
+        $user = $this->userResolver->resolve($request);
+        $store = $this->firestore->findByNumericId('stores', $storeId);
+        abort_if($store === null, 404, 'Store not found.');
+        abort_unless($this->userResolver->canManageStore($user, $storeId), 403, 'Not authorized.');
+
         $data = $request->validate(['title' => ['required', 'string', 'max:160']]);
-        $tour = StoreTour::create([
-            'store_id' => $store->id,
+
+        $id = abs(crc32(uniqid('tour', true))) & 0x7fffffff;
+        $this->firestore->create('tours', [
+            'numericId' => $id,
+            'storeId' => $storeId,
             'title' => $data['title'],
             'status' => 'draft',
+            'nodes' => [],
+            'ownerUid' => $request->attributes->get('firebase_uid'),
         ]);
 
-        return response()->json(['data' => $tour->toApi()], 201);
+        return response()->json(['data' => ['id' => $id, 'store_id' => $storeId, 'title' => $data['title'], 'status' => 'draft', 'nodes' => []]], 201);
     }
 
-    public function addNode(Request $request, StoreTour $storeTour)
+    public function addNode(Request $request, int $tourId)
     {
-        $this->authorize('update', $storeTour);
-        $data = $request->validate([
-            'title' => ['required', 'string', 'max:120'],
-            'image' => ['required', 'string'],
-        ]);
-        $node = TourNode::create([
-            'store_tour_id' => $storeTour->id,
+        $user = $this->userResolver->resolve($request);
+        $tour = $this->firestore->findByNumericId('tours', $tourId);
+        abort_if($tour === null, 404, 'Tour not found.');
+        abort_unless($this->userResolver->canManageStore($user, $tour['storeId'] ?? 0), 403, 'Not authorized.');
+
+        $data = $request->validate(['title' => ['required', 'string', 'max:120']]);
+
+        $nodes = $tour['nodes'] ?? [];
+        $nodeId = count($nodes) + 1;
+        $nodes[] = [
+            'id' => $nodeId,
             'title' => $data['title'],
             'image' => '',
-            'original_image' => null,
-            'sort_order' => $storeTour->nodes()->count() + 1,
+            'connections' => empty($nodes) ? [] : [count($nodes)],
             'privacy_status' => 'processing',
             'owner_reviewed' => false,
-            'original_expires_at' => now()->addDays(TourPrivacy::retentionDays()),
-        ]);
-        $node->update(['original_image' => TourPrivacy::stage($data['image'], $node->id)]);
-        $previous = TourNode::query()
-            ->where('store_tour_id', $storeTour->id)
-            ->where('id', '<', $node->id)
-            ->orderByDesc('id')
-            ->first();
-        if ($previous) {
-            TourConnection::create(['from_node_id' => $previous->id, 'to_node_id' => $node->id]);
-            TourConnection::create(['from_node_id' => $node->id, 'to_node_id' => $previous->id]);
-        }
-        ProcessTourNodeJob::dispatch($node->id);
+            'manual_blur' => false,
+            'original_retained' => true,
+            'blur_regions' => [],
+        ];
 
-        return response()->json(['data' => $storeTour->fresh('nodes.outgoing')->toApi()]);
+        // Link previous node back to this one
+        if (count($nodes) >= 2) {
+            $prev = $nodes[count($nodes) - 2];
+            $prev['connections'] = array_unique([...($prev['connections'] ?? []), $nodeId]);
+            $nodes[count($nodes) - 2] = $prev;
+        }
+
+        $this->firestore->updateByNumericId('tours', $tourId, ['nodes' => $nodes]);
+        $tour['nodes'] = $nodes;
+
+        return response()->json(['data' => $this->tourJson($tour)]);
     }
 
-    public function connect(Request $request, StoreTour $storeTour)
+    public function connect(Request $request, int $tourId)
     {
-        $this->authorize('update', $storeTour);
+        $user = $this->userResolver->resolve($request);
+        $tour = $this->firestore->findByNumericId('tours', $tourId);
+        abort_if($tour === null, 404, 'Tour not found.');
+        abort_unless($this->userResolver->canManageStore($user, $tour['storeId'] ?? 0), 403, 'Not authorized.');
+
         $data = $request->validate([
             'from_node_id' => ['required', 'integer'],
             'to_node_id' => ['required', 'integer', 'different:from_node_id'],
         ]);
-        $from = TourNode::where('store_tour_id', $storeTour->id)->findOrFail($data['from_node_id']);
-        $to = TourNode::where('store_tour_id', $storeTour->id)->findOrFail($data['to_node_id']);
-        TourConnection::firstOrCreate(['from_node_id' => $from->id, 'to_node_id' => $to->id]);
-        TourConnection::firstOrCreate(['from_node_id' => $to->id, 'to_node_id' => $from->id]);
 
-        return response()->json(['data' => $storeTour->fresh('nodes.outgoing')->toApi()]);
+        $nodes = $tour['nodes'] ?? [];
+        foreach ($nodes as &$node) {
+            if (($node['id'] ?? 0) === (int) $data['from_node_id']) {
+                $node['connections'] = array_unique([...($node['connections'] ?? []), (int) $data['to_node_id']]);
+            }
+            if (($node['id'] ?? 0) === (int) $data['to_node_id']) {
+                $node['connections'] = array_unique([...($node['connections'] ?? []), (int) $data['from_node_id']]);
+            }
+        }
+        unset($node);
+
+        $this->firestore->updateByNumericId('tours', $tourId, ['nodes' => $nodes]);
+        $tour['nodes'] = $nodes;
+
+        return response()->json(['data' => $this->tourJson($tour)]);
     }
 
-    public function publish(Request $request, StoreTour $storeTour)
+    public function publish(Request $request, int $tourId)
     {
-        $this->authorize('update', $storeTour);
-        abort_if($storeTour->nodes()->count() < 2, 422, 'Connect at least two viewpoints before publishing.');
-        abort_if(
-            $storeTour->nodes()->where(function ($query) {
-                $query->where('privacy_status', '!=', 'ready')
-                    ->orWhere('owner_reviewed', false)
-                    ->orWhere('image', '');
-            })->exists(),
-            422,
-            'Every viewpoint needs privacy processing and owner review before publishing.'
-        );
-        abort_if(
-            $storeTour->nodes()->get()->contains(function (TourNode $node) {
-                return $node->image === $node->original_image
-                    || str_contains((string) $node->image, 'tours/originals')
-                    || str_contains((string) $node->image, '#');
-            }),
-            422,
-            'Public viewpoints may only use sanitized derivatives, never originals.'
-        );
-        $storeTour->update(['status' => 'published']);
-        Audit::record($request->user(), 'tour.publish', StoreTour::class, $storeTour->id);
+        $user = $this->userResolver->resolve($request);
+        $tour = $this->firestore->findByNumericId('tours', $tourId);
+        abort_if($tour === null, 404, 'Tour not found.');
+        abort_unless($this->userResolver->canManageStore($user, $tour['storeId'] ?? 0), 403, 'Not authorized.');
 
-        return response()->json(['data' => $storeTour->fresh('nodes.outgoing')->toApi()]);
+        $nodes = $tour['nodes'] ?? [];
+        abort_if(count($nodes) < 2, 422, 'Connect at least two viewpoints before publishing.');
+
+        foreach ($nodes as $node) {
+            $status = $node['privacy_status'] ?? 'processing';
+            $reviewed = $node['owner_reviewed'] ?? false;
+            $image = $node['image'] ?? '';
+            abort_if($status !== 'ready', 422, 'Every viewpoint needs privacy processing before publishing.');
+            abort_if(!$reviewed, 422, 'Every viewpoint needs owner review before publishing.');
+            abort_if($image === '', 422, 'Every viewpoint needs a sanitized derivative before publishing.');
+        }
+
+        $this->firestore->updateByNumericId('tours', $tourId, ['status' => 'published']);
+        $tour['status'] = 'published';
+
+        // Invalidate catalog and store caches since published tours appear in catalog.
+        CatalogCache::invalidateTour($tour['storeId'] ?? 0);
+
+        return response()->json(['data' => $this->tourJson($tour)]);
     }
 
-    public function reviewNode(StoreTour $storeTour, TourNode $tourNode)
+    public function reviewNode(Request $request, int $tourId, int $nodeId)
     {
-        $this->authorize('update', $storeTour);
-        abort_unless($tourNode->store_tour_id === $storeTour->id, 404);
-        abort_if($tourNode->privacy_status !== 'ready', 422, 'Privacy processing must finish before review.');
-        abort_if($tourNode->image === '', 422, 'A sanitized public image is required before review.');
-        $tourNode->update(['owner_reviewed' => true]);
+        $user = $this->userResolver->resolve($request);
+        $tour = $this->firestore->findByNumericId('tours', $tourId);
+        abort_if($tour === null, 404, 'Tour not found.');
+        abort_unless($this->userResolver->canManageStore($user, $tour['storeId'] ?? 0), 403, 'Not authorized.');
 
-        return response()->json(['data' => $storeTour->fresh('nodes.outgoing')->toApi()]);
+        $nodes = $tour['nodes'] ?? [];
+        $found = false;
+        foreach ($nodes as &$node) {
+            if (($node['id'] ?? 0) === $nodeId) {
+                abort_if(($node['privacy_status'] ?? '') !== 'ready', 422, 'Privacy processing must finish before review.');
+                abort_if(($node['image'] ?? '') === '', 422, 'A sanitized image is required before review.');
+                $node['owner_reviewed'] = true;
+                $found = true;
+                break;
+            }
+        }
+        unset($node);
+        abort_if(!$found, 404, 'Node not found.');
+
+        $this->firestore->updateByNumericId('tours', $tourId, ['nodes' => $nodes]);
+        $tour['nodes'] = $nodes;
+
+        return response()->json(['data' => $this->tourJson($tour)]);
     }
 
-    public function addManualBlur(Request $request, StoreTour $storeTour, TourNode $tourNode)
+    public function addManualBlur(Request $request, int $tourId, int $nodeId)
     {
-        $this->authorize('update', $storeTour);
-        abort_unless($tourNode->store_tour_id === $storeTour->id, 404);
-        abort_if(! filled($tourNode->original_image) && $tourNode->image === '', 422, 'No staged panorama to blur.');
+        $user = $this->userResolver->resolve($request);
+        $tour = $this->firestore->findByNumericId('tours', $tourId);
+        abort_if($tour === null, 404, 'Tour not found.');
+        abort_unless($this->userResolver->canManageStore($user, $tour['storeId'] ?? 0), 403, 'Not authorized.');
+
         $data = $request->validate([
             'regions' => ['nullable', 'array'],
-            'regions.*.x' => ['required_with:regions', 'numeric', 'between:0,1'],
-            'regions.*.y' => ['required_with:regions', 'numeric', 'between:0,1'],
-            'regions.*.w' => ['required_with:regions', 'numeric', 'between:0.01,1'],
-            'regions.*.h' => ['required_with:regions', 'numeric', 'between:0.01,1'],
         ]);
+
         $regions = $data['regions'] ?? [['x' => 0.35, 'y' => 0.35, 'w' => 0.3, 'h' => 0.3]];
-        $existing = $tourNode->blur_regions ?? [];
-        $tourNode->update([
-            'manual_blur' => true,
-            'privacy_status' => 'ready',
-            'image' => $tourNode->image !== '' ? $tourNode->image : TourPrivacy::writeDerivative($tourNode),
-            'blur_regions' => [...$existing, ...$regions],
-        ]);
 
-        return response()->json(['data' => $storeTour->fresh('nodes.outgoing')->toApi()]);
+        $nodes = $tour['nodes'] ?? [];
+        $found = false;
+        foreach ($nodes as &$node) {
+            if (($node['id'] ?? 0) === $nodeId) {
+                $node['manual_blur'] = true;
+                $node['privacy_status'] = 'ready';
+                $node['blur_regions'] = array_merge($node['blur_regions'] ?? [], $regions);
+                $found = true;
+                break;
+            }
+        }
+        unset($node);
+        abort_if(!$found, 404, 'Node not found.');
+
+        $this->firestore->updateByNumericId('tours', $tourId, ['nodes' => $nodes]);
+        $tour['nodes'] = $nodes;
+
+        return response()->json(['data' => $this->tourJson($tour)]);
     }
 
-    public function processNode(Request $request, StoreTour $storeTour, TourNode $tourNode)
+    public function processNode(Request $request, int $tourId, int $nodeId)
     {
-        $this->authorize('update', $storeTour);
-        abort_unless($tourNode->store_tour_id === $storeTour->id, 404);
-        ProcessTourNodeJob::dispatch($tourNode->id, $request->boolean('fail'));
+        $user = $this->userResolver->resolve($request);
+        $tour = $this->firestore->findByNumericId('tours', $tourId);
+        abort_if($tour === null, 404, 'Tour not found.');
+        abort_unless($this->userResolver->canManageStore($user, $tour['storeId'] ?? 0), 403, 'Not authorized.');
 
-        return response()->json(['data' => $storeTour->fresh('nodes.outgoing')->toApi()]);
+        $fail = $request->boolean('fail');
+
+        $nodes = $tour['nodes'] ?? [];
+        foreach ($nodes as &$node) {
+            if (($node['id'] ?? 0) === $nodeId) {
+                $node['privacy_status'] = $fail ? 'failed' : 'ready';
+                $node['image'] = $fail ? '' : "/tours/public/{$tour['storeId']}/$nodeId.jpg";
+                $node['owner_reviewed'] = false;
+                break;
+            }
+        }
+        unset($node);
+
+        $this->firestore->updateByNumericId('tours', $tourId, ['nodes' => $nodes]);
+        $tour['nodes'] = $nodes;
+
+        return response()->json(['data' => $this->tourJson($tour)]);
     }
 
-    public function addManualBlurForMedia(Request $request, TourNode $tourNode)
+    public function addHotspot(Request $request, int $tourId, int $nodeId)
     {
-        return $this->addManualBlur($request, $tourNode->tour, $tourNode);
-    }
+        $user = $this->userResolver->resolve($request);
+        $tour = $this->firestore->findByNumericId('tours', $tourId);
+        abort_if($tour === null, 404, 'Tour not found.');
+        abort_unless($this->userResolver->canManageStore($user, $tour['storeId'] ?? 0), 403, 'Not authorized.');
 
-    public function addHotspot(Request $request, StoreTour $storeTour, TourNode $tourNode)
-    {
-        $this->authorize('update', $storeTour);
-        abort_unless($tourNode->store_tour_id === $storeTour->id, 404);
         $data = $request->validate([
-            'product_id' => ['required', 'integer', 'exists:products,id'],
+            'product_id' => ['required', 'integer'],
             'x' => ['required', 'numeric', 'between:0,1'],
             'y' => ['required', 'numeric', 'between:0,1'],
             'label' => ['nullable', 'string', 'max:120'],
         ]);
-        $product = Product::findOrFail($data['product_id']);
-        $hotspot = TourHotspot::create([
-            'tour_node_id' => $tourNode->id,
-            'product_id' => $product->id,
-            'x' => $data['x'],
-            'y' => $data['y'],
-            'label' => $data['label'] ?? $product->name,
-        ]);
-        Audit::record($request->user(), 'tour.hotspot.add', TourHotspot::class, $hotspot->id, [
-            'node_id' => $tourNode->id,
-            'product_id' => $product->id,
-        ]);
 
-        return response()->json(['data' => $storeTour->fresh()->toApi()], 201);
+        // Store hotspot in the node
+        $nodes = $tour['nodes'] ?? [];
+        foreach ($nodes as &$node) {
+            if (($node['id'] ?? 0) === $nodeId) {
+                $hotspots = $node['hotspots'] ?? [];
+                $hotspots[] = [
+                    'product_id' => (int) $data['product_id'],
+                    'x' => (float) $data['x'],
+                    'y' => (float) $data['y'],
+                    'label' => $data['label'] ?? '',
+                ];
+                $node['hotspots'] = $hotspots;
+                break;
+            }
+        }
+        unset($node);
+
+        $this->firestore->updateByNumericId('tours', $tourId, ['nodes' => $nodes]);
+        $tour['nodes'] = $nodes;
+
+        return response()->json(['data' => $this->tourJson($tour)], 201);
     }
 
-    public function deleteHotspot(StoreTour $storeTour, TourNode $tourNode, TourHotspot $tourHotspot)
+    public function deleteHotspot(Request $request, int $tourId, int $nodeId, int $hotspotId)
     {
-        $this->authorize('update', $storeTour);
-        abort_unless($tourNode->store_tour_id === $storeTour->id, 404);
-        abort_unless($tourHotspot->tour_node_id === $tourNode->id, 404);
-        $tourHotspot->delete();
+        $user = $this->userResolver->resolve($request);
+        $tour = $this->firestore->findByNumericId('tours', $tourId);
+        abort_if($tour === null, 404, 'Tour not found.');
+        abort_unless($this->userResolver->canManageStore($user, $tour['storeId'] ?? 0), 403, 'Not authorized.');
 
-        return response()->json(['data' => $storeTour->fresh()->toApi()]);
+        $nodes = $tour['nodes'] ?? [];
+        foreach ($nodes as &$node) {
+            if (($node['id'] ?? 0) === $nodeId) {
+                $hotspots = $node['hotspots'] ?? [];
+                if (isset($hotspots[$hotspotId])) {
+                    unset($hotspots[$hotspotId]);
+                    $node['hotspots'] = array_values($hotspots);
+                }
+                break;
+            }
+        }
+        unset($node);
+
+        $this->firestore->updateByNumericId('tours', $tourId, ['nodes' => $nodes]);
+        $tour['nodes'] = $nodes;
+
+        return response()->json(['data' => $this->tourJson($tour)]);
     }
 
-    public function mediaStatus(TourNode $tourNode)
+    public function mediaStatus(int $nodeId)
     {
-        $this->authorize('update', $tourNode->tour);
+        // Look up the tour that contains this node
+        $tours = $this->firestore->all('tours');
+        foreach ($tours as $tour) {
+            foreach ($tour['nodes'] ?? [] as $node) {
+                if (($node['id'] ?? 0) === $nodeId) {
+                    return response()->json(['data' => [
+                        'id' => $node['id'],
+                        'privacy_status' => $node['privacy_status'] ?? 'processing',
+                        'owner_reviewed' => $node['owner_reviewed'] ?? false,
+                        'has_public_derivative' => filled($node['image'] ?? ''),
+                        'original_retained' => $node['original_retained'] ?? false,
+                    ]]);
+                }
+            }
+        }
+        abort(404, 'Node not found.');
+    }
 
-        return response()->json([
-            'data' => [
-                ...$tourNode->toApi(),
-                'has_public_derivative' => filled($tourNode->image),
-                'original_retained' => filled($tourNode->original_image),
-            ],
-        ]);
+    public function addManualBlurForMedia(Request $request, int $nodeId)
+    {
+        // Find the tour containing this node, then delegate
+        $tours = $this->firestore->all('tours');
+        foreach ($tours as $tour) {
+            foreach ($tour['nodes'] ?? [] as $node) {
+                if (($node['id'] ?? 0) === $nodeId) {
+                    return $this->addManualBlur($request, $tour['numericId'], $nodeId);
+                }
+            }
+        }
+        abort(404, 'Node not found.');
+    }
+
+    private function tourJson(array $data): array
+    {
+        return [
+            'id' => $data['numericId'] ?? 0,
+            'store_id' => $data['storeId'] ?? 0,
+            'title' => $data['title'] ?? '',
+            'status' => $data['status'] ?? 'draft',
+            'nodes' => $data['nodes'] ?? [],
+        ];
     }
 }

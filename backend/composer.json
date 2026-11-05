@@ -8,8 +8,10 @@
     "require": {
         "php": "^8.2",
         "laravel/framework": "^12.0",
-        "laravel/sanctum": "^4.0",
-        "laravel/tinker": "^2.10.1"
+        "laravel/tinker": "^2.10.1",
+        "google/cloud-firestore": "^1.44",
+        "google/cloud-storage": "^1.43",
+        "firebase/php-jwt": "^6.10"
     },
     "require-dev": {
         "fakerphp/faker": "^1.23",

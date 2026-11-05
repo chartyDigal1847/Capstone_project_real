@@ -12,7 +12,13 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
-        //
+        // Register the Firebase ID-token verification middleware as an alias.
+        // Replaces auth:sanctum for the Firebase-backed target architecture.
+        // Laravel verifies the RS256 JWT signature and claims; the Firebase UID
+        // is then available via $request->attributes->get('firebase_uid').
+        $middleware->alias([
+            'firebase.auth' => \App\Http\Middleware\VerifyFirebaseToken::class,
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(

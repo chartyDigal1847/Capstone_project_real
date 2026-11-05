@@ -32,6 +32,8 @@
         <env name="PULSE_ENABLED" value="false"/>
         <env name="TELESCOPE_ENABLED" value="false"/>
         <env name="NIGHTWATCH_ENABLED" value="false"/>
-        <env name="SANCTUM_TOKEN_EXPIRATION_MINUTES" value="10080"/>
+        <!-- Firebase test environment: emulator bypass enables test-token-* auth -->
+        <env name="FIREBASE_PROJECT_ID" value="capstone-project-561a2"/>
+        <env name="FIREBASE_AUTH_EMULATOR_HOST" value="test"/>
     </php>
 </phpunit>

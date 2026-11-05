@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import 'firebase/bootstrap.dart';
 import 'models.dart';
 import 'screens/auth_screens.dart';
 import 'screens/customer_screens.dart';
@@ -11,7 +12,15 @@ import 'state.dart';
 import 'theme.dart';
 import 'widgets.dart';
 
-void main() => runApp(const LocalSpotRoot());
+/// Firebase MUST be initialized before runApp() so that FirebaseAuth,
+/// FirebaseStorage, and FirebaseFirestore instances are available when
+/// the widget tree is first built. Any access to these instances before
+/// initializeApp() causes the [core/no-app] crash.
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await initLocalSpotFirebase();
+  runApp(const LocalSpotRoot());
+}
 
 class LocalSpotRoot extends StatefulWidget {
   const LocalSpotRoot({super.key});

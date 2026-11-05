@@ -3,18 +3,35 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
-use App\Models\Store;
-use App\Models\User;
-use App\Support\Audit;
+use App\Services\FirestoreService;
+use App\Services\UserResolver;
+use App\Support\CatalogCache;
+use App\Support\Geohash;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 
+/**
+ * Store controller — Firestore-backed.
+ * Authorization enforced server-side via UserResolver (not client-supplied roles).
+ */
 class StoreController extends Controller
 {
+    public function __construct(
+        private readonly FirestoreService $firestore,
+        private readonly UserResolver $userResolver,
+    ) {
+    }
+
     public function store(Request $request)
     {
-        $this->authorize('create', Store::class);
-        $user = $request->user();
+        $user = $this->userResolver->resolve($request);
+
+        // Any authenticated user may submit a store registration request.
+        // The store is created with 'pending' status; admin approval
+        // grants owner privileges. Per the plan: "Selecting an owner option
+        // in Flutter is only an onboarding request; it does not grant owner
+        // privileges." Store-owner privileges are granted only after the
+        // store registration/verification workflow.
 
         $data = $request->validate([
             'name' => ['required', 'string', 'max:160'],
@@ -30,19 +47,50 @@ class StoreController extends Controller
             'verification_note' => ['nullable', 'string'],
         ]);
 
-        $store = Store::create([
-            ...$data,
-            'owner_id' => $user->id,
-            'status' => 'pending',
-            'is_mobile' => (bool) ($data['is_mobile'] ?? false),
-        ]);
+        $numericId = abs(crc32(uniqid('store', true))) & 0x7fffffff;
+        $uid = $request->attributes->get('firebase_uid');
 
-        return response()->json(['data' => $store->toApi()], 201);
+        $storeData = [
+            'numericId' => $numericId,
+            'ownerId' => $user['numericId'],
+            'ownerUid' => $uid,
+            'name' => $data['name'],
+            'type' => $data['type'],
+            'status' => 'pending',
+            'lat' => (float) $data['lat'],
+            'lng' => (float) $data['lng'],
+            'barangay' => $data['barangay'] ?? '',
+            'city' => $data['city'],
+            'address' => $data['address'] ?? '',
+            'landmark' => $data['landmark'],
+            'schedule' => $data['schedule'] ?? '',
+            'is_mobile' => (bool) ($data['is_mobile'] ?? false),
+            'image' => null,
+            'verification_note' => $data['verification_note'] ?? '',
+            'location_mode' => ($data['is_mobile'] ?? false) ? 'regular' : 'fixed',
+            'location_updated_at' => now()->toIso8601String(),
+            'geohash' => Geohash::encode((float) $data['lat'], (float) $data['lng']),
+        ];
+
+        $this->firestore->create('stores', $storeData);
+
+        // Invalidate catalog cache so the new store appears on next bootstrap.
+        CatalogCache::invalidateAll();
+
+        // Note: the user's role is NOT upgraded here. Per the plan, store-owner
+        // privileges are granted only after admin approval. The admin
+        // approval workflow in setStatus() upgrades the role when the store
+        // is approved.
+
+        return response()->json(['data' => $this->storeJson($storeData)], 201);
     }
 
-    public function update(Request $request, Store $store)
+    public function update(Request $request, int $storeId)
     {
-        $this->authorize('update', $store);
+        $user = $this->userResolver->resolve($request);
+        $store = $this->firestore->findByNumericId('stores', $storeId);
+        abort_if($store === null, 404, 'Store not found.');
+        abort_unless($this->userResolver->canManageStore($user, $storeId), 403, 'Not authorized to manage this store.');
 
         $data = $request->validate([
             'name' => ['sometimes', 'string', 'max:160'],
@@ -52,88 +100,192 @@ class StoreController extends Controller
             'schedule' => ['sometimes', 'string'],
             'is_mobile' => ['sometimes', 'boolean'],
         ]);
-        $store->update($data);
 
-        if (isset($data['lat'], $data['lng'])) {
-            $store->locations()->create([
-                'kind' => $store->is_mobile ? 'current' : 'regular',
-                'lat' => $data['lat'],
-                'lng' => $data['lng'],
-                'note' => 'Owner-updated public pin',
-                'updated_public_at' => now(),
-            ]);
+        $updateData = array_merge(
+            array_filter($data, fn ($v, $k) => in_array($k, ['name', 'lat', 'lng', 'landmark', 'schedule', 'is_mobile'], true), ARRAY_FILTER_USE_BOTH),
+            ['location_updated_at' => now()->toIso8601String()]
+        );
+
+        // Recompute geohash if coordinates changed
+        if (isset($data['lat']) && isset($data['lng'])) {
+            $updateData['geohash'] = Geohash::encode((float) $data['lat'], (float) $data['lng']);
         }
 
-        return response()->json(['data' => $store->fresh()->toApi()]);
+        $this->firestore->updateByNumericId('stores', $storeId, $updateData);
+
+        // Invalidate store detail, nearby, and catalog caches.
+        CatalogCache::invalidateStore($storeId);
+
+        $updated = $this->firestore->findByNumericId('stores', $storeId);
+        return response()->json(['data' => $this->storeJson($updated)]);
     }
 
-    public function inviteStaff(Request $request, Store $store)
+    public function inviteStaff(Request $request, int $storeId)
     {
-        $this->authorize('invite', $store);
+        $user = $this->userResolver->resolve($request);
+        $store = $this->firestore->findByNumericId('stores', $storeId);
+        abort_if($store === null, 404, 'Store not found.');
+        abort_unless(UserResolver::isAdmin($user) || ($store['ownerUid'] ?? '') === $request->attributes->get('firebase_uid'), 403, 'Not authorized to invite staff.');
+
         $data = $request->validate([
             'email' => ['required', 'email'],
-            'membership_role' => ['nullable', Rule::in(['staff'])],
             'can_inventory' => ['nullable', 'boolean'],
             'can_promotions' => ['nullable', 'boolean'],
             'can_location' => ['nullable', 'boolean'],
         ]);
 
-        $member = User::where('email', $data['email'])->first();
-        abort_if($member === null, 422, 'No LocalSpot account uses that email.');
-        abort_if($member->isAdmin(), 422, 'Administrators cannot be added as store staff.');
-        abort_if((int) $store->owner_id === (int) $member->id, 422, 'The owner already manages this store.');
+        $email = strtolower(trim($data['email']));
 
-        $store->members()->syncWithoutDetaching([
-            $member->id => [
-                'membership_role' => $data['membership_role'] ?? 'staff',
-                'can_inventory' => $data['can_inventory'] ?? true,
-                'can_promotions' => $data['can_promotions'] ?? false,
-                'can_location' => $data['can_location'] ?? false,
-            ],
+        // Find invitee by email in Firestore users
+        $invitee = null;
+        $users = $this->firestore->all('users');
+        foreach ($users as $u) {
+            if (($u['email'] ?? '') === $email) {
+                $invitee = $u;
+                break;
+            }
+        }
+        abort_if($invitee === null, 422, 'No LocalSpot account uses that email.');
+
+        // Upsert storeMember
+        $existing = $this->firestore->query('storeMembers', [
+            ['field' => 'storeId', 'op' => '==', 'value' => $storeId],
+            ['field' => 'userUid', 'op' => '==', 'value' => $invitee['id'] ?? ''],
         ]);
-        if ($member->role === 'customer') {
-            $member->update(['role' => 'staff']);
+
+        $memberData = [
+            'storeId' => $storeId,
+            'email' => $email,
+            'userUid' => $invitee['id'] ?? '',
+            'userNumericId' => $invitee['numericId'] ?? 0,
+            'inventory' => $data['can_inventory'] ?? true,
+            'promotions' => $data['can_promotions'] ?? false,
+            'location' => $data['can_location'] ?? false,
+        ];
+
+        if (! empty($existing)) {
+            $this->firestore->update('storeMembers', $existing[0]['id'], $memberData);
+        } else {
+            $this->firestore->create('storeMembers', $memberData);
         }
 
-        Audit::record($request->user(), 'store.invite_staff', Store::class, $store->id, [
-            'email' => $member->email,
+        // Upgrade invitee role to staff if currently customer
+        if (($invitee['role'] ?? 'customer') === 'customer') {
+            $this->firestore->merge('users', $invitee['id'], ['role' => 'staff']);
+        }
+
+        // Audit log
+        $this->firestore->create('auditLogs', [
+            'numericId' => abs(crc32(uniqid())) & 0x7fffffff,
+            'action' => 'store.invite_staff',
+            'userId' => $user['numericId'],
+            'created_at' => now()->toIso8601String(),
         ]);
 
-        return response()->json([
-            'data' => [
-                'store_id' => $store->id,
-                'user' => $member->fresh()->toApi(),
-            ],
-        ], 201);
+        return response()->json(['data' => ['store_id' => $storeId, 'email' => $email]], 201);
     }
 
-    public function setStatus(Request $request, Store $store)
+    public function updateStaff(Request $request, int $storeId, int $userId)
     {
-        $this->authorize('setStatus', $store);
+        $user = $this->userResolver->resolve($request);
+        $store = $this->firestore->findByNumericId('stores', $storeId);
+        abort_if($store === null, 404, 'Store not found.');
+        abort_unless($this->userResolver->canManageStore($user, $storeId), 403, 'Not authorized.');
+
+        $data = $request->validate([
+            'can_inventory' => ['nullable', 'boolean'],
+            'can_promotions' => ['nullable', 'boolean'],
+            'can_location' => ['nullable', 'boolean'],
+        ]);
+
+        $members = $this->firestore->query('storeMembers', [
+            ['field' => 'storeId', 'op' => '==', 'value' => $storeId],
+            ['field' => 'userNumericId', 'op' => '==', 'value' => $userId],
+        ]);
+
+        if (! empty($members)) {
+            $updateData = array_filter([
+                'inventory' => $data['can_inventory'] ?? null,
+                'promotions' => $data['can_promotions'] ?? null,
+                'location' => $data['can_location'] ?? null,
+            ], fn ($v) => $v !== null);
+
+            if (! empty($updateData)) {
+                $this->firestore->update('storeMembers', $members[0]['id'], $updateData);
+            }
+        }
+
+        return response()->json(['data' => true]);
+    }
+
+    public function setStatus(Request $request, int $storeId)
+    {
+        $user = $this->userResolver->resolve($request);
+        abort_unless(UserResolver::isAdmin($user), 403, 'Admin only.');
+
         $data = $request->validate([
             'status' => ['required', Rule::in(['pending', 'approved', 'suspended'])],
         ]);
-        $store->update($data);
-        Audit::record($request->user(), 'store.status', Store::class, $store->id, $data);
 
-        return response()->json(['data' => $store->fresh()->toApi()]);
+        $this->firestore->updateByNumericId('stores', $storeId, ['status' => $data['status']]);
+
+        // Invalidate all catalog caches when a store status changes (e.g., approval).
+        CatalogCache::invalidateStore($storeId);
+
+        // When approving a store, grant owner privileges to the store owner.
+        // Per the plan: "Laravel/admin approval grants the appropriate
+        // store-owner membership. Only then can the owner publish the
+        // approved store profile and add products."
+        if ($data['status'] === 'approved') {
+            $store = $this->firestore->findByNumericId('stores', $storeId);
+            if ($store !== null) {
+                $ownerUid = $store['ownerUid'] ?? null;
+                if ($ownerUid !== null && $ownerUid !== '') {
+                    $owner = $this->firestore->get('users', $ownerUid);
+                    if ($owner !== null) {
+                        $ownedIds = $owner['ownedStoreIds'] ?? [];
+                        if (! in_array($storeId, $ownedIds, true)) {
+                            $ownedIds[] = $storeId;
+                        }
+                        $this->firestore->merge('users', $ownerUid, [
+                            'ownedStoreIds' => $ownedIds,
+                            'role' => 'owner',
+                        ]);
+                    }
+                }
+            }
+        }
+
+        $this->firestore->create('auditLogs', [
+            'numericId' => abs(crc32(uniqid())) & 0x7fffffff,
+            'action' => "store.status={$data['status']}",
+            'userId' => $user['numericId'],
+            'created_at' => now()->toIso8601String(),
+        ]);
+
+        return response()->json(['data' => true]);
     }
 
-    public function updateStaff(Request $request, Store $store, User $user)
+    private function storeJson(array $data): array
     {
-        $this->authorize('invite', $store);
-        abort_unless($store->members()->where('users.id', $user->id)->exists(), 404);
-        $data = $request->validate([
-            'can_inventory' => ['sometimes', 'boolean'],
-            'can_promotions' => ['sometimes', 'boolean'],
-            'can_location' => ['sometimes', 'boolean'],
-        ]);
-        $store->members()->updateExistingPivot($user->id, $data);
-        Audit::record($request->user(), 'store.staff_grants', Store::class, $store->id, [
-            'user_id' => $user->id,
-            ...$data,
-        ]);
-
-        return response()->json(['data' => $user->fresh()->toApi()]);
+        return [
+            'id' => $data['numericId'] ?? 0,
+            'owner_id' => $data['ownerId'] ?? 0,
+            'name' => $data['name'] ?? '',
+            'type' => $data['type'] ?? 'other',
+            'status' => $data['status'] ?? 'pending',
+            'lat' => $data['lat'] ?? 0.0,
+            'lng' => $data['lng'] ?? 0.0,
+            'barangay' => $data['barangay'] ?? '',
+            'city' => $data['city'] ?? '',
+            'address' => $data['address'] ?? '',
+            'landmark' => $data['landmark'] ?? '',
+            'schedule' => $data['schedule'] ?? '',
+            'is_mobile' => $data['is_mobile'] ?? false,
+            'image' => $data['image'] ?? null,
+            'verification_note' => $data['verification_note'] ?? '',
+            'location_mode' => $data['location_mode'] ?? 'fixed',
+            'location_updated_at' => $data['location_updated_at'] ?? null,
+        ];
     }
 }

@@ -1,12 +1,13 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 
 import 'api.dart';
-import 'firebase/bootstrap.dart';
 import 'firebase/gateway.dart';
+import 'firebase/media_upload_service.dart';
 import 'models.dart';
 import 'repositories.dart';
 
@@ -22,6 +23,8 @@ class AppState extends ChangeNotifier {
   final api = LocalSpotGateway();
   late final authRepo = AuthRepository(api);
   late final catalogRepo = CatalogRepository(api);
+  // Media upload service for the Cloud Storage quarantine flow (plan Wave 1).
+  late final mediaUpload = MediaUploadService();
 
   // [apiOnline] is true when Firebase is initialised and reachable.
   // The app falls back to on-device seeded demo data when false.
@@ -90,8 +93,11 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  // Counters for demo/development mode (local in-memory data only).
   int _nextUser = 10;
-  int _nextStore = 10;
+  // _nextStore is no longer used — registerStore now goes through Laravel.
+  // ignore: unused_field, prefer_final_fields
+  final int _nextStore = 10;
   int _nextProduct = 30;
   int _nextListing = 40;
   int _nextPromo = 10;
@@ -124,32 +130,51 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> bootstrap() async {
-    // Initialise Firebase (reads firebase_options.dart).
-    final firebaseReady = await initLocalSpotFirebase();
+    // Firebase is already initialized in main() before runApp().
+    // AppState.bootstrap() only needs to load catalog data and restore session.
+    final firebaseReady = Firebase.apps.isNotEmpty;
+
+    // Show a connecting message immediately so the UI isn't blank.
+    connectionNote = 'Connecting…';
+    notifyListeners();
 
     if (firebaseReady) {
       apiOnline = true;
       try {
         final data = await catalogRepo.catalog();
+        // Check if the gateway returned stale cached data.
+        final isStale = data['_stale'] == true;
         _applyCatalog(data);
         usingSeededCatalog = stores.isEmpty;
-        connectionNote = 'Connected to Firebase · Cubao pilot';
+        connectionNote = isStale
+            ? '⚠ Showing cached data — server unreachable'
+            : 'Connected · Cubao pilot';
         // Restore session from Firebase Auth persisted state if available.
         if (api.token != null) {
           try {
             await _hydrateSession();
-          } catch (_) {
-            // Auth token may have expired; clear and fall through to guest mode.
-            currentUser = null;
+          } catch (e) {
+            if (e is BackendUnreachableException) {
+              connectionNote = '⚠ Showing cached data — server unreachable';
+            } else {
+              // Auth token may have expired; clear and fall through to guest mode.
+              currentUser = null;
+            }
           }
         }
-      } catch (e) {
-        // Firebase is initialised but Firestore returned an error.
+      } on BackendUnreachableException {
+        // Laravel is unreachable — show stale cache if any, else empty.
         usingSeededCatalog = stores.isEmpty;
-        connectionNote = 'Firebase ready · catalog error: ${e.toString().length > 60 ? e.toString().substring(0, 60) : e}';
+        connectionNote = '⚠ Server unreachable — check your connection and pull to refresh';
+      } catch (e) {
+        // Firebase is initialised but returned an error.
+        usingSeededCatalog = stores.isEmpty;
+        connectionNote = 'Error loading catalog: ${e.toString().length > 60 ? e.toString().substring(0, 60) : e}';
       }
     } else {
-      // Firebase not configured — show seeded demo catalog.
+      // Firebase not configured — show seeded demo catalog for development.
+      // This uses local in-memory data, NOT Firestore. It does not bypass
+      // the Laravel architecture because it doesn't access any production data.
       apiOnline = false;
       usingSeededCatalog = true;
       connectionNote =
@@ -358,7 +383,8 @@ class AppState extends ChangeNotifier {
         return error;
       }
     }
-    // Offline / demo mode.
+    // Development/demo mode — Firebase not configured.
+    // Uses local in-memory seeded data for UI testing. Does NOT access Firestore.
     final user = UserAccount(
       id: _nextUser++,
       name: name,
@@ -379,6 +405,12 @@ class AppState extends ChangeNotifier {
             await authRepo.login(email: email, password: password);
         currentUser =
             userFromJson(Map<String, dynamic>.from(data['user'] as Map));
+        // Check if we got a minimal profile (backend unreachable).
+        final backendUnreachable =
+            (data['user'] as Map?)?.containsKey('_backend_unreachable') == true;
+        if (backendUnreachable) {
+          connectionNote = '⚠ Signed in via Firebase, but server was unreachable — permissions may be limited';
+        }
         // Hydrate in background so the UI navigates immediately.
         unawaited(() async {
           try {
@@ -396,6 +428,9 @@ class AppState extends ChangeNotifier {
                     )));
               notifyListeners();
             }
+          } on BackendUnreachableException {
+            connectionNote = '⚠ Signed in but server was unreachable — some features require connectivity';
+            notifyListeners();
           } catch (_) {}
         }());
         notifyListeners();
@@ -404,7 +439,8 @@ class AppState extends ChangeNotifier {
         return error.message;
       }
     }
-    // Offline / demo mode.
+    // Development/demo mode — Firebase not configured.
+    // Uses local in-memory seeded data for UI testing. Does NOT access Firestore.
     final match =
         users.where((u) => u.email == email && u.password == password);
     if (match.isEmpty) return 'Email or password is incorrect.';
@@ -832,7 +868,7 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  Store registerStore({
+  Future<Store> registerStore({
     required String name,
     required StoreType type,
     required double lat,
@@ -844,51 +880,42 @@ class AppState extends ChangeNotifier {
     required String schedule,
     required bool isMobile,
     required String verificationNote,
-  }) {
+  }) async {
     _beginWrite();
-    final store = Store(
-      id: _nextStore++,
-      ownerId: currentUser!.id,
-      name: name,
-      type: type,
-      status: StoreStatus.pending,
-      lat: lat,
-      lng: lng,
-      barangay: barangay,
-      city: city,
-      address: address,
-      landmark: landmark,
-      schedule: schedule,
-      isMobile: isMobile,
-      verificationNote: verificationNote,
-    );
-    stores.add(store);
-    notifyListeners();
     if (apiOnline && api.token != null) {
-      unawaited(() async {
-        try {
-          await api.post('/stores', {
-            'name': name,
-            'type': type.name,
-            'lat': lat,
-            'lng': lng,
-            'barangay': barangay,
-            'city': city,
-            'address': address,
-            'landmark': landmark,
-            'schedule': schedule,
-            'is_mobile': isMobile,
-            'verification_note': verificationNote,
-          });
-          await refreshCatalog();
-        } finally {
-          _endWrite();
-        }
-      }());
-    } else {
-      _endWrite();
+      try {
+        final data = await api.post('/stores', {
+          'name': name,
+          'type': type.name,
+          'lat': lat,
+          'lng': lng,
+          'barangay': barangay,
+          'city': city,
+          'address': address,
+          'landmark': landmark,
+          'schedule': schedule,
+          'is_mobile': isMobile,
+          'verification_note': verificationNote,
+        }) as Map;
+        final store = storeFromJson(Map<String, dynamic>.from(data));
+        stores.add(store);
+        notifyListeners();
+        await refreshCatalog();
+        _endWrite();
+        return store;
+      } on ApiException catch (e) {
+        _endWrite();
+        lastApiError = e;
+        notifyListeners();
+        // Re-throw so the UI can show the error to the user.
+        rethrow;
+      }
     }
-    return store;
+    _endWrite();
+    throw ApiException(
+      'Cannot register store — server is not reachable. Check your connection.',
+      status: 0,
+    );
   }
 
   String? inviteStaff({
@@ -1027,6 +1054,7 @@ class AppState extends ChangeNotifier {
     String brand = '',
     String packageSize = '',
     String? barcode,
+    String? image,
     required double price,
     required String unit,
     required int quantity,
@@ -1068,6 +1096,7 @@ class AppState extends ChangeNotifier {
             'brand': brand,
             'package_size': packageSize,
             'barcode': barcode,
+            if (image != null) 'image': image,
             'price': price,
             'unit': unit,
             'quantity': quantity,

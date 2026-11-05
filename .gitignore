@@ -53,6 +53,16 @@ firebase-debug.log
 firestore-debug.log
 ui-debug.log
 
-# Service account key — never commit this
+# Service account key and other credential files — never commit these
+# The key lives at C:\Users\User\.localspot\secrets\ (outside the repo)
 scripts/serviceAccountKey.json
+scripts/*.json
 scripts/node_modules/
+
+# Additional credential patterns
+*.serviceAccountKey.json
+*serviceaccount*.json
+*service_account*.json
+*credentials*.json
+google-services-admin.json
+firebase-adminsdk*.json

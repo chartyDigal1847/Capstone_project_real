@@ -3,17 +3,25 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
-use Illuminate\Support\Facades\DB;
+use App\Services\FirestoreService;
 use Throwable;
 
+/** Health check — verifies Firestore connectivity instead of MySQL. */
 class HealthController extends Controller
 {
+    public function __construct(private readonly FirestoreService $firestore)
+    {
+    }
+
     public function show()
     {
+        $database = 'unknown';
+        $ok = true;
+
         try {
-            DB::select('select 1');
+            // Attempt a lightweight Firestore read to verify connectivity.
+            $this->firestore->all('stores');
             $database = 'up';
-            $ok = true;
         } catch (Throwable) {
             $database = 'down';
             $ok = false;
@@ -25,6 +33,7 @@ class HealthController extends Controller
                 'app' => 'LocalSpot',
                 'env' => config('app.env'),
                 'database' => $database,
+                'database_type' => 'firestore',
                 'routing_configured' => filled(config('localspot.routing_base_url')),
                 'map' => 'maplibre_openfreemap',
             ],

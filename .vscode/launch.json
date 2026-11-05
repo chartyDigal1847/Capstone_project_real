@@ -1,0 +1,52 @@
+{
+  // VS Code launch configurations for LocalSpot.
+  //
+  // Configures the Laravel API base URL at build time using --dart-define.
+  // Select the configuration that matches your development environment:
+  //
+  //   - "LocalSpot (Emulator)"   → http://10.0.2.2:8000/api/v1  (Android emulator → host)
+  //   - "LocalSpot (Device)"     → http://<your-LAN-IP>:8000/api/v1  (physical device on Wi-Fi)
+  //   - "LocalSpot (Production)"  → https://api.localspot.ph/api/v1  (HTTPS, release mode)
+  //
+  // For the physical-device config, replace 192.168.1.100 with your PC's LAN IP.
+  // Find it with: ipconfig  →  IPv4 Address
+  // The phone and PC must be on the same Wi-Fi network, and Windows Firewall
+  // must allow port 8000 on the private network.
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "LocalSpot (Emulator)",
+      "request": "launch",
+      "type": "dart",
+      "program": "lib/main.dart",
+      "args": [
+        "--dart-define=LARAVEL_API_URL=http://10.0.2.2:8000/api/v1"
+      ]
+    },
+    {
+      "name": "LocalSpot (Device)",
+      "request": "launch",
+      "type": "dart",
+      "program": "lib/main.dart",
+      "args": [
+        "--dart-define=LARAVEL_API_URL=http://192.168.1.100:8000/api/v1"
+      ]
+    },
+    {
+      "name": "LocalSpot (Production)",
+      "request": "launch",
+      "type": "dart",
+      "program": "lib/main.dart",
+      "args": [
+        "--dart-define=LARAVEL_API_URL=https://api.localspot.ph/api/v1",
+        "--release"
+      ]
+    },
+    {
+      "name": "LocalSpot (Tests)",
+      "request": "launch",
+      "type": "dart",
+      "program": "test/"
+    }
+  ]
+}

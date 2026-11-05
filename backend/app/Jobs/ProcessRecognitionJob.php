@@ -2,35 +2,40 @@
 
 namespace App\Jobs;
 
-use App\Models\RecognitionJob;
+use App\Services\FirestoreService;
 use App\Support\RecognitionService;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Throwable;
 
+/**
+ * Process a product-recognition job — Firestore-backed.
+ * Reads the job from the productRecognitionJobs collection, runs
+ * catalog-based analysis, and updates the job status/suggestions.
+ */
 class ProcessRecognitionJob implements ShouldQueue
 {
     use Queueable;
 
     public function __construct(public int $recognitionJobId) {}
 
-    public function handle(RecognitionService $recognition): void
+    public function handle(FirestoreService $firestore, RecognitionService $recognition): void
     {
-        $job = RecognitionJob::find($this->recognitionJobId);
-        if ($job === null || $job->status !== 'pending') {
+        $job = $firestore->findByNumericId('productRecognitionJobs', $this->recognitionJobId);
+        if ($job === null || ($job['status'] ?? '') !== 'pending') {
             return;
         }
 
         try {
-            $analysis = $recognition->analyze($job->hint, $job->barcode);
-            $job->update([
+            $analysis = $recognition->analyze($job['hint'] ?? null, $job['barcode'] ?? null);
+            $firestore->updateByNumericId('productRecognitionJobs', $this->recognitionJobId, [
                 'status' => 'ready',
                 'suggestions' => $analysis['suggestions'],
                 'objects' => $analysis['objects'],
-                'ocr_text' => $analysis['ocr'] ?? $job->ocr_text,
+                'ocr_text' => $analysis['ocr'] ?? ($job['ocr_text'] ?? null),
             ]);
         } catch (Throwable) {
-            $job->update([
+            $firestore->updateByNumericId('productRecognitionJobs', $this->recognitionJobId, [
                 'status' => 'failed',
                 'suggestions' => [[
                     'product' => null,

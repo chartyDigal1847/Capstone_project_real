@@ -2,9 +2,20 @@
 
 namespace App\Support;
 
-use App\Models\TourNode;
 use Illuminate\Support\Facades\Storage;
 
+/**
+ * 360° tour privacy processing support — array-based (no Eloquent).
+ *
+ * In the target architecture, original panoramas are uploaded to private
+ * Cloud Storage quarantine paths. Laravel processes them through a queue
+ * worker and creates sanitized derivatives. This class provides the
+ * transitional local-storage-based implementation; actual ML person/face
+ * detection is pending (plan Wave 3).
+ *
+ * The publication gate in TourController blocks publication until every
+ * node has privacy_status='ready' and owner_reviewed=true.
+ */
 class TourPrivacy
 {
     public static function retentionDays(): int
@@ -12,51 +23,70 @@ class TourPrivacy
         return max(1, (int) config('localspot.tour_original_retention_days', 30));
     }
 
+    /**
+     * Stage an original panorama source (transitional: local storage).
+     * Returns the storage key for the original.
+     */
     public static function stage(string $source, int $nodeId): string
     {
         $key = "tours/originals/{$nodeId}.txt";
         Storage::disk('local')->put($key, $source);
-
         return $key;
     }
 
-    public static function source(TourNode $node): string
+    /**
+     * Read the original source for a node (accepts array-based node data).
+     */
+    public static function source(array $node): string
     {
-        if (! filled($node->original_image)) {
+        $originalImage = $node['original_image'] ?? null;
+        if (! filled($originalImage)) {
             return '';
         }
-        if (Storage::disk('local')->exists($node->original_image)) {
-            return (string) Storage::disk('local')->get($node->original_image);
+        if (Storage::disk('local')->exists($originalImage)) {
+            return (string) Storage::disk('local')->get($originalImage);
         }
-
-        return (string) $node->original_image;
+        return (string) $originalImage;
     }
 
+    /**
+     * Get the public sanitized derivative URL for a node.
+     */
     public static function publicUrl(int $nodeId): string
     {
-        return '/storage/tours/'.$nodeId.'/sanitized.jpg';
+        return '/storage/tours/' . $nodeId . '/sanitized.jpg';
     }
 
-    public static function writeDerivative(TourNode $node): string
+    /**
+     * Write a sanitized derivative (transitional: local public storage).
+     * Returns the public path.
+     */
+    public static function writeDerivative(int $nodeId): string
     {
-        $path = 'tours/'.$node->id.'/sanitized.jpg';
+        $path = 'tours/' . $nodeId . '/sanitized.jpg';
         Storage::disk('public')->put($path, 'LOCALSPOT_SANITIZED_DERIVATIVE');
-
-        return '/storage/'.$path;
+        return '/storage/' . $path;
     }
 
-    public static function shouldFail(TourNode $node, bool $forceFail = false): bool
+    /**
+     * Determine if processing should fail for a node (accepts array-based data).
+     */
+    public static function shouldFail(array $node, bool $forceFail = false): bool
     {
-        $hay = strtolower($node->title.' '.self::source($node));
-
-        return $forceFail || str_contains($hay, 'fail') || ! filled($node->original_image);
+        $hay = strtolower(($node['title'] ?? '') . ' ' . self::source($node));
+        return $forceFail || str_contains($hay, 'fail') || ! filled($node['original_image'] ?? null);
     }
 
-    public static function forgetOriginal(TourNode $node): void
+    /**
+     * Forget (delete) the original for a node (accepts array-based data).
+     * Returns the update data to merge into the node.
+     */
+    public static function forgetOriginal(array $node): array
     {
-        if (filled($node->original_image) && Storage::disk('local')->exists($node->original_image)) {
-            Storage::disk('local')->delete($node->original_image);
+        $originalImage = $node['original_image'] ?? null;
+        if (filled($originalImage) && Storage::disk('local')->exists($originalImage)) {
+            Storage::disk('local')->delete($originalImage);
         }
-        $node->update(['original_image' => null]);
+        return ['original_image' => null];
     }
 }

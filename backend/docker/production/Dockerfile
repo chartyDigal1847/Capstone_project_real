@@ -1,4 +1,7 @@
-# Production image only. Do not use Laravel Sail's development runtime in production.
+# Production image for the Firebase-backed target architecture.
+# Includes PHP gRPC extension (required by google/cloud-firestore) and
+# Redis extension (for production queue/cache). No MySQL runtime dependency —
+# Firestore and Cloud Storage are managed Firebase services accessed via IAM.
 FROM php:8.2-fpm-alpine AS vendor
 
 RUN apk add --no-cache git unzip libzip-dev icu-dev oniguruma-dev \
@@ -11,10 +14,18 @@ RUN composer install --no-dev --no-scripts --no-interaction --prefer-dist --opti
 
 FROM php:8.2-fpm-alpine
 
+# Runtime libraries + gRPC C library (required by Firestore PHP client)
+# Build the gRPC and Redis PHP extensions, then remove build deps.
 RUN apk add --no-cache libzip icu-libs oniguruma nginx wget \
-    && apk add --no-cache --virtual .build-deps libzip-dev icu-dev oniguruma-dev \
+    && apk add --no-cache --virtual .build-deps \
+        libzip-dev icu-dev oniguruma-dev \
+        grpc-dev protobuf-dev \
+        gcc g++ make linux-headers \
     && docker-php-ext-install pdo_mysql bcmath intl zip opcache \
+    && pecl install grpc redis \
+    && docker-php-ext-enable grpc redis \
     && apk del .build-deps \
+    && apk add --no-cache grpc \
     && addgroup -g 10001 localspot \
     && adduser -D -G localspot -u 10001 localspot
 

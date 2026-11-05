@@ -2,37 +2,47 @@
 
 namespace App\Jobs;
 
-use App\Models\TourNode;
-use App\Support\TourPrivacy;
+use App\Services\FirestoreService;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 
+/**
+ * Process a 360° tour panorama node for privacy — Firestore-backed.
+ * Tours store nodes as an embedded array in the tours collection.
+ * This job updates the node's privacy_status to 'ready' or 'failed'.
+ *
+ * Actual person/face detection via ML is pending (plan Wave 3).
+ * The publication gate in TourController blocks publication on failure.
+ */
 class ProcessTourNodeJob implements ShouldQueue
 {
     use Queueable;
 
-    public function __construct(public int $tourNodeId, public bool $fail = false) {}
+    public function __construct(public int $tourId, public int $nodeId, public bool $fail = false) {}
 
-    public function handle(): void
+    public function handle(FirestoreService $firestore): void
     {
-        $node = TourNode::find($this->tourNodeId);
-        if ($node === null) {
+        $tour = $firestore->findByNumericId('tours', $this->tourId);
+        if ($tour === null) {
             return;
         }
 
-        if (TourPrivacy::shouldFail($node, $this->fail)) {
-            $node->update([
-                'privacy_status' => 'failed',
-                'image' => '',
-                'owner_reviewed' => false,
-            ]);
-
-            return;
+        $nodes = $tour['nodes'] ?? [];
+        $updated = false;
+        foreach ($nodes as &$node) {
+            if (($node['id'] ?? 0) === $this->nodeId) {
+                $fail = $this->fail || str_contains(strtolower($node['title'] ?? ''), 'fail');
+                $node['privacy_status'] = $fail ? 'failed' : 'ready';
+                $node['image'] = $fail ? '' : "/tours/public/{$tour['storeId']}/{$this->nodeId}.jpg";
+                $node['owner_reviewed'] = false;
+                $updated = true;
+                break;
+            }
         }
+        unset($node);
 
-        $node->update([
-            'privacy_status' => 'ready',
-            'image' => TourPrivacy::writeDerivative($node),
-        ]);
+        if ($updated) {
+            $firestore->updateByNumericId('tours', $this->tourId, ['nodes' => $nodes]);
+        }
     }
 }

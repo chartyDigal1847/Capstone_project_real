@@ -37,6 +37,15 @@ class ApiException implements Exception {
 
   String? field(String key) => fieldErrors[key];
 
+  /// Return a copy with an overridden message if the current message is generic.
+  ApiException copyWith({String? fallbackMessage}) {
+    if (fallbackMessage == null) return this;
+    // Only replace if the current message looks like the generic fallback.
+    final isGeneric = message.startsWith('Request failed (');
+    final newMsg = isGeneric ? fallbackMessage : message;
+    return ApiException(newMsg, status: status, fieldErrors: fieldErrors);
+  }
+
   @override
   String toString() => message;
 }
@@ -141,20 +150,33 @@ VendorSession? vendorSessionFromJson(Map<String, dynamic>? json) {
 }
 
 CatalogProduct productFromJson(Map<String, dynamic> json) {
+  // attributes can arrive as a Map (object) or an empty List [] from Firestore
+  // when no attributes were set. Normalise both to Map<String,String>.
+  final rawAttrs = json['attributes'];
+  final Map<String, dynamic> attrsMap = rawAttrs is Map
+      ? Map<String, dynamic>.from(rawAttrs)
+      : const <String, dynamic>{};
+
+  // aliases can arrive as a List or (defensively) a space-separated String
+  // from older Firestore documents. Normalise both to List<String>.
+  final rawAliases = json['aliases'];
+  final List<String> aliasesList = rawAliases is List
+      ? rawAliases.map((e) => e.toString()).toList()
+      : rawAliases is String && rawAliases.trim().isNotEmpty
+          ? rawAliases.trim().split(' ')
+          : const <String>[];
+
   return CatalogProduct(
     id: asInt(json['id']),
     name: json['name'] as String,
     category: json['category'] as String? ?? '',
     brand: json['brand'] as String? ?? '',
     packageSize: json['package_size'] as String? ?? '',
-    aliases: [...?(json['aliases'] as List?)?.map((e) => e.toString())],
+    aliases: aliasesList,
     barcode: json['barcode'] as String?,
     image: json['image'] as String? ?? '',
     attributes: {
-      for (final entry in Map<String, dynamic>.from(
-              json['attributes'] as Map? ?? {})
-          .entries)
-        entry.key: '${entry.value}',
+      for (final entry in attrsMap.entries) entry.key: '${entry.value}',
     },
   );
 }
@@ -181,46 +203,61 @@ Promotion promotionFromJson(Map<String, dynamic> json) {
   return Promotion(
     id: asInt(json['id']),
     storeId: asInt(json['store_id']),
-    title: json['title'] as String,
-    offer: json['offer'] as String,
+    title: json['title'] as String? ?? '',
+    offer: json['offer'] as String? ?? '',
     startsAt:
         DateTime.tryParse(json['starts_at'] as String? ?? '') ?? DateTime.now(),
     endsAt:
         DateTime.tryParse(json['ends_at'] as String? ?? '') ?? DateTime.now(),
     sponsored: json['sponsored'] == true,
-    status: _enum(PromotionStatus.values, json['status'] as String,
-        PromotionStatus.pending),
+    status: _enum(PromotionStatus.values,
+        json['status'] as String? ?? 'pending', PromotionStatus.pending),
   );
 }
 
 StoreTour tourFromJson(Map<String, dynamic> json) {
+  // nodes can arrive as a List, or as a String (if Firestore stored it as a
+  // space-separated value), or empty. Normalise to a list of maps.
+  final rawNodes = json['nodes'];
+  final List<dynamic> nodeList = rawNodes is List
+      ? rawNodes
+      : const <dynamic>[];
+
   return StoreTour(
     id: asInt(json['id']),
     storeId: asInt(json['store_id']),
     title: json['title'] as String,
-    status: _enum(TourStatus.values, json['status'] as String, TourStatus.draft),
+    status: _enum(TourStatus.values, json['status'] as String? ?? 'draft', TourStatus.draft),
     nodes: [
-      for (final node in (json['nodes'] as List? ?? []))
-        TourNode(
-          id: asInt(node['id']),
-          title: node['title'] as String,
-          image: node['image'] as String? ?? '',
-          connections: [...?(node['connections'] as List?)?.map(asInt)],
-          privacyStatus: _enum(PrivacyStatus.values,
-              node['privacy_status'] as String? ?? 'ready', PrivacyStatus.ready),
-          ownerReviewed: node['owner_reviewed'] == true,
-          manualBlur: node['manual_blur'] == true,
-          originalRetained: node['original_retained'] == true,
-          blurRegions: [
-            for (final region in (node['blur_regions'] as List? ?? []))
-              BlurRegion(
-                x: (region['x'] as num).toDouble(),
-                y: (region['y'] as num).toDouble(),
-                w: (region['w'] as num).toDouble(),
-                h: (region['h'] as num).toDouble(),
-              ),
-          ],
-        ),
+      for (final node in nodeList)
+        if (node is Map)
+          TourNode(
+            id: asInt(node['id']),
+            title: node['title'] as String? ?? '',
+            image: node['image'] as String? ?? '',
+            connections: [
+              ...?(node['connections'] is List
+                  ? (node['connections'] as List).map(asInt)
+                  : null),
+            ],
+            privacyStatus: _enum(PrivacyStatus.values,
+                node['privacy_status'] as String? ?? 'ready', PrivacyStatus.ready),
+            ownerReviewed: node['owner_reviewed'] == true,
+            manualBlur: node['manual_blur'] == true,
+            originalRetained: node['original_retained'] == true,
+            blurRegions: [
+              for (final region in (node['blur_regions'] is List
+                  ? node['blur_regions'] as List
+                  : const []))
+                if (region is Map)
+                  BlurRegion(
+                    x: (region['x'] as num?)?.toDouble() ?? 0,
+                    y: (region['y'] as num?)?.toDouble() ?? 0,
+                    w: (region['w'] as num?)?.toDouble() ?? 0,
+                    h: (region['h'] as num?)?.toDouble() ?? 0,
+                  ),
+            ],
+          ),
     ],
   );
 }

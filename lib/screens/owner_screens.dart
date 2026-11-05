@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../api.dart';
 import '../map_view.dart';
 import '../models.dart';
 import '../state.dart';
@@ -252,6 +253,7 @@ class _StoreRegisterPageState extends State<StoreRegisterPage> {
           setState(_validate);
           if (_hasErrors) return;
           setState(() => submitting = true);
+          final messenger = ScaffoldMessenger.of(context);
           app.registerStore(
             name: name.text.trim(),
             type: type,
@@ -264,8 +266,18 @@ class _StoreRegisterPageState extends State<StoreRegisterPage> {
             schedule: schedule.text.trim(),
             isMobile: isMobile,
             verificationNote: verification.text.trim(),
-          );
-          widget.onBack();
+          ).then((_) {
+            if (mounted) widget.onBack();
+          }).catchError((Object e) {
+            if (!mounted) return;
+            setState(() => submitting = false);
+            messenger.showSnackBar(
+              SnackBar(
+                content: Text(e is ApiException ? e.message : e.toString()),
+                backgroundColor: Colors.red,
+              ),
+            );
+          });
         }),
       ],
     );
@@ -440,6 +452,8 @@ class _AddProductPageState extends State<AddProductPage> {
   final unit = TextEditingController(text: 'piece');
   final qty = TextEditingController(text: '10');
   Availability availability = Availability.inStock;
+  String? _pickedFilePath;
+  bool _uploading = false;
   final attributeFields = <String, TextEditingController>{};
 
   TextEditingController _attr(String key) => attributeFields.putIfAbsent(key, TextEditingController.new);
@@ -491,6 +505,7 @@ class _AddProductPageState extends State<AddProductPage> {
     try {
       final file = await ImagePicker().pickImage(source: source, imageQuality: 70);
       if (file == null || !mounted) return;
+      setState(() => _pickedFilePath = file.path);
       final stem = file.name.toLowerCase();
       final hint = stem.contains('mango')
           ? 'mango'
@@ -533,6 +548,59 @@ class _AddProductPageState extends State<AddProductPage> {
         }
       }
     });
+  }
+
+  /// Confirm the product listing and upload the photo through the
+  /// Cloud Storage quarantine flow (plan Wave 1) before creating the record.
+  Future<void> _confirmAndPublish(Store store) async {
+    final parsed = double.tryParse(price.text);
+    if (parsed == null || parsed < 0 || name.text.trim().isEmpty || unit.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Confirm the product name, a valid price and a selling unit.')));
+      return;
+    }
+
+    // Upload product photo through the Cloud Storage quarantine flow.
+    String? uploadedImage;
+    if (_pickedFilePath != null && _app != null) {
+      setState(() => _uploading = true);
+      try {
+        final result = await _app!.mediaUpload.uploadProductPhoto(
+          filePath: _pickedFilePath!,
+          storeId: store.id,
+        );
+        uploadedImage = result.quarantinePath;
+      } catch (e) {
+        // Upload failed — create listing without image, but inform the owner.
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Photo upload skipped: listing created without photo.')),
+          );
+        }
+      }
+      if (mounted) setState(() => _uploading = false);
+    }
+
+    if (!mounted) return;
+
+    _app!.addListing(
+      storeId: store.id,
+      productId: selected?.id,
+      name: name.text.trim(),
+      category: category.text.trim(),
+      brand: brand.text.trim(),
+      packageSize: size.text.trim(),
+      barcode: barcode.text.trim().isEmpty ? null : barcode.text.trim(),
+      image: uploadedImage,
+      price: parsed,
+      unit: unit.text.trim(),
+      quantity: int.tryParse(qty.text) ?? 0,
+      availability: availability,
+      attributes: {
+        for (final field in categoryAttributeFields(category.text))
+          if (_attr(field.$1).text.trim().isNotEmpty) field.$1: _attr(field.$1).text.trim(),
+      },
+    );
+    widget.onBack?.call();
   }
 
   @override
@@ -690,33 +758,12 @@ class _AddProductPageState extends State<AddProductPage> {
             ),
           ),
           const SizedBox(height: 16),
-          PrimaryButton('Confirm and publish listing', onPressed: app.writeBusy
-              ? null
-              : () {
-            final parsed = double.tryParse(price.text);
-            if (parsed == null || parsed < 0 || name.text.trim().isEmpty || unit.text.trim().isEmpty) {
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Confirm the product name, a valid price and a selling unit.')));
-              return;
-            }
-            app.addListing(
-              storeId: store.id,
-              productId: selected?.id,
-              name: name.text.trim(),
-              category: category.text.trim(),
-              brand: brand.text.trim(),
-              packageSize: size.text.trim(),
-              barcode: barcode.text.trim().isEmpty ? null : barcode.text.trim(),
-              price: parsed,
-              unit: unit.text.trim(),
-              quantity: int.tryParse(qty.text) ?? 0,
-              availability: availability,
-              attributes: {
-                for (final field in categoryAttributeFields(category.text))
-                  if (_attr(field.$1).text.trim().isNotEmpty) field.$1: _attr(field.$1).text.trim(),
-              },
-            );
-            widget.onBack?.call();
-          }),
+          PrimaryButton(
+            _uploading ? 'Uploading photo…' : 'Confirm and publish listing',
+            onPressed: (app.writeBusy || _uploading)
+                ? null
+                : () => _confirmAndPublish(store),
+          ),
         ],
       ],
     );
@@ -1050,6 +1097,7 @@ class _TourEditorPageState extends State<TourEditorPage> {
   final image = TextEditingController(text: 'https://images.unsplash.com/photo-1441986300917-64674bd600d8?auto=format&fit=crop&w=1200&q=80');
   TourNode? connectFrom;
   var publishing = false;
+  bool _uploading = false;
 
   static const samples = [
     ('Storefront', 'https://images.unsplash.com/photo-1604719312566-8912e9227c6a?auto=format&fit=crop&w=1200&q=80'),
@@ -1073,6 +1121,47 @@ class _TourEditorPageState extends State<TourEditorPage> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Gallery unavailable. Paste a panorama URL or use a sample viewpoint.')));
     }
+  }
+
+  /// Add a viewpoint to the tour. If the panorama is a local file,
+  /// upload it through the Cloud Storage quarantine flow (plan Wave 1)
+  /// before creating the node. The publication gate in the TourController
+  /// blocks publishing until privacy processing succeeds.
+  Future<void> _addViewpoint(StoreTour tour) async {
+    final app = AppScope.of(context);
+    final store = app.ownedStore();
+    final label = title.text.trim().isEmpty
+        ? 'Viewpoint ${tour.nodes.length + 1}'
+        : title.text.trim();
+    final imagePath = image.text.trim();
+
+    String nodeImage = imagePath;
+
+    // If the image is a local file path (not a URL), upload through quarantine.
+    if (imagePath.isNotEmpty && !imagePath.startsWith('http') && store != null) {
+      setState(() => _uploading = true);
+      try {
+        final result = await app.mediaUpload.uploadTourPanorama(
+          filePath: imagePath,
+          storeId: store.id,
+        );
+        nodeImage = result.quarantinePath;
+      } catch (_) {
+        // Upload failed — use the original path as fallback.
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Panorama upload skipped. Node created with placeholder.')),
+          );
+        }
+      }
+      if (mounted) setState(() => _uploading = false);
+    }
+
+    if (!mounted) return;
+
+    app.addTourNode(tour, label, nodeImage);
+    title.clear();
+    setState(() {});
   }
 
   @override
@@ -1231,15 +1320,10 @@ class _TourEditorPageState extends State<TourEditorPage> {
           ),
           const SizedBox(height: 8),
           OutlinedButton(
-            onPressed: app.writeBusy
+            onPressed: (app.writeBusy || _uploading)
                 ? null
-                : () {
-              final label = title.text.trim().isEmpty ? 'Viewpoint ${tour.nodes.length + 1}' : title.text.trim();
-              app.addTourNode(tour, label, image.text.trim());
-              title.clear();
-              setState(() {});
-            },
-            child: const Text('Add viewpoint'),
+                : () => _addViewpoint(tour),
+            child: Text(_uploading ? 'Uploading panorama…' : 'Add viewpoint'),
           ),
           const SizedBox(height: 8),
           PrimaryButton(
