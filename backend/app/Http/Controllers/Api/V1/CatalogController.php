@@ -14,8 +14,8 @@ use Illuminate\Http\Request;
 /**
  * Catalog controller — Firestore-backed.
  *
- * All reads go through FirestoreService (official google/cloud-firestore PHP
- * client via IAM/ADC). No Eloquent/MySQL queries. The response format matches
+ * All reads go through FirestoreService (Firestore REST API adapter).
+ * No Eloquent/MySQL queries. The response format matches
  * the Flutter app's expected JSON shape.
  */
 class CatalogController extends Controller
@@ -62,7 +62,10 @@ class CatalogController extends Controller
         // Filter listings and promotions to approved stores only.
         $listings = array_filter($listings, fn ($l) => in_array($l['storeId'] ?? 0, $approvedStoreIds, true));
         $promotions = array_filter($promotions, fn ($p) => in_array($p['storeId'] ?? 0, $approvedStoreIds, true));
-        $tours = array_filter($tours, fn ($t) => in_array($t['storeId'] ?? 0, $approvedStoreIds, true));
+        $tours = array_filter($tours, fn ($t) =>
+            in_array($t['storeId'] ?? 0, $approvedStoreIds, true) &&
+            ($t['privacy_verified'] ?? false) === true
+        );
 
         $data = [
             'stores' => array_values(array_map(fn ($s) => $this->storeJson($s, $sessionMap[$s['numericId']] ?? null), $stores)),
@@ -81,8 +84,8 @@ class CatalogController extends Controller
     public function nearbyStores(Request $request)
     {
         $data = $request->validate([
-            'lat' => ['required', 'numeric'],
-            'lng' => ['required', 'numeric'],
+            'lat' => ['required', 'numeric', 'between:-90,90'],
+            'lng' => ['required', 'numeric', 'between:-180,180'],
             'radius_km' => ['nullable', 'numeric', 'min:0.1', 'max:50'],
             'type' => ['nullable', 'string'],
         ]);
@@ -103,22 +106,11 @@ class CatalogController extends Controller
             return response()->json(['data' => $cached]);
         }
 
-        // Compute geohash query ranges for bounded nearby search (plan Wave 2)
-        $geohashRanges = Geohash::queryRanges($lat, $lng, $radius);
-
-        $stores = $this->firestore->query('stores', [
-            ['field' => 'status', 'op' => '==', 'value' => 'approved'],
-        ]);
-
-        // Pre-filter by geohash prefix, then by exact distance
-        $stores = array_filter($stores, function ($store) use ($geohashRanges, $lat, $lng, $radius, $data) {
+        // Firestore range queries bound the candidate set before exact distance filtering.
+        $stores = $this->nearbyStoreCandidates($lat, $lng, $radius);
+        $stores = array_filter($stores, function ($store) use ($lat, $lng, $radius, $data) {
             if (! empty($data['type']) && ($store['type'] ?? '') !== $data['type']) return false;
-            // Geohash pre-filter — skip stores outside the cell range
-            $storeGeohash = $store['geohash'] ?? '';
-            if ($storeGeohash !== '' && ! Geohash::inRanges($storeGeohash, $geohashRanges)) {
-                return false;
-            }
-            return true;
+            return Geo::distanceKm($lat, $lng, (float) ($store['lat'] ?? 0), (float) ($store['lng'] ?? 0)) <= $radius;
         });
 
         $sessions = $this->firestore->all('vendorSessions');
@@ -189,9 +181,9 @@ class CatalogController extends Controller
         $data = $request->validate([
             'q' => ['nullable', 'string'],
             'product_id' => ['nullable', 'integer'],
-            'lat' => ['required', 'numeric'],
-            'lng' => ['required', 'numeric'],
-            'radius_km' => ['nullable', 'numeric'],
+            'lat' => ['required', 'numeric', 'between:-90,90'],
+            'lng' => ['required', 'numeric', 'between:-180,180'],
+            'radius_km' => ['nullable', 'numeric', 'min:0.1', 'max:50'],
             'type' => ['nullable', 'string'],
             'category' => ['nullable', 'string'],
             'sort' => ['nullable', 'string', 'in:relevance,distance,price,freshness'],
@@ -226,20 +218,11 @@ class CatalogController extends Controller
             ]);
         }
 
-        // Compute geohash query ranges for bounded nearby search (plan Wave 2)
-        $geohashRanges = Geohash::queryRanges($lat, $lng, $radius);
-
-        $stores = $this->firestore->query('stores', [
-            ['field' => 'status', 'op' => '==', 'value' => 'approved'],
-        ]);
-
-        // Pre-filter stores by geohash to bound the search area
-        $stores = array_filter($stores, function ($store) use ($geohashRanges, $data) {
+        // Query only approved stores in bounded geohash ranges, then apply
+        // exact distance checks below to remove cell-range false positives.
+        $stores = $this->nearbyStoreCandidates($lat, $lng, $radius);
+        $stores = array_filter($stores, function ($store) use ($data) {
             if (! empty($data['type']) && ($store['type'] ?? '') !== $data['type']) return false;
-            $storeGeohash = $store['geohash'] ?? '';
-            if ($storeGeohash !== '' && ! Geohash::inRanges($storeGeohash, $geohashRanges)) {
-                return false;
-            }
             return true;
         });
 
@@ -549,6 +532,34 @@ class CatalogController extends Controller
             'geohash' => $data['geohash'] ?? null,
             'live_session' => $session,
         ];
+    }
+
+    /**
+     * Fetch approved store candidates using one bounded geohash range query
+     * per intersecting cell. Caller still applies exact-distance filtering.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function nearbyStoreCandidates(float $lat, float $lng, float $radiusKm): array
+    {
+        $storesById = [];
+
+        foreach (Geohash::queryRanges($lat, $lng, $radiusKm) as $prefix) {
+            $matches = $this->firestore->query('stores', [
+                ['field' => 'geohash', 'op' => '>=', 'value' => $prefix],
+                ['field' => 'geohash', 'op' => '<=', 'value' => $prefix . "\u{f8ff}"],
+            ]);
+
+            foreach ($matches as $store) {
+                if (($store['status'] ?? null) !== 'approved') {
+                    continue;
+                }
+                $key = (string) ($store['id'] ?? $store['numericId'] ?? count($storesById));
+                $storesById[$key] = $store;
+            }
+        }
+
+        return array_values($storesById);
     }
 
     private function productJson(array $data): array

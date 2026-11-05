@@ -3,11 +3,9 @@
 namespace App\Http\Middleware;
 
 use App\Services\FirebaseAuthService;
+use App\Services\FirebasePublicKeysUnavailable;
 use Closure;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Cache;
-use Firebase\JWT\JWT;
-use Firebase\JWT\Key;
 use Firebase\JWT\SignatureInvalidException;
 use Firebase\JWT\BeforeValidException;
 use Firebase\JWT\ExpiredException;
@@ -57,6 +55,9 @@ class VerifyFirebaseToken
             return response()->json(['message' => 'Invalid Firebase ID token signature.'], 401);
         } catch (BeforeValidException $e) {
             return response()->json(['message' => 'Firebase ID token not yet valid.'], 401);
+        } catch (FirebasePublicKeysUnavailable $e) {
+            report($e);
+            return response()->json(['message' => 'Authentication verification is temporarily unavailable. Please retry.'], 503);
         } catch (RuntimeException $e) {
             return response()->json(['message' => 'Firebase ID token verification failed: ' . $e->getMessage()], 401);
         }

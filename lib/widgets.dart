@@ -212,22 +212,34 @@ class SeededDataBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
-    // Hide the banner once Firebase is connected and has real data.
-    if (app.apiOnline && !app.usingSeededCatalog) return const SizedBox.shrink();
-    if (app.apiOnline && app.usingSeededCatalog) {
+    if (app.backendReachable && !app.usingSeededCatalog && app.stores.isNotEmpty) {
+      return const SizedBox.shrink();
+    }
+    if (app.backendReachable && !app.usingSeededCatalog) {
       return const Padding(
         padding: EdgeInsets.fromLTRB(20, 0, 20, 10),
         child: InfoBanner(
-          'Connected to Firebase but no catalog data yet. Register a store and add products to get started.',
+          'LocalSpot API connected, but there are no approved stores in the catalog yet.',
           icon: Icons.cloud_outlined,
         ),
       );
     }
-    return const Padding(
-      padding: EdgeInsets.fromLTRB(20, 0, 20, 10),
+    if (!app.usingSeededCatalog) {
+      return const Padding(
+        padding: EdgeInsets.fromLTRB(20, 0, 20, 10),
+        child: InfoBanner(
+          'LocalSpot API is unavailable · live catalog data could not be loaded.',
+          icon: Icons.cloud_off_outlined,
+        ),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
       child: InfoBanner(
-        'Showing bundled Cubao sample data. Connect Firebase to use real store listings.',
-        icon: Icons.science_outlined,
+        app.apiOnline
+            ? 'LocalSpot API is unavailable · live catalog data could not be loaded.'
+            : 'Configure Firebase Auth and the LocalSpot API to load live catalog data.',
+        icon: Icons.cloud_off_outlined,
       ),
     );
   }

@@ -9,16 +9,14 @@ use Illuminate\Foundation\Queue\Queueable;
 /**
  * Process a 360° tour panorama node for privacy — Firestore-backed.
  * Tours store nodes as an embedded array in the tours collection.
- * This job updates the node's privacy_status to 'ready' or 'failed'.
- *
- * Actual person/face detection via ML is pending (plan Wave 3).
- * The publication gate in TourController blocks publication on failure.
+ * No privacy processor is configured yet. This placeholder job always fails
+ * closed and must never manufacture a sanitized URL or mark a node ready.
  */
 class ProcessTourNodeJob implements ShouldQueue
 {
     use Queueable;
 
-    public function __construct(public int $tourId, public int $nodeId, public bool $fail = false) {}
+    public function __construct(public int $tourId, public int $nodeId) {}
 
     public function handle(FirestoreService $firestore): void
     {
@@ -31,10 +29,10 @@ class ProcessTourNodeJob implements ShouldQueue
         $updated = false;
         foreach ($nodes as &$node) {
             if (($node['id'] ?? 0) === $this->nodeId) {
-                $fail = $this->fail || str_contains(strtolower($node['title'] ?? ''), 'fail');
-                $node['privacy_status'] = $fail ? 'failed' : 'ready';
-                $node['image'] = $fail ? '' : "/tours/public/{$tour['storeId']}/{$this->nodeId}.jpg";
+                $node['privacy_status'] = 'failed';
+                $node['image'] = '';
                 $node['owner_reviewed'] = false;
+                $node['privacy_error'] = 'Privacy processor is not configured.';
                 $updated = true;
                 break;
             }

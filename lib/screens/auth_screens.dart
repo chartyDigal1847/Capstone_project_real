@@ -5,6 +5,19 @@ import '../models.dart';
 import '../theme.dart';
 import '../widgets.dart';
 
+// Demo shortcuts are login credentials only. Firebase Auth validates them and
+// Laravel loads the authoritative profile, role and business data from Firestore.
+const _demoAccountEmails = <String>[
+  'maria@localspot.ph',
+  'nena@localspot.ph',
+  'tonyo@localspot.ph',
+  'ana@localspot.ph',
+  'admin@localspot.ph',
+  'lito@localspot.ph',
+  'bea@localspot.ph',
+];
+const _demoAccountPassword = 'demo1234';
+
 class WelcomePage extends StatelessWidget {
   const WelcomePage({super.key, required this.onLogin, required this.onRegister});
   final VoidCallback onLogin;
@@ -132,21 +145,23 @@ class _LoginPageState extends State<LoginPage> {
             padding: EdgeInsets.zero,
             child: Column(
               children: [
-                for (var i = 0; i < app.users.length; i++) ...[
+                for (var i = 0; i < _demoAccountEmails.length; i++) ...[
                   if (i > 0) const Divider(height: 1),
                   MenuRow(
-                    icon: switch (app.users[i].role) {
-                      AppRole.customer => Icons.person_outline,
-                      AppRole.owner => Icons.storefront_outlined,
-                      AppRole.staff => Icons.badge_outlined,
-                      AppRole.admin => Icons.admin_panel_settings_outlined,
-                    },
-                    title: app.users[i].name,
-                    subtitle: '${app.users[i].email} · ${roleLabel(app.users[i].role)}',
+                    icon: Icons.person_outline,
+                    title: _demoAccountEmails[i],
+                    subtitle: 'Demo sign-in · profile and role load from the database',
                     onTap: () async {
-                      final user = app.users[i];
-                      final message = await app.login(user.email, user.password.isEmpty ? 'demo1234' : user.password);
+                      final email = _demoAccountEmails[i];
+                      setState(() {
+                        this.email.text = email;
+                        password.text = _demoAccountPassword;
+                        busy = true;
+                        error = null;
+                      });
+                      final message = await app.login(email, _demoAccountPassword);
                       if (!mounted) return;
+                      setState(() => busy = false);
                       if (message != null) {
                         setState(() => error = message);
                       } else {

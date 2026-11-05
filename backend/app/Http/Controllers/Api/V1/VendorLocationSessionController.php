@@ -71,8 +71,11 @@ class VendorLocationSessionController extends Controller
         return response()->json(['data' => true]);
     }
 
-    public function current(int $storeId)
+    public function current(Request $request, int $storeId)
     {
+        $user = $this->userResolver->resolve($request);
+        abort_unless($this->userResolver->hasStoreGrant($user, $storeId, 'location'), 403, 'Not authorized to view this location session.');
+
         $session = $this->firestore->get('vendorSessions', (string) $storeId);
         abort_if($session === null || ($session['ended_at'] ?? null) !== null, 404, 'No active location session.');
 
@@ -82,7 +85,9 @@ class VendorLocationSessionController extends Controller
     public function stop(Request $request, int $storeId)
     {
         $user = $this->userResolver->resolve($request);
-        abort_unless($this->userResolver->hasStoreGrant($user, $storeId, 'location'), 403, 'Not authorized.');
+        // Owners and staff must be able to stop a live session even after the
+        // store is suspended or otherwise loses its approved status.
+        abort_unless($this->userResolver->hasStoreGrant($user, $storeId, 'location', requireApproved: false), 403, 'Not authorized.');
 
         $session = $this->firestore->get('vendorSessions', (string) $storeId);
         abort_if($session === null || ($session['ended_at'] ?? null) !== null, 404, 'No active location session.');

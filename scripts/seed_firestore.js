@@ -31,6 +31,30 @@ const now = new Date().toISOString();
 const hoursAgo = (h) => new Date(Date.now() - h * 3600000).toISOString();
 const daysFromNow = (d) => new Date(Date.now() + d * 86400000).toISOString();
 
+function encodeGeohash(latitude, longitude, precision = 7) {
+  const alphabet = '0123456789bcdefghjkmnpqrstuvwxyz';
+  let latMin = -90, latMax = 90, lngMin = -180, lngMax = 180;
+  let even = true, bits = 0, value = 0, hash = '';
+  while (hash.length < precision) {
+    if (even) {
+      const middle = (lngMin + lngMax) / 2;
+      if (longitude >= middle) { value = (value << 1) | 1; lngMin = middle; }
+      else { value <<= 1; lngMax = middle; }
+    } else {
+      const middle = (latMin + latMax) / 2;
+      if (latitude >= middle) { value = (value << 1) | 1; latMin = middle; }
+      else { value <<= 1; latMax = middle; }
+    }
+    even = !even;
+    if (++bits === 5) {
+      hash += alphabet[value];
+      bits = 0;
+      value = 0;
+    }
+  }
+  return hash;
+}
+
 async function upsert(collection, numericId, data) {
   const snap = await db.collection(collection).where('numericId', '==', numericId).limit(1).get();
   if (snap.empty) {
@@ -263,7 +287,9 @@ async function main() {
   await seedUsers();
 
   console.log('\n── Stores ──');
-  for (const s of stores) await upsert('stores', s.numericId, s);
+  for (const s of stores) {
+    await upsert('stores', s.numericId, { ...s, geohash: encodeGeohash(s.lat, s.lng) });
+  }
 
   console.log('\n── Products ──');
   for (const p of products) await upsert('products', p.numericId, p);

@@ -1,59 +1,52 @@
 # LocalSpot operations
 
-Pilot operations for a single-server Docker Compose deployment. Kubernetes is not required.
+This guide follows the target architecture in [LocalSpot_App_Development_Plan.md](../LocalSpot_App_Development_Plan.md): Firebase Authentication, Laravel as the trusted API, Firestore as the primary record store, and Cloud Storage for media. Production setup is not complete until the plan's security and recovery acceptance items have been verified.
 
-## Secrets and configuration
+## Environments and credentials
 
-- Keep `.env` and production secrets out of git and out of the image (see `backend/.dockerignore`).
-- Set `APP_ENV=production`, `APP_DEBUG=false`, a unique `APP_KEY`, and database passwords on the host.
-- Sanctum tokens expire (`SANCTUM_TOKEN_EXPIRATION_MINUTES`) and logout revokes the current token.
-- Restrict public map-tile and routing keys by app and domain. Do not put MySQL or AI credentials in Flutter.
-- Third-party Street View and street-level imagery are out of scope; do not enable Google Street View, Mapillary, KartaView, or Panoramax for this release.
+- Keep separate Firebase projects and credentials for development, staging and production.
+- Configure Laravel with `FIREBASE_PROJECT_ID`, `FIREBASE_STORAGE_BUCKET`, and Google Application Default Credentials or a secret-managed service identity.
+- Grant the backend identity only the Firestore and Storage permissions it needs. Never commit service-account keys or put them in Flutter configuration or container images.
+- Configure `LARAVEL_API_URL` per environment. Production traffic must use HTTPS.
+- Emulator and test-token bypasses must remain limited to local/test environments and must not be enabled in production.
 
-## HTTPS and network
+## Security boundary
 
-- Publish only the reverse proxy (443). The Compose file keeps MySQL on the private `internal` network.
-- Terminate TLS at Caddy, nginx, or a managed load balancer in front of `app:8080`.
-- Do not expose port 3306 on the public internet.
+- Flutter authenticates with Firebase Auth and sends refreshed Firebase ID tokens to Laravel.
+- Laravel verifies token signature and claims, resolves server-managed roles and memberships, and enforces ownership on every protected operation.
+- Flutter must not read or write Firestore business collections directly. Firestore Rules should deny those client operations; Laravel's server credentials use IAM.
+- Flutter media uploads must use Laravel-issued intents and UID-scoped quarantine paths. Raw originals stay private; only approved derivatives may be delivered publicly.
+- Restrict map/routing keys to their intended apps and domains. Do not place AI, Firestore or Storage service credentials in the client.
 
-## Images and releases
+## Local development
 
-1. CI must pass (`php artisan test`, `flutter analyze`, `flutter test`).
-2. CI builds `backend/docker/production/Dockerfile` and tags it with the git SHA. Do not deploy Sail or `latest` as the only identifier.
-3. Deploy that tag to staging, run `GET /api/v1/health`, then a login + product search smoke test.
-4. Back up production data. Run `php artisan migrate --force` as a controlled step, not from every replica on boot.
-5. Point Compose `LOCALSPOT_IMAGE` at the approved tag and recreate the `app` service.
+1. Start Firebase Auth, Firestore and Storage emulators using the repository's `firebase.json` when working locally.
+2. Configure the Laravel backend to use the intended Firebase project or emulator endpoints and set its API base URL.
+3. Run Flutter with an API URL reachable from the chosen device. Android Emulator typically reaches the host at `10.0.2.2`.
+4. Use seeded accounts and catalog records only for development. Do not treat demo records as migrated or production data.
 
-Rollback: keep the previous image tag. Restore the matching backup if a migration cannot be reversed safely. Re-point `LOCALSPOT_IMAGE` and recreate `app`.
+## Release and deployment
 
-## Backups
+1. Build and deploy the Laravel container through a staging environment first.
+2. Verify `GET /api/v1/health`, Firebase token verification, catalog/search, an authorized owner operation and a denied unauthorized operation.
+3. Verify Firestore Rules and Storage Rules with emulator tests before deployment.
+4. Verify quarantine upload authorization, server-side object verification, processing status and that raw originals cannot be read publicly.
+5. Confirm Firestore indexes, scheduled backups/exports, billing alerts, logs, health checks and rollback steps before production.
+6. Deploy a reviewed immutable image tag over HTTPS; keep secrets in the runtime secret store.
 
-Daily at 02:15 the app schedules `php artisan localspot:backup`, which writes JSON snapshots under `storage/app/backups`.
+## Backups and recovery
 
-For MySQL volume backups on the host (preferred for restore drills):
+Firestore exports and Cloud Storage objects both need recovery procedures. Configure scheduled Firestore exports to a protected bucket, define retention, and test restoring into a separate environment. Back up required Storage objects and metadata as well. A backup is not proven until a restore has been completed and checked outside production.
 
-```bash
-docker compose -f compose.production.yaml exec mysql \
-  sh -c 'mysqldump -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE"' > backup-$(date +%Y%m%d).sql
-```
+Record the release image, Firestore export, Storage recovery point and rollback steps for each production release. Do not use MySQL migrations or a MySQL volume as the production recovery plan for the target architecture.
 
-Restore drill (use a separate database or staging):
+## Monitoring and background work
 
-```bash
-php artisan localspot:restore storage/app/backups/<file>.json --force
-```
+- Monitor API health, Firebase token failures, Firestore/Storage errors, search latency, queue failures and billing.
+- Do not log bearer tokens, passwords, raw uploaded media or other unnecessary personal data.
+- Configure queue workers and retry/failed-job handling for recognition, media processing, tour privacy processing and search-index synchronization before enabling those capabilities.
+- Panorama publication must remain blocked until real server-side privacy processing and owner review succeed. The current placeholder processing job is not an ML privacy pipeline.
 
-A backup is not proven until it has been restored at least once in a non-production environment.
+## Out of scope
 
-Retain backups according to the pilot recovery objective (suggested: daily copies for 14 days).
-
-## Health, logs, and jobs
-
-- Container health: `GET /up` (Compose healthcheck) and `GET /api/v1/health` (app + database).
-- Logs: Docker stdout/stderr; do not log bearer tokens, passwords, or uploaded images.
-- Queue workers: add a separate process when async image recognition is enabled. Until then, `QUEUE_CONNECTION=database` with no extra worker is acceptable for the Cubao pilot.
-- 360° privacy: originals live on the private disk (`tours/originals/{id}.txt`) and expire after `TOUR_ORIGINAL_RETENTION_DAYS` (default 30). Public viewer URLs are `/storage/tours/{id}/sanitized.jpg`. This is a publication gate, not person-detection ML. Failed processing never publishes the original. Run `php artisan localspot:purge-tour-originals` daily.
-
-## Migrations
-
-Review each migration for compatibility before deploy. Prefer additive changes. Take a backup before destructive schema changes. Do not run `docker compose down -v` on production; that deletes the MySQL volume.
+Do not enable third-party Street View or street-level imagery, online ordering, checkout, delivery or rider tracking for this release.

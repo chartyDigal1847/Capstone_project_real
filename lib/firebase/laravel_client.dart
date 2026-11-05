@@ -182,13 +182,15 @@ class LaravelApiClient {
   Future<Map<String, dynamic>> uploadIntent({
     required String mediaType,
     required String contentType,
-    int? storeId,
+    required int sizeBytes,
+    required int storeId,
   }) async {
     final body = <String, dynamic>{
       'media_type': mediaType,
       'content_type': contentType,
+      'size_bytes': sizeBytes,
     };
-    if (storeId != null) body['store_id'] = storeId;
+    body['store_id'] = storeId;
     final result = await post('/media/upload-intent', body);
     return Map<String, dynamic>.from(result as Map);
   }

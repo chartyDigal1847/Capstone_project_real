@@ -1,8 +1,7 @@
-// api.dart — shared data-transfer utilities for LocalSpot.
+// api.dart — shared data-transfer utilities for the Laravel-backed app.
 //
-// The HTTP-based Laravel client has been removed as part of the Firebase
-// migration.  Only the exception type, JSON helpers and from-JSON
-// constructors remain here so the rest of the codebase is unaffected.
+// HTTP transport lives in firebase/laravel_client.dart. This file contains
+// the shared exception type, JSON helpers and model constructors.
 
 import 'models.dart';
 
@@ -70,17 +69,21 @@ T _enum<T extends Enum>(List<T> values, String raw, T fallback) {
 }
 
 UserAccount userFromJson(Map<String, dynamic> json) {
+  final rawOwnedStoreIds = json['owned_store_ids'] ?? json['ownedStoreIds'];
+  final rawMemberStoreIds = json['member_store_ids'] ?? json['memberStoreIds'];
+  final rawStoreGrants = json['store_grants'] ?? json['storeGrants'];
+
   return UserAccount(
-    id: asInt(json['id']),
-    name: json['name'] as String,
-    email: json['email'] as String,
+    id: asInt(json['id'] ?? json['numericId']),
+    name: json['name'] as String? ?? '',
+    email: json['email'] as String? ?? '',
     password: '',
-    role: _enum(AppRole.values, json['role'] as String, AppRole.customer),
-    ownedStoreIds: [...?(json['owned_store_ids'] as List?)?.map(asInt)],
-    memberStoreIds: [...?(json['member_store_ids'] as List?)?.map(asInt)],
+    role: _enum(AppRole.values, json['role']?.toString() ?? '', AppRole.customer),
+    ownedStoreIds: [...?(rawOwnedStoreIds as List?)?.map(asInt)],
+    memberStoreIds: [...?(rawMemberStoreIds as List?)?.map(asInt)],
     storeGrants: {
-      for (final row in (json['store_grants'] as List? ?? []))
-        asInt((row as Map)['store_id']): StoreGrant(
+      for (final row in (rawStoreGrants as List? ?? []))
+        asInt((row as Map)['store_id'] ?? row['storeId']): StoreGrant(
           inventory: row['inventory'] == true,
           promotions: row['promotions'] == true,
           location: row['location'] == true,

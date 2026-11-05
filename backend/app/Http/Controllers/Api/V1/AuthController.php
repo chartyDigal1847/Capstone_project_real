@@ -54,7 +54,7 @@ class AuthController extends Controller
         if ($existing !== null) {
             // Profile already exists — return it
             $user = $this->userResolver->resolve($request);
-            return response()->json(['data' => ['user' => $user]]);
+            return response()->json(['data' => ['user' => $this->userToApi($user)]]);
         }
 
         // Create minimal profile with least-privileged default role (customer)
@@ -74,7 +74,7 @@ class AuthController extends Controller
 
         $user = $this->userResolver->resolve($request);
 
-        return response()->json(['data' => ['user' => $user, 'stores' => []]], 201);
+        return response()->json(['data' => ['user' => $this->userToApi($user), 'stores' => []]], 201);
     }
 
     /**
@@ -107,7 +107,7 @@ class AuthController extends Controller
 
         return response()->json([
             'data' => [
-                'user' => $user,
+                'user' => $this->userToApi($user),
                 'stores' => $stores,
             ],
         ]);
@@ -143,7 +143,7 @@ class AuthController extends Controller
 
         return response()->json([
             'data' => [
-                'user' => $user,
+                'user' => $this->userToApi($user),
                 'stores' => $stores,
             ],
         ]);
@@ -183,6 +183,20 @@ class AuthController extends Controller
             'verification_note' => $data['verification_note'] ?? '',
             'location_mode' => $data['location_mode'] ?? 'fixed',
             'location_updated_at' => $data['location_updated_at'] ?? null,
+        ];
+    }
+
+    /** Serialize the Firestore profile using the Flutter API contract. */
+    private function userToApi(array $user): array
+    {
+        return [
+            'id' => (int) ($user['numericId'] ?? 0),
+            'name' => (string) ($user['name'] ?? ''),
+            'email' => (string) ($user['email'] ?? ''),
+            'role' => (string) ($user['role'] ?? 'customer'),
+            'owned_store_ids' => array_values($user['ownedStoreIds'] ?? []),
+            'member_store_ids' => array_values($user['memberStoreIds'] ?? []),
+            'store_grants' => array_values($user['storeGrants'] ?? []),
         ];
     }
 }

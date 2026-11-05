@@ -453,7 +453,6 @@ class _AddProductPageState extends State<AddProductPage> {
   final qty = TextEditingController(text: '10');
   Availability availability = Availability.inStock;
   String? _pickedFilePath;
-  bool _uploading = false;
   final attributeFields = <String, TextEditingController>{};
 
   TextEditingController _attr(String key) => attributeFields.putIfAbsent(key, TextEditingController.new);
@@ -550,34 +549,13 @@ class _AddProductPageState extends State<AddProductPage> {
     });
   }
 
-  /// Confirm the product listing and upload the photo through the
-  /// Cloud Storage quarantine flow (plan Wave 1) before creating the record.
-  Future<void> _confirmAndPublish(Store store) async {
+  /// Save a confirmed listing. Product photo publication is unavailable until
+  /// server-side processing and approved derivative delivery are implemented.
+  void _confirmAndPublish(Store store) {
     final parsed = double.tryParse(price.text);
     if (parsed == null || parsed < 0 || name.text.trim().isEmpty || unit.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Confirm the product name, a valid price and a selling unit.')));
       return;
-    }
-
-    // Upload product photo through the Cloud Storage quarantine flow.
-    String? uploadedImage;
-    if (_pickedFilePath != null && _app != null) {
-      setState(() => _uploading = true);
-      try {
-        final result = await _app!.mediaUpload.uploadProductPhoto(
-          filePath: _pickedFilePath!,
-          storeId: store.id,
-        );
-        uploadedImage = result.quarantinePath;
-      } catch (e) {
-        // Upload failed — create listing without image, but inform the owner.
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Photo upload skipped: listing created without photo.')),
-          );
-        }
-      }
-      if (mounted) setState(() => _uploading = false);
     }
 
     if (!mounted) return;
@@ -590,7 +568,7 @@ class _AddProductPageState extends State<AddProductPage> {
       brand: brand.text.trim(),
       packageSize: size.text.trim(),
       barcode: barcode.text.trim().isEmpty ? null : barcode.text.trim(),
-      image: uploadedImage,
+      image: null,
       price: parsed,
       unit: unit.text.trim(),
       quantity: int.tryParse(qty.text) ?? 0,
@@ -672,7 +650,7 @@ class _AddProductPageState extends State<AddProductPage> {
         if (loading) const Padding(padding: EdgeInsets.symmetric(vertical: 16), child: Center(child: CircularProgressIndicator())),
         if (suggestions.isNotEmpty) ...[
           const SizedBox(height: 12),
-          const Eyebrow('AI / OCR / BARCODE SUGGESTIONS'),
+          const Eyebrow('CATALOG AND BARCODE SUGGESTIONS'),
           const SizedBox(height: 8),
           SoftCard(
             padding: EdgeInsets.zero,
@@ -702,10 +680,18 @@ class _AddProductPageState extends State<AddProductPage> {
           ),
         ],
         if (manual || selected != null) ...[
+          if (_pickedFilePath != null)
+            const Padding(
+              padding: EdgeInsets.only(top: 10),
+              child: InfoBanner(
+                'The selected photo is not stored with this listing yet. Image recognition and approved photo publishing are still being implemented.',
+                icon: Icons.info_outline,
+              ),
+            ),
           const Padding(
             padding: EdgeInsets.only(top: 12, bottom: 8),
             child: InfoBanner(
-              'AI suggestions are not inventory. Confirm identity yourself. Price, stock, safety ratings and compatibility are never invented when evidence is missing.',
+              'Catalog matches are suggestions, not inventory. Confirm identity yourself. Price, stock, safety ratings and compatibility are never invented when evidence is missing.',
               icon: Icons.verified_user_outlined,
             ),
           ),
@@ -759,8 +745,8 @@ class _AddProductPageState extends State<AddProductPage> {
           ),
           const SizedBox(height: 16),
           PrimaryButton(
-            _uploading ? 'Uploading photo…' : 'Confirm and publish listing',
-            onPressed: (app.writeBusy || _uploading)
+            'Confirm and publish listing',
+            onPressed: app.writeBusy
                 ? null
                 : () => _confirmAndPublish(store),
           ),
@@ -1094,16 +1080,10 @@ class TourEditorPage extends StatefulWidget {
 
 class _TourEditorPageState extends State<TourEditorPage> {
   final title = TextEditingController();
-  final image = TextEditingController(text: 'https://images.unsplash.com/photo-1441986300917-64674bd600d8?auto=format&fit=crop&w=1200&q=80');
+  final image = TextEditingController();
   TourNode? connectFrom;
   var publishing = false;
   bool _uploading = false;
-
-  static const samples = [
-    ('Storefront', 'https://images.unsplash.com/photo-1604719312566-8912e9227c6a?auto=format&fit=crop&w=1200&q=80'),
-    ('Aisle', 'https://images.unsplash.com/photo-1578916171728-46686eac8d58?auto=format&fit=crop&w=1200&q=80'),
-    ('Counter', 'https://images.unsplash.com/photo-1534723452862-4c874018d66d?auto=format&fit=crop&w=1200&q=80'),
-  ];
 
   @override
   void dispose() {
@@ -1119,14 +1099,12 @@ class _TourEditorPageState extends State<TourEditorPage> {
       setState(() => image.text = file.path);
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Gallery unavailable. Paste a panorama URL or use a sample viewpoint.')));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Could not open the gallery. Please try again.')));
     }
   }
 
-  /// Add a viewpoint to the tour. If the panorama is a local file,
-  /// upload it through the Cloud Storage quarantine flow (plan Wave 1)
-  /// before creating the node. The publication gate in the TourController
-  /// blocks publishing until privacy processing succeeds.
+  /// Upload a local panorama before attaching it to a draft node. The node
+  /// remains private until a real server-side privacy worker is available.
   Future<void> _addViewpoint(StoreTour tour) async {
     final app = AppScope.of(context);
     final store = app.ownedStore();
@@ -1135,31 +1113,49 @@ class _TourEditorPageState extends State<TourEditorPage> {
         : title.text.trim();
     final imagePath = image.text.trim();
 
-    String nodeImage = imagePath;
+    if (store == null || imagePath.isEmpty || imagePath.startsWith('http')) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Choose a local panorama file. Remote URLs and sample images cannot be published.')),
+      );
+      return;
+    }
 
-    // If the image is a local file path (not a URL), upload through quarantine.
-    if (imagePath.isNotEmpty && !imagePath.startsWith('http') && store != null) {
-      setState(() => _uploading = true);
-      try {
-        final result = await app.mediaUpload.uploadTourPanorama(
-          filePath: imagePath,
-          storeId: store.id,
+    int mediaAssetId;
+    setState(() => _uploading = true);
+    try {
+      final result = await app.mediaUpload.uploadTourPanorama(
+        filePath: imagePath,
+        storeId: store.id,
+      );
+      mediaAssetId = result.assetId;
+    } on FormatException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(error.message.toString())),
         );
-        nodeImage = result.quarantinePath;
-      } catch (_) {
-        // Upload failed — use the original path as fallback.
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Panorama upload skipped. Node created with placeholder.')),
-          );
-        }
       }
+      return;
+    } on ApiException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(error.message)),
+        );
+      }
+      return;
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Panorama upload failed. Check Storage setup; no viewpoint was added.')),
+        );
+      }
+      return;
+    } finally {
       if (mounted) setState(() => _uploading = false);
     }
 
     if (!mounted) return;
 
-    app.addTourNode(tour, label, nodeImage);
+    app.addTourNode(tour, label, mediaAssetId);
     title.clear();
     setState(() {});
   }
@@ -1235,18 +1231,17 @@ class _TourEditorPageState extends State<TourEditorPage> {
                       Column(
                         children: [
                           if (n.privacyStatus != PrivacyStatus.ready)
-                            TextButton(
-                              onPressed: () async {
-                                await app.processTourNode(tour, n);
-                                if (mounted) setState(() {});
-                              },
-                              child: const Text('Process'),
+                            const TextButton(
+                              onPressed: null,
+                              child: Text('Privacy worker unavailable'),
                             ),
                           TextButton(
-                            onPressed: () => setState(() => app.addManualTourBlur(tour, n)),
+                            onPressed: n.privacyStatus == PrivacyStatus.ready && n.image.isNotEmpty
+                                ? () => setState(() => app.addManualTourBlur(tour, n))
+                                : null,
                             child: const Text('Add blur region'),
                           ),
-                          if (!n.ownerReviewed)
+                          if (!n.ownerReviewed && n.privacyStatus == PrivacyStatus.ready && n.image.isNotEmpty)
                             TextButton(
                               onPressed: () {
                                 final error = app.reviewTourNode(tour, n);
@@ -1295,24 +1290,7 @@ class _TourEditorPageState extends State<TourEditorPage> {
               children: [
                 LabeledField('Viewpoint title', title),
                 const SizedBox(height: 12),
-                LabeledField('Panorama URL or local file', image),
-                const SizedBox(height: 12),
-                FilterMenu<String>(
-                  label: 'Sample viewpoint',
-                  value: '',
-                  items: [
-                    const DropdownMenuItem(value: '', child: Text('Choose a sample')),
-                    for (final sample in samples) DropdownMenuItem(value: sample.$1, child: Text(sample.$1)),
-                  ],
-                  onChanged: (name) {
-                    final sample = samples.where((item) => item.$1 == name).firstOrNull;
-                    if (sample == null) return;
-                    setState(() {
-                      title.text = sample.$1;
-                      image.text = sample.$2;
-                    });
-                  },
-                ),
+                LabeledField('Selected local panorama file', image),
                 const SizedBox(height: 12),
                 OutlinedButton.icon(onPressed: _pickPanorama, icon: const Icon(Icons.photo_outlined, size: 18), label: const Text('Upload panorama')),
               ],
@@ -1330,9 +1308,10 @@ class _TourEditorPageState extends State<TourEditorPage> {
             'Publish tour',
             onPressed: tour.nodes.length < 2 || publishing || app.writeBusy
                 ? null
-                : () {
+                : () async {
                     setState(() => publishing = true);
-                    final error = app.publishTour(tour);
+                    final error = await app.publishTour(tour);
+                    if (!mounted) return;
                     setState(() => publishing = false);
                     if (error != null && context.mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error)));
@@ -1342,7 +1321,7 @@ class _TourEditorPageState extends State<TourEditorPage> {
           const Padding(
             padding: EdgeInsets.only(top: 12),
             child: InfoBanner(
-              'Originals are stored privately and expire after the retention window. Public tours use a separate sanitized derivative, not a URL fragment. Processing here is a publication gate, not a guarantee that every person was detected. Add rectangular blur regions for anything missed, and do not publish failed viewpoints.',
+              'Panorama privacy processing is not configured yet. Uploaded viewpoints remain private and cannot be reviewed or published until a server-side processor creates and verifies a sanitized derivative.',
               icon: Icons.privacy_tip_outlined,
             ),
           ),

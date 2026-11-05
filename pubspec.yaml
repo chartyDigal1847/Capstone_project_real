@@ -8,11 +8,8 @@ dependencies:
   flutter:
     sdk: flutter
   # Firebase — Authentication is the sole identity provider.
-  # cloud_firestore is retained only for transitional development; the
-  # target architecture routes all business reads/writes through Laravel.
   firebase_core: ^3.13.0
   firebase_auth: ^5.5.2
-  cloud_firestore: ^5.6.6
   firebase_storage: ^12.4.5
   # HTTP client for Laravel API calls with Firebase ID token auth.
   dio: ^5.7.0

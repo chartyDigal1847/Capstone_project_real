@@ -16,9 +16,7 @@ const defaultCenterLng = 121.0568;
 const radiiKm = [1.0, 3.0, 5.0, 10.0];
 
 class AppState extends ChangeNotifier {
-  AppState() {
-    _seed();
-  }
+  AppState();
 
   final api = LocalSpotGateway();
   late final authRepo = AuthRepository(api);
@@ -26,13 +24,22 @@ class AppState extends ChangeNotifier {
   // Media upload service for the Cloud Storage quarantine flow (plan Wave 1).
   late final mediaUpload = MediaUploadService();
 
-  // [apiOnline] is true when Firebase is initialised and reachable.
-  // The app falls back to on-device seeded demo data when false.
+  // [apiOnline] means Firebase is initialized so authenticated API requests
+  // can be attempted. [backendReachable] tracks a successful API read.
   bool apiOnline = false;
-  bool usingSeededCatalog = true;
+  bool backendReachable = false;
+  bool usingSeededCatalog = false;
   bool writeBusy = false;
   ApiException? lastApiError;
-  String connectionNote = 'Connecting to Firebase…';
+  String connectionNote = 'Connecting to the LocalSpot API…';
+
+  // Temporary client identifiers are replaced with server records after writes.
+  int _nextFeedback = -1;
+  int _nextProduct = -1;
+  int _nextListing = -1;
+  int _nextPromo = -1;
+  int _nextTour = -1;
+  int _nextReport = -1;
 
   final users = <UserAccount>[];
   final stores = <Store>[];
@@ -44,6 +51,7 @@ class AppState extends ChangeNotifier {
   final feedback = <PilotFeedback>[];
   final favoriteStoreIds = <int>{};
   final favoriteProductIds = <int>{};
+  final _pendingFavoriteWrites = <String>{};
   final stockChanges = <int, List<StockChange>>{};
   final auditLogs = <AuditEntry>[];
 
@@ -93,18 +101,6 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  // Counters for demo/development mode (local in-memory data only).
-  int _nextUser = 10;
-  // _nextStore is no longer used — registerStore now goes through Laravel.
-  // ignore: unused_field, prefer_final_fields
-  final int _nextStore = 10;
-  int _nextProduct = 30;
-  int _nextListing = 40;
-  int _nextPromo = 10;
-  int _nextTour = 10;
-  int _nextReport = 10;
-  int _nextFeedback = 10;
-
   bool get signedIn => currentUser != null;
   AppRole get role => currentUser?.role ?? AppRole.customer;
 
@@ -123,9 +119,6 @@ class AppState extends ChangeNotifier {
     if (user == null) return null;
     final managed = managedStores();
     if (managed.isNotEmpty) return managed.first;
-    if (user.role == AppRole.staff) {
-      return stores.where((s) => s.id == 1).firstOrNull;
-    }
     return null;
   }
 
@@ -135,27 +128,25 @@ class AppState extends ChangeNotifier {
     final firebaseReady = Firebase.apps.isNotEmpty;
 
     // Show a connecting message immediately so the UI isn't blank.
-    connectionNote = 'Connecting…';
+    connectionNote = 'Connecting to the LocalSpot API…';
     notifyListeners();
 
     if (firebaseReady) {
       apiOnline = true;
       try {
         final data = await catalogRepo.catalog();
-        // Check if the gateway returned stale cached data.
-        final isStale = data['_stale'] == true;
         _applyCatalog(data);
-        usingSeededCatalog = stores.isEmpty;
-        connectionNote = isStale
-            ? '⚠ Showing cached data — server unreachable'
-            : 'Connected · Cubao pilot';
+        usingSeededCatalog = false;
+        backendReachable = true;
+        connectionNote = 'Connected to the LocalSpot API';
         // Restore session from Firebase Auth persisted state if available.
         if (api.token != null) {
           try {
             await _hydrateSession();
           } catch (e) {
             if (e is BackendUnreachableException) {
-              connectionNote = '⚠ Showing cached data — server unreachable';
+              backendReachable = false;
+              connectionNote = '⚠ LocalSpot API unreachable — live data could not be loaded';
             } else {
               // Auth token may have expired; clear and fall through to guest mode.
               currentUser = null;
@@ -163,22 +154,19 @@ class AppState extends ChangeNotifier {
           }
         }
       } on BackendUnreachableException {
-        // Laravel is unreachable — show stale cache if any, else empty.
-        usingSeededCatalog = stores.isEmpty;
-        connectionNote = '⚠ Server unreachable — check your connection and pull to refresh';
+        backendReachable = false;
+        connectionNote = '⚠ LocalSpot API unreachable — live data could not be loaded';
       } catch (e) {
-        // Firebase is initialised but returned an error.
-        usingSeededCatalog = stores.isEmpty;
+        // Firebase is initialized, but the API request failed.
+        backendReachable = false;
         connectionNote = 'Error loading catalog: ${e.toString().length > 60 ? e.toString().substring(0, 60) : e}';
       }
     } else {
-      // Firebase not configured — show seeded demo catalog for development.
-      // This uses local in-memory data, NOT Firestore. It does not bypass
-      // the Laravel architecture because it doesn't access any production data.
+      // No local demo data: business records must come from Laravel/Firestore.
       apiOnline = false;
-      usingSeededCatalog = true;
-      connectionNote =
-          'Firebase not configured · using on-device demo data · fill in firebase_options.dart to connect';
+      backendReachable = false;
+      usingSeededCatalog = false;
+      connectionNote = 'Firebase Auth is not configured · connect to LocalSpot API to load live data';
     }
     notifyListeners();
   }
@@ -293,14 +281,28 @@ class AppState extends ChangeNotifier {
       final data = await catalogRepo.catalog();
       _applyCatalog(data);
       usingSeededCatalog = false;
-      connectionNote = 'Connected to Firebase · Cubao pilot';
+      backendReachable = true;
+      connectionNote = 'Connected to the LocalSpot API';
       notifyListeners();
-    } catch (_) {}
+    } on BackendUnreachableException {
+      backendReachable = false;
+      connectionNote = '⚠ LocalSpot API unreachable — live data could not be loaded';
+      notifyListeners();
+    } catch (error) {
+      backendReachable = false;
+      connectionNote = 'Catalog refresh failed: ${error.toString().length > 80 ? error.toString().substring(0, 80) : error}';
+      notifyListeners();
+    }
   }
 
   Future<void> refreshNearby() async {
     if (!apiOnline) return;
-    // Firebase catalog is the source of truth — use the full catalog
+    // Load the complete server catalog before requesting location-specific data.
+    if (usingSeededCatalog) {
+      await refreshCatalog();
+      if (usingSeededCatalog) return;
+    }
+    // Laravel's catalog is the source of truth — use the full catalog
     // path which already returns location-aware store data.
     try {
       final query = {
@@ -331,8 +333,18 @@ class AppState extends ChangeNotifier {
           vendorSessions.remove(incoming.id);
         }
       }
+      backendReachable = true;
+      connectionNote = 'Connected to the LocalSpot API';
       notifyListeners();
-    } catch (_) {}
+    } on BackendUnreachableException {
+      backendReachable = false;
+      connectionNote = '⚠ LocalSpot API unreachable — showing cached data';
+      notifyListeners();
+    } catch (error) {
+      backendReachable = false;
+      connectionNote = 'Nearby stores refresh failed: ${error.toString().length > 80 ? error.toString().substring(0, 80) : error}';
+      notifyListeners();
+    }
   }
 
   void _applyCatalog(Map data) {
@@ -383,19 +395,7 @@ class AppState extends ChangeNotifier {
         return error;
       }
     }
-    // Development/demo mode — Firebase not configured.
-    // Uses local in-memory seeded data for UI testing. Does NOT access Firestore.
-    final user = UserAccount(
-      id: _nextUser++,
-      name: name,
-      email: email,
-      password: password,
-      role: role,
-    );
-    users.add(user);
-    currentUser = user;
-    notifyListeners();
-    return null;
+    return ApiException('Firebase Auth and the LocalSpot API are required to create an account.');
   }
 
   Future<String?> login(String email, String password) async {
@@ -405,12 +405,6 @@ class AppState extends ChangeNotifier {
             await authRepo.login(email: email, password: password);
         currentUser =
             userFromJson(Map<String, dynamic>.from(data['user'] as Map));
-        // Check if we got a minimal profile (backend unreachable).
-        final backendUnreachable =
-            (data['user'] as Map?)?.containsKey('_backend_unreachable') == true;
-        if (backendUnreachable) {
-          connectionNote = '⚠ Signed in via Firebase, but server was unreachable — permissions may be limited';
-        }
         // Hydrate in background so the UI navigates immediately.
         unawaited(() async {
           try {
@@ -439,14 +433,7 @@ class AppState extends ChangeNotifier {
         return error.message;
       }
     }
-    // Development/demo mode — Firebase not configured.
-    // Uses local in-memory seeded data for UI testing. Does NOT access Firestore.
-    final match =
-        users.where((u) => u.email == email && u.password == password);
-    if (match.isEmpty) return 'Email or password is incorrect.';
-    currentUser = match.first;
-    notifyListeners();
-    return null;
+    return 'Firebase Auth and the LocalSpot API are required to sign in.';
   }
 
   void logout() {
@@ -805,7 +792,7 @@ class AppState extends ChangeNotifier {
       searchLastPage = (meta['last_page'] as num?)?.toInt() ?? 1;
       if (rows is! List) {
         if (!nextPage) remoteSearchHits = null;
-        searchNote = 'Search API unavailable · showing on-device results';
+        searchNote = 'Search API returned no live results.';
       } else {
         final pageHits = <SearchHit>[];
         for (final row in rows) {
@@ -835,7 +822,7 @@ class AppState extends ChangeNotifier {
       if (generation != _searchGeneration) return;
       if (!nextPage) remoteSearchHits = null;
       // Show the actual error message so it's visible in the UI during development.
-      searchNote = 'Search unavailable · ${e.toString().length > 80 ? e.toString().substring(0, 80) : e} · showing on-device results';
+      searchNote = 'Search unavailable · ${e.toString().length > 80 ? e.toString().substring(0, 80) : e}';
     }
     if (generation != _searchGeneration) return;
     searchBusy = false;
@@ -852,20 +839,55 @@ class AppState extends ChangeNotifier {
     };
   }
 
-  void toggleFavoriteStore(int id) {
-    if (!favoriteStoreIds.add(id)) favoriteStoreIds.remove(id);
-    if (apiOnline && api.token != null) {
-      unawaited(api.post('/favorites/toggle', {'favoritable_type': 'store', 'favoritable_id': id}));
-    }
-    notifyListeners();
-  }
+  Future<String?> toggleFavoriteStore(int id) => _toggleFavorite('store', id, favoriteStoreIds);
 
-  void toggleFavoriteProduct(int id) {
-    if (!favoriteProductIds.add(id)) favoriteProductIds.remove(id);
-    if (apiOnline && api.token != null) {
-      unawaited(api.post('/favorites/toggle', {'favoritable_type': 'product', 'favoritable_id': id}));
+  Future<String?> toggleFavoriteProduct(int id) => _toggleFavorite('product', id, favoriteProductIds);
+
+  Future<String?> _toggleFavorite(String type, int id, Set<int> favorites) async {
+    final key = '$type:$id';
+    if (!_pendingFavoriteWrites.add(key)) return 'Please wait for the current favorite update to finish.';
+
+    final wasSaved = favorites.contains(id);
+    if (wasSaved) {
+      favorites.remove(id);
+    } else {
+      favorites.add(id);
     }
     notifyListeners();
+
+    try {
+      if (!apiOnline || api.token == null) return null;
+
+      final result = await api.post('/favorites/toggle', {
+        'favoritable_type': type,
+        'favoritable_id': id,
+      }) as Map;
+      final saved = result['saved'] == true;
+      if (saved) {
+        favorites.add(id);
+      } else {
+        favorites.remove(id);
+      }
+      return null;
+    } on ApiException catch (error) {
+      lastApiError = error;
+      if (wasSaved) {
+        favorites.add(id);
+      } else {
+        favorites.remove(id);
+      }
+      return error.message;
+    } catch (_) {
+      if (wasSaved) {
+        favorites.add(id);
+      } else {
+        favorites.remove(id);
+      }
+      return 'Could not update this favorite. Please try again.';
+    } finally {
+      _pendingFavoriteWrites.remove(key);
+      notifyListeners();
+    }
   }
 
   Future<Store> registerStore({
@@ -1232,7 +1254,7 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  void addTourNode(StoreTour tour, String title, String image) {
+  void addTourNode(StoreTour tour, String title, int mediaAssetId) {
     _beginWrite();
     final node = TourNode(
       id: tour.nodes.length + 1,
@@ -1252,32 +1274,30 @@ class AppState extends ChangeNotifier {
     if (apiOnline && api.token != null) {
       unawaited(() async {
         try {
-          final data = await api.post('/tours/${tour.id}/nodes', {'title': title, 'image': image}) as Map;
+          final data = await api.post('/tours/${tour.id}/nodes', {
+            'title': title,
+            'media_asset_id': mediaAssetId,
+          }) as Map;
           _replaceTour(tour.id, tourFromJson(Map<String, dynamic>.from(data)));
+        } on ApiException catch (error) {
+          lastApiError = error;
+          tour.nodes.removeWhere((candidate) => candidate.id == node.id);
+          if (tour.nodes.isNotEmpty) {
+            tour.nodes.last.connections.remove(node.id);
+          }
+          notifyListeners();
+        } catch (_) {
+          tour.nodes.removeWhere((candidate) => candidate.id == node.id);
+          if (tour.nodes.isNotEmpty) {
+            tour.nodes.last.connections.remove(node.id);
+          }
+          notifyListeners();
         } finally {
           _endWrite();
         }
       }());
     } else {
       _endWrite();
-    }
-  }
-
-  Future<void> processTourNode(StoreTour tour, TourNode node, {bool fail = false}) async {
-    if (fail) {
-      node.privacyStatus = PrivacyStatus.failed;
-      node.image = '';
-      node.ownerReviewed = false;
-    } else {
-      node.privacyStatus = PrivacyStatus.ready;
-      node.image = '/storage/tours/${node.id}/sanitized.jpg';
-    }
-    notifyListeners();
-    if (apiOnline && api.token != null) {
-      try {
-        final data = await api.post('/tours/${tour.id}/nodes/${node.id}/process', {'fail': fail}) as Map;
-        _replaceTour(tour.id, tourFromJson(Map<String, dynamic>.from(data)));
-      } catch (_) {}
     }
   }
 
@@ -1296,10 +1316,6 @@ class AppState extends ChangeNotifier {
   void addManualTourBlur(StoreTour tour, TourNode node, {BlurRegion? region}) {
     final mask = region ?? const BlurRegion(x: 0.35, y: 0.35, w: 0.3, h: 0.3);
     node.manualBlur = true;
-    node.privacyStatus = PrivacyStatus.ready;
-    if (node.image.trim().isEmpty) {
-      node.image = '/storage/tours/${node.id}/sanitized.jpg';
-    }
     node.blurRegions = [...node.blurRegions, mask];
     notifyListeners();
     if (apiOnline && api.token != null) {
@@ -1311,27 +1327,30 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  String? publishTour(StoreTour tour) {
+  Future<String?> publishTour(StoreTour tour) async {
     if (tour.nodes.length < 2) return 'Connect at least two viewpoints before publishing.';
     if (tour.nodes.any((node) => !node.canPublish || node.image.contains('#') || node.image.contains('tours/originals'))) {
       return 'Every viewpoint needs privacy processing and owner review before publishing.';
     }
+    if (!apiOnline || api.token == null) {
+      return 'Connect to the server before publishing this tour.';
+    }
+
     _beginWrite();
-    tour.status = TourStatus.published;
-    notifyListeners();
-    if (apiOnline && api.token != null) {
-      unawaited(() async {
-        try {
-          await api.post('/tours/${tour.id}/publish');
-          await refreshCatalog();
-        } finally {
-          _endWrite();
-        }
-      }());
-    } else {
+    try {
+      await api.post('/tours/${tour.id}/publish');
+      tour.status = TourStatus.published;
+      notifyListeners();
+      await refreshCatalog();
+      return null;
+    } on ApiException catch (error) {
+      lastApiError = error;
+      return error.message;
+    } catch (_) {
+      return 'The tour could not be published. Please try again.';
+    } finally {
       _endWrite();
     }
-    return null;
   }
 
   void addReport(String target, String reason) {
@@ -1462,9 +1481,6 @@ class AppState extends ChangeNotifier {
   StoreTour? draftOrPublishedTour(int storeId) =>
       tours.where((t) => t.storeId == storeId).firstOrNull;
 
-  CatalogProduct? _named(String needle) =>
-      products.where((p) => p.name.toLowerCase().contains(needle) || p.aliases.any((a) => a.toLowerCase().contains(needle))).firstOrNull;
-
   Future<dynamic> _awaitRecognitionJob(dynamic data, int generation) async {
     if (data is! Map) return data;
     final id = data['id'];
@@ -1512,15 +1528,6 @@ class AppState extends ChangeNotifier {
     return fallback.isEmpty ? const [] : [RecognizedObject(label: 'item', suggestions: fallback)];
   }
 
-  List<String> _objectHints(String hint) {
-    final parts = hint
-        .split(RegExp(r'\s*(?:,|&|\band\b)\s+', caseSensitive: false))
-        .map((part) => part.trim())
-        .where((part) => part.isNotEmpty)
-        .toList();
-    return parts.isEmpty ? [hint] : parts;
-  }
-
   Future<List<RecognitionSuggestion>> suggestFromCapture({String? hint, String? barcode, String? image}) async {
     final generation = ++_recognitionGeneration;
     if (apiOnline) {
@@ -1536,10 +1543,7 @@ class AppState extends ChangeNotifier {
         return _suggestionsFrom(data);
       } catch (_) {}
     }
-    if (generation != _recognitionGeneration) return const [];
-    final parts = _objectHints(hint ?? barcode ?? 'unknown');
-    if (parts.length == 1) return suggestFromPhoto(parts.first);
-    return [for (final part in parts) ...suggestFromPhoto(part)];
+    return const [];
   }
 
   Future<VisualSearchResult> visualSearch({String? hint, String? barcode, String? image}) async {
@@ -1576,57 +1580,7 @@ class AppState extends ChangeNotifier {
         );
       } catch (_) {}
     }
-    final suggestions = await suggestFromCapture(hint: hint, barcode: barcode, image: image);
-    final hits = <SearchHit>[];
-    final seen = <int>{};
-    for (final suggestion in suggestions) {
-      final product = suggestion.product;
-      if (product == null) continue;
-      for (final hit in listingsForProduct(product.id)) {
-        if (seen.add(hit.listing.id)) {
-          hits.add(SearchHit(
-            listing: hit.listing,
-            store: hit.store,
-            product: hit.product,
-            distanceKm: hit.distanceKm,
-            matchType: SearchMatchType.similar,
-          ));
-        }
-      }
-    }
-    final query = hint ?? barcode ?? '';
-    if (hits.isEmpty && query.trim().isNotEmpty) {
-      for (final hit in searchListings(query)) {
-        if (seen.add(hit.listing.id)) hits.add(hit);
-      }
-    }
-    final uncertain = suggestions.isEmpty || suggestions.every((s) => s.product == null || s.confidence < 0.5);
-    final objects = [
-      for (final part in _objectHints(hint ?? barcode ?? 'item'))
-        RecognizedObject(label: part, suggestions: suggestFromPhoto(part)),
-    ];
-    return VisualSearchResult(suggestions: suggestions, hits: hits, uncertain: uncertain, objects: objects);
-  }
-
-  List<RecognitionSuggestion> suggestFromPhoto(String imageKey) {
-    return switch (imageKey) {
-      'mango' => [
-          RecognitionSuggestion(_named('mango'), 'Likely mango · produce', 0.86, unknownFields: const ['price', 'stock', 'variety']),
-          RecognitionSuggestion(_named('banana'), 'Similar fruit · banana', 0.41, unknownFields: const ['price', 'stock', 'variety']),
-        ],
-      'oil' => [
-          RecognitionSuggestion(_named('oil'), 'Cooking oil bottle detected', 0.78, ocrText: 'Minola 1L', unknownFields: const ['price', 'stock']),
-        ],
-      'sardines' => [
-          RecognitionSuggestion(_named('sardine'), 'Canned sardines · OCR: YOUNG\'S', 0.81, ocrText: "YOUNG'S TOWN", unknownFields: const ['price', 'stock']),
-        ],
-      'hammer' => [
-          RecognitionSuggestion(_named('hammer'), 'Likely claw hammer · hardware', 0.84, unknownFields: const ['price', 'stock', 'dimensions']),
-        ],
-      _ => [
-          RecognitionSuggestion(null, 'Uncertain match · encode manually', 0.22, unknownFields: const ['identity', 'price', 'stock']),
-        ],
-    };
+    return VisualSearchResult(suggestions: const [], hits: const [], uncertain: true);
   }
 
   bool _matchesProduct(CatalogProduct product, String q) {
@@ -1721,333 +1675,7 @@ class AppState extends ChangeNotifier {
 
   double _rad(double d) => d * pi / 180;
 
-  void _seed() {
-    users.addAll([
-      UserAccount(id: 1, name: 'Maria Santos', email: 'maria@localspot.ph', password: 'demo1234', role: AppRole.customer),
-      UserAccount(id: 2, name: 'Aling Nena', email: 'nena@localspot.ph', password: 'demo1234', role: AppRole.owner, ownedStoreIds: [1]),
-      UserAccount(id: 3, name: 'Mang Tonyo', email: 'tonyo@localspot.ph', password: 'demo1234', role: AppRole.owner, ownedStoreIds: [2]),
-      UserAccount(id: 4, name: 'Ana Cruz', email: 'ana@localspot.ph', password: 'demo1234', role: AppRole.staff, memberStoreIds: [1], storeGrants: {1: StoreGrant(inventory: true)}),
-      UserAccount(id: 5, name: 'Admin Reyes', email: 'admin@localspot.ph', password: 'demo1234', role: AppRole.admin),
-      UserAccount(id: 6, name: 'Lito Mercado', email: 'lito@localspot.ph', password: 'demo1234', role: AppRole.owner, ownedStoreIds: [6]),
-      UserAccount(id: 7, name: 'Bea Tan', email: 'bea@localspot.ph', password: 'demo1234', role: AppRole.owner, ownedStoreIds: [7]),
-    ]);
 
-    stores.addAll([
-      Store(
-        id: 1,
-        ownerId: 2,
-        name: "Aling Nena's Sari-Sari",
-        type: StoreType.sariSari,
-        status: StoreStatus.approved,
-        lat: 14.6198,
-        lng: 121.0562,
-        barangay: 'Socorro',
-        city: 'Quezon City',
-        address: '12 P. Tuazon Blvd',
-        landmark: 'Beside the waiting shed near Aurora Blvd',
-        schedule: 'Daily 6:00 AM – 10:00 PM',
-        isMobile: false,
-        image: 'https://images.unsplash.com/photo-1604719312566-8912e9227c6a?auto=format&fit=crop&w=900&q=80',
-      ),
-      Store(
-        id: 2,
-        ownerId: 3,
-        name: "Mang Tonyo's Fruit Stall",
-        type: StoreType.fruitVegetable,
-        status: StoreStatus.approved,
-        lat: 14.6184,
-        lng: 121.0539,
-        barangay: 'South Triangle',
-        city: 'Quezon City',
-        address: 'Farmer’s Market inner aisle 4',
-        landmark: 'Near the mango row, green tarpaulin',
-        schedule: 'Tue–Sun 5:00 AM – 6:00 PM',
-        isMobile: false,
-        image: 'https://images.unsplash.com/photo-1488459716781-31db52582fe9?auto=format&fit=crop&w=900&q=80',
-      ),
-      Store(
-        id: 3,
-        ownerId: 2,
-        name: 'QuickGo Mini Mart',
-        type: StoreType.convenience,
-        status: StoreStatus.approved,
-        lat: 14.6216,
-        lng: 121.0589,
-        barangay: 'E. Rodriguez',
-        city: 'Quezon City',
-        address: 'G/F Gateway-adjacent strip',
-        landmark: 'Across the jeepney stop',
-        schedule: 'Open 24 hours',
-        isMobile: false,
-        image: 'https://images.unsplash.com/photo-1604719311684-14b4bd8fda7c?auto=format&fit=crop&w=900&q=80',
-      ),
-      Store(
-        id: 4,
-        ownerId: 3,
-        name: 'Kuya Ben Mobile Taho',
-        type: StoreType.streetVendor,
-        status: StoreStatus.approved,
-        lat: 14.6171,
-        lng: 121.0551,
-        barangay: 'Kamuning',
-        city: 'Quezon City',
-        address: 'Selling along Scout area',
-        landmark: 'Usually near the barangay hall mornings',
-        schedule: 'Mon–Sat 6:00 AM – 11:00 AM',
-        isMobile: true,
-        locationMode: LocationMode.regular,
-        image: 'https://images.unsplash.com/photo-1540189549336-e6e99c3679fe?auto=format&fit=crop&w=900&q=80',
-      ),
-      Store(
-        id: 6,
-        ownerId: 6,
-        name: 'Cubao Hardware & Tools',
-        type: StoreType.hardware,
-        status: StoreStatus.approved,
-        lat: 14.6209,
-        lng: 121.0548,
-        barangay: 'Socorro',
-        city: 'Quezon City',
-        address: '18 Gen. Romulo Ave',
-        landmark: 'Orange facade beside the pawnshop',
-        schedule: 'Mon–Sat 7:30 AM – 7:00 PM',
-        isMobile: false,
-        image: 'https://images.unsplash.com/photo-1504148455328-c376907d081c?auto=format&fit=crop&w=900&q=80',
-      ),
-      Store(
-        id: 7,
-        ownerId: 7,
-        name: 'QC Gadget Hub',
-        type: StoreType.electronics,
-        status: StoreStatus.approved,
-        lat: 14.6189,
-        lng: 121.0574,
-        barangay: 'Cubao',
-        city: 'Quezon City',
-        address: '2/F Farmermarket annex',
-        landmark: 'Next to the phone repair alley',
-        schedule: 'Daily 10:00 AM – 8:00 PM',
-        isMobile: false,
-        image: 'https://images.unsplash.com/photo-1519389950473-47ba0277781c?auto=format&fit=crop&w=900&q=80',
-      ),
-      Store(
-        id: 5,
-        ownerId: 2,
-        name: 'Bagong Palengke Dry Goods',
-        type: StoreType.marketStall,
-        status: StoreStatus.pending,
-        lat: 14.6228,
-        lng: 121.0524,
-        barangay: 'Pinyahan',
-        city: 'Quezon City',
-        address: 'Stall 18, wet & dry section',
-        landmark: 'Blue umbrella, next to rice sacks',
-        schedule: 'Daily 5:30 AM – 5:00 PM',
-        isMobile: false,
-      ),
-    ]);
-
-    products.addAll([
-      CatalogProduct(
-        id: 1,
-        name: 'Carabao mango',
-        category: 'Produce',
-        brand: '',
-        packageSize: 'per kilo',
-        aliases: ['mangga', 'indian mango', 'mango'],
-        image: 'https://images.unsplash.com/photo-1553279768-865429fa0078?auto=format&fit=crop&w=800&q=80',
-        attributes: const {'variety': 'Carabao'},
-      ),
-      CatalogProduct(
-        id: 2,
-        name: 'Cooking oil',
-        category: 'Groceries',
-        brand: 'Minola',
-        packageSize: '1 L bottle',
-        aliases: ['mantika', 'vegetable oil'],
-        barcode: '4807770123456',
-        image: 'https://images.unsplash.com/photo-1474979266404-7eaacbcd87c5?auto=format&fit=crop&w=800&q=80',
-      ),
-      CatalogProduct(
-        id: 3,
-        name: 'Well-milled rice',
-        category: 'Staples',
-        brand: '',
-        packageSize: 'per kilo',
-        aliases: ['bigas', 'sinandomeng', 'rice'],
-        image: 'https://images.unsplash.com/photo-1586201375761-83865001e31c?auto=format&fit=crop&w=800&q=80',
-      ),
-      CatalogProduct(
-        id: 4,
-        name: 'Pan de sal',
-        category: 'Bakery',
-        brand: '',
-        packageSize: 'per piece',
-        aliases: ['pandesal', 'bread'],
-        image: 'https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=800&q=80',
-      ),
-      CatalogProduct(
-        id: 5,
-        name: 'Lakatan banana',
-        category: 'Produce',
-        brand: '',
-        packageSize: 'per kilo',
-        aliases: ['saging', 'banana', 'lakatan'],
-        image: 'https://images.unsplash.com/photo-1571771894821-ce9b6c11b08e?auto=format&fit=crop&w=800&q=80',
-      ),
-      CatalogProduct(
-        id: 6,
-        name: 'Canned sardines',
-        category: 'Groceries',
-        brand: "Young's Town",
-        packageSize: '155 g can',
-        aliases: ['sardinas', 'sardines'],
-        barcode: '4800015123456',
-        image: 'https://images.unsplash.com/photo-1598515214211-89d3c73ae83b?auto=format&fit=crop&w=800&q=80',
-      ),
-      CatalogProduct(
-        id: 7,
-        name: 'Taho',
-        category: 'Street food',
-        brand: '',
-        packageSize: 'per cup',
-        aliases: ['taho', 'soy pudding'],
-        image: 'https://images.unsplash.com/photo-1569718212165-3a8278d5f624?auto=format&fit=crop&w=800&q=80',
-      ),
-      CatalogProduct(
-        id: 8,
-        name: 'Instant noodles',
-        category: 'Groceries',
-        brand: 'Lucky Me',
-        packageSize: '55 g pack',
-        aliases: ['pancit canton', 'noodles', 'lucky me'],
-        image: 'https://images.unsplash.com/photo-1612929635977-2bddc1c0c0b0?auto=format&fit=crop&w=800&q=80',
-      ),
-      CatalogProduct(
-        id: 9,
-        name: 'Claw hammer',
-        category: 'Hardware',
-        brand: 'Stanley',
-        packageSize: '16 oz',
-        aliases: ['martilyo', 'hammer'],
-        barcode: '4808880123456',
-        image: 'https://images.unsplash.com/photo-1586864387963-0a911f4c0c1d?auto=format&fit=crop&w=800&q=80',
-        attributes: const {'material': 'steel'},
-      ),
-      CatalogProduct(
-        id: 10,
-        name: 'USB-C cable',
-        category: 'Electronics',
-        brand: 'Anker',
-        packageSize: '1 m',
-        aliases: ['type c cable', 'charger cable', 'usb c'],
-        barcode: '4809990123456',
-        image: 'https://images.unsplash.com/photo-1583863788434-e58a36330cf0?auto=format&fit=crop&w=800&q=80',
-        attributes: const {'model': 'USB-C', 'capacity': '1 m', 'compatibility': 'USB-C Samsung Type-C phones'},
-      ),
-      CatalogProduct(
-        id: 11,
-        name: 'Rubber slippers',
-        category: 'Clothing',
-        brand: 'Havaianas',
-        packageSize: 'pair',
-        aliases: ['tsinelas', 'slippers', 'flip flops'],
-        image: 'https://images.unsplash.com/photo-1603487742131-4160ec999275?auto=format&fit=crop&w=800&q=80',
-      ),
-      CatalogProduct(
-        id: 12,
-        name: 'Motorcycle engine oil',
-        category: 'Automotive',
-        brand: 'Motul',
-        packageSize: '1 L bottle',
-        aliases: ['motor oil', 'engine oil'],
-        barcode: '4811110123456',
-        image: 'https://images.unsplash.com/photo-1486262715619-67b85e0b08d3?auto=format&fit=crop&w=800&q=80',
-      ),
-    ]);
-
-    final now = DateTime.now();
-    listings.addAll([
-      StoreListing(id: 1, storeId: 1, productId: 2, price: 98, unit: 'bottle', quantity: 8, availability: Availability.inStock, lastConfirmed: now.subtract(const Duration(hours: 3))),
-      StoreListing(id: 2, storeId: 1, productId: 3, price: 56, unit: 'kilo', quantity: 20, availability: Availability.inStock, lastConfirmed: now.subtract(const Duration(hours: 5))),
-      StoreListing(id: 3, storeId: 1, productId: 4, price: 4, unit: 'piece', quantity: 40, availability: Availability.low, lastConfirmed: now.subtract(const Duration(hours: 1))),
-      StoreListing(id: 4, storeId: 1, productId: 6, price: 28, unit: 'can', quantity: 15, availability: Availability.inStock, lastConfirmed: now.subtract(const Duration(hours: 8))),
-      StoreListing(id: 5, storeId: 1, productId: 8, price: 16, unit: 'pack', quantity: 24, availability: Availability.inStock, lastConfirmed: now.subtract(const Duration(minutes: 40))),
-      StoreListing(id: 6, storeId: 2, productId: 1, price: 180, unit: 'kilo', quantity: 12, availability: Availability.inStock, lastConfirmed: now.subtract(const Duration(hours: 2))),
-      StoreListing(id: 7, storeId: 2, productId: 5, price: 70, unit: 'kilo', quantity: 18, availability: Availability.inStock, lastConfirmed: now.subtract(const Duration(hours: 2))),
-      StoreListing(id: 8, storeId: 3, productId: 2, price: 112, unit: 'bottle', quantity: 30, availability: Availability.inStock, lastConfirmed: now.subtract(const Duration(hours: 12))),
-      StoreListing(id: 9, storeId: 3, productId: 6, price: 32, unit: 'can', quantity: 40, availability: Availability.inStock, lastConfirmed: now.subtract(const Duration(hours: 12))),
-      StoreListing(id: 10, storeId: 3, productId: 8, price: 18, unit: 'pack', quantity: 50, availability: Availability.inStock, lastConfirmed: now.subtract(const Duration(hours: 6))),
-      StoreListing(id: 11, storeId: 4, productId: 7, price: 25, unit: 'cup', quantity: 20, availability: Availability.inStock, lastConfirmed: now.subtract(const Duration(hours: 1))),
-      StoreListing(id: 12, storeId: 6, productId: 9, price: 285, unit: 'piece', quantity: 14, availability: Availability.inStock, lastConfirmed: now.subtract(const Duration(hours: 4))),
-      StoreListing(id: 13, storeId: 7, productId: 10, price: 249, unit: 'piece', quantity: 22, availability: Availability.inStock, lastConfirmed: now.subtract(const Duration(hours: 6))),
-      StoreListing(id: 14, storeId: 6, productId: 11, price: 120, unit: 'pair', quantity: 18, availability: Availability.inStock, lastConfirmed: now.subtract(const Duration(hours: 9))),
-      StoreListing(id: 15, storeId: 6, productId: 12, price: 390, unit: 'bottle', quantity: 7, availability: Availability.low, lastConfirmed: now.subtract(const Duration(hours: 2))),
-    ]);
-
-    promotions.addAll([
-      Promotion(
-        id: 1,
-        storeId: 2,
-        title: 'Mangga of the week',
-        offer: 'Ripe carabao mango ₱165/kilo until Sunday',
-        startsAt: now.subtract(const Duration(days: 1)),
-        endsAt: now.add(const Duration(days: 5)),
-        sponsored: true,
-        status: PromotionStatus.approved,
-      ),
-      Promotion(
-        id: 2,
-        storeId: 1,
-        title: 'Pandesal morning bundle',
-        offer: '10 pieces for ₱35 before 8 AM',
-        startsAt: now,
-        endsAt: now.add(const Duration(days: 10)),
-        sponsored: true,
-        status: PromotionStatus.approved,
-      ),
-    ]);
-
-    tours.add(StoreTour(
-      id: 1,
-      storeId: 1,
-      title: 'Walk through Aling Nena’s',
-      status: TourStatus.published,
-      nodes: [
-        TourNode(
-          id: 1,
-          title: 'Storefront',
-          image: 'https://images.unsplash.com/photo-1604719312566-8912e9227c6a?auto=format&fit=crop&w=1200&q=80',
-          connections: [2],
-          ownerReviewed: true,
-        ),
-        TourNode(
-          id: 2,
-          title: 'Grocery shelf',
-          image: 'https://images.unsplash.com/photo-1578916171728-46686eac8d58?auto=format&fit=crop&w=1200&q=80',
-          connections: [1, 3],
-          ownerReviewed: true,
-        ),
-        TourNode(
-          id: 3,
-          title: 'Counter',
-          image: 'https://images.unsplash.com/photo-1534723452862-4c874018d66d?auto=format&fit=crop&w=1200&q=80',
-          connections: [2],
-          ownerReviewed: true,
-        ),
-      ],
-    ));
-
-    reports.add(ReportItem(
-      id: 1,
-      userId: 1,
-      target: 'QuickGo Mini Mart · cooking oil price',
-      reason: 'Listed ₱112 but the shelf tag yesterday was ₱108.',
-    ));
-
-    favoriteStoreIds.add(1);
-    favoriteProductIds.add(1);
-  }
 }
 
 class RecognitionSuggestion {

@@ -22,7 +22,8 @@ class HealthController extends Controller
             // Attempt a lightweight Firestore read to verify connectivity.
             $this->firestore->all('stores');
             $database = 'up';
-        } catch (Throwable) {
+        } catch (Throwable $e) {
+            report($e);
             $database = 'down';
             $ok = false;
         }

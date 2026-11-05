@@ -8,9 +8,8 @@
 // Firebase Authentication and Firebase Storage SDK remain in Flutter (allowed
 // exceptions per architecture rules).
 //
-// Offline behavior:
-//   - GET /catalog and GET /search may be served from the in-memory cache
-//     when previously loaded. The UI must clearly mark cached data as stale.
+// Business data is served only from Laravel/Firestore; there is no local
+// catalog or search cache when the server is unavailable.
 //   - All writes (POST, PATCH, DELETE for business data) require a successful
 //     server response before the UI reports success. No silent write fallback.
 //   - If Laravel is unreachable, an ApiException with status==0 is thrown.
@@ -39,12 +38,6 @@ class LocalSpotGateway {
 
   final LaravelApiClient _laravel;
   final FirebaseAuth? _authOverride;
-
-  // ── Read-only catalog cache for offline display ──────────────────────
-  // Populated on a successful GET /catalog or GET /search.
-  // Never used as a fallback for writes.
-  Map<String, dynamic>? _catalogCache;
-  Map<String, dynamic>? _searchCache;
 
   // Lazy getter — only accesses FirebaseAuth.instance after Firebase is initialized.
   FirebaseAuth get _auth => _authOverride ?? FirebaseAuth.instance;
@@ -77,13 +70,10 @@ class LocalSpotGateway {
           await _laravel.post('/auth/login') as Map);
     } on ApiException catch (e) {
       if (_isUnreachable(e)) {
-        // Firebase Auth succeeded but Laravel is unreachable.
-        // Return minimal profile — user is signed in with Firebase but
-        // backend permissions are unknown. The UI should show a warning.
-        return _minimalProfile(cred.user!,
-            note: 'Backend unreachable — permissions not loaded.');
+        await _auth.signOut();
+        throw BackendUnreachableException(
+            'Signed in with Firebase, but the LocalSpot API is unavailable. Try again when the server is reachable.');
       }
-      // 4xx/5xx from server — re-throw so caller handles it.
       rethrow;
     }
   }
@@ -136,23 +126,14 @@ class LocalSpotGateway {
     await _auth.signOut();
   }
 
-  // ── Business reads — Laravel required, cache for offline display ──────
+  // ── Business reads — Laravel required ────────────────────────────────
 
   Future<dynamic> get(String path, [Map<String, String>? query]) async {
     try {
       final result = await _laravel.get(path, query);
-      // Cache successful catalog result.
-      if (path == '/catalog' && result is Map) {
-        _catalogCache = Map<String, dynamic>.from(result);
-      }
       return result;
     } on ApiException catch (e) {
       if (_isUnreachable(e)) {
-        // Serve stale catalog read-only if available.
-        if (path == '/catalog' && _catalogCache != null) {
-          return _staleMarker(_catalogCache!);
-        }
-        // For all other GET paths when unreachable, throw clearly.
         throw BackendUnreachableException();
       }
       rethrow;
@@ -163,16 +144,9 @@ class LocalSpotGateway {
       String path, [Map<String, String>? query]) async {
     try {
       final result = await _laravel.getEnvelope(path, query);
-      // Cache last search result for offline stale display.
-      if (path == '/search') {
-        _searchCache = result;
-      }
       return result;
     } on ApiException catch (e) {
       if (_isUnreachable(e)) {
-        if (path == '/search' && _searchCache != null) {
-          return _staleEnvelopeMarker(_searchCache!);
-        }
         throw BackendUnreachableException();
       }
       rethrow;
@@ -247,37 +221,4 @@ class LocalSpotGateway {
   static bool _isUnreachable(ApiException e) =>
       e.status == 0 || e.status == null;
 
-  /// Add a stale marker to a map so the UI can display a cached banner.
-  static Map<String, dynamic> _staleMarker(Map<String, dynamic> data) =>
-      {...data, '_stale': true};
-
-  static Map<String, dynamic> _staleEnvelopeMarker(
-          Map<String, dynamic> envelope) =>
-      {
-        ...envelope,
-        'meta': {
-          ...((envelope['meta'] as Map<String, dynamic>?) ?? {}),
-          '_stale': true,
-        },
-      };
-
-  /// Build a minimal profile for when Laravel is reachable for auth but not
-  /// for profile sync. Clearly marks permissions as unknown.
-  static Map<String, dynamic> _minimalProfile(User user,
-      {String note = ''}) {
-    return {
-      'user': {
-        'id': user.uid.hashCode & 0x7fffffff,
-        'name': user.displayName ?? '',
-        'email': user.email ?? '',
-        'role': 'customer', // Safest default — no elevated privileges
-        'owned_store_ids': <int>[],
-        'member_store_ids': <int>[],
-        'store_grants': <Map<String, dynamic>>[],
-        '_backend_unreachable': true,
-        '_note': note,
-      },
-      'stores': <Map<String, dynamic>>[],
-    };
-  }
 }

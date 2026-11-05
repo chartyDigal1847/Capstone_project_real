@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use Google\Auth\ApplicationDefaultCredentials;
 use Illuminate\Support\Facades\Http;
 use RuntimeException;
 
@@ -10,23 +11,15 @@ use RuntimeException;
  *
  * On Windows/XAMPP the PHP gRPC extension is not available, so the
  * official google/cloud-firestore gRPC client cannot be used directly.
- * This service uses the Firestore REST API over HTTPS with a service-
- * account JWT — no gRPC extension required.
- *
- * In production (Docker), the Dockerfile installs the gRPC extension.
- * At that point this class can be swapped for the gRPC client without
- * any interface changes, since both implement the same public methods.
- *
- * Authentication: generates a short-lived OAuth 2.0 access token from
- * the service-account key (same credential used by the gRPC client),
- * caches it until near expiry, and attaches it as Bearer on every request.
+ * This service uses the Firestore REST API over HTTPS. It obtains short-lived
+ * OAuth tokens through Google's Auth library, supporting explicit local
+ * service-account credentials and production Application Default Credentials.
  *
  * @see https://firebase.google.com/docs/firestore/reference/rest
  */
 class FirestoreService
 {
     private const REST_BASE = 'https://firestore.googleapis.com/v1';
-    private const TOKEN_URL = 'https://oauth2.googleapis.com/token';
     private const SCOPE = 'https://www.googleapis.com/auth/datastore';
     private const TOKEN_LEEWAY = 60; // refresh this many seconds before expiry
 
@@ -166,9 +159,15 @@ class FirestoreService
             ['field' => 'numericId', 'op' => '==', 'value' => $numericId],
         ]);
         if (empty($docs)) return false;
-        $path = $this->docPath($collection, $docs[0]['id']);
-        $this->request('DELETE', $path)->throw();
+        $this->delete($collection, $docs[0]['id']);
         return true;
+    }
+
+    /** Delete a document by its Firestore document ID. */
+    public function delete(string $collection, string $docId): void
+    {
+        $path = $this->docPath($collection, $docId);
+        $this->request('DELETE', $path)->throw();
     }
 
     /** Run a simple transaction (sequential operations, no rollback). */
@@ -212,10 +211,28 @@ class FirestoreService
         return match ($method) {
             'GET'    => $http->get($url, $query),
             'POST'   => $http->post($url, $body),
-            'PATCH'  => $http->patch($url . ($query ? '?' . http_build_query($query) : ''), $body),
+            'PATCH'  => $http->patch($url . ($query ? '?' . $this->encodeQuery($query) : ''), $body),
             'DELETE' => $http->delete($url),
             default  => throw new RuntimeException("Unsupported method: $method"),
         };
+    }
+
+    /**
+     * Encode REST query parameters while preserving repeated array keys.
+     * Firestore updateMask.fieldPaths is a repeated query parameter; PHP's
+     * default http_build_query would encode it as updateMask.fieldPaths[0],
+     * which Firestore rejects.
+     */
+    private function encodeQuery(array $query): string
+    {
+        $pairs = [];
+        foreach ($query as $key => $value) {
+            foreach (is_array($value) ? $value : [$value] as $item) {
+                $pairs[] = rawurlencode((string) $key) . '=' . rawurlencode((string) $item);
+            }
+        }
+
+        return implode('&', $pairs);
     }
 
     // ── Firestore value conversion ────────────────────────────────────────
@@ -316,7 +333,7 @@ class FirestoreService
         ];
     }
 
-    // ── OAuth 2.0 service-account token ──────────────────────────────────
+    // ── Google OAuth token ────────────────────────────────────────────────
 
     private function getAccessToken(): string
     {
@@ -324,57 +341,22 @@ class FirestoreService
             return $this->accessToken;
         }
 
-        $key = $this->loadServiceAccountKey();
-        $jwt = $this->buildJwt($key);
+        if ($this->credentialsPath !== null && $this->credentialsPath !== '') {
+            // Laravel config values are not guaranteed to be exported by every
+            // runtime; pass the configured ADC file path to Google's loader.
+            putenv('GOOGLE_APPLICATION_CREDENTIALS=' . $this->credentialsPath);
+        }
 
-        $response = Http::asForm()->post(self::TOKEN_URL, [
-            'grant_type' => 'urn:ietf:params:oauth:grant-type:jwt-bearer',
-            'assertion'  => $jwt,
-        ]);
-        $response->throw();
+        $credentials = ApplicationDefaultCredentials::getCredentials(self::SCOPE);
+        $token = $credentials->fetchAuthToken();
 
-        $this->accessToken  = $response->json('access_token');
-        $this->tokenExpiresAt = time() + (int) ($response->json('expires_in', 3600));
+        if (empty($token['access_token'])) {
+            throw new RuntimeException('Google credentials did not return an access token.');
+        }
+
+        $this->accessToken = $token['access_token'];
+        $this->tokenExpiresAt = time() + (int) ($token['expires_in'] ?? 3600);
 
         return $this->accessToken;
-    }
-
-    private function loadServiceAccountKey(): array
-    {
-        if ($this->credentialsPath === null || $this->credentialsPath === '') {
-            // Try Application Default Credentials path
-            $adcPath = getenv('GOOGLE_APPLICATION_CREDENTIALS') ?: '';
-            if ($adcPath === '') {
-                throw new RuntimeException('No service-account credentials configured. Set GOOGLE_APPLICATION_CREDENTIALS in .env.');
-            }
-            return json_decode(file_get_contents($adcPath), true);
-        }
-        return json_decode(file_get_contents($this->credentialsPath), true);
-    }
-
-    /** Build a signed JWT for the service-account token exchange. */
-    private function buildJwt(array $key): string
-    {
-        $now = time();
-        $header  = $this->base64url(json_encode(['alg' => 'RS256', 'typ' => 'JWT']));
-        $payload = $this->base64url(json_encode([
-            'iss'   => $key['client_email'],
-            'sub'   => $key['client_email'],
-            'aud'   => self::TOKEN_URL,
-            'scope' => self::SCOPE,
-            'iat'   => $now,
-            'exp'   => $now + 3600,
-        ]));
-
-        $toSign = "$header.$payload";
-        openssl_sign($toSign, $signature, $key['private_key'], OPENSSL_ALGO_SHA256);
-        $sig = $this->base64url($signature);
-
-        return "$toSign.$sig";
-    }
-
-    private function base64url(string $data): string
-    {
-        return rtrim(strtr(base64_encode($data), '+/', '-_'), '=');
     }
 }

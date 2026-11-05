@@ -97,7 +97,12 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
               top: 12,
               right: 8,
               child: IconButton.filledTonal(
-                onPressed: () => app.toggleFavoriteProduct(widget.product.id),
+                onPressed: () async {
+                  final error = await app.toggleFavoriteProduct(widget.product.id);
+                  if (error != null && context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error)));
+                  }
+                },
                 icon: Icon(saved ? Icons.favorite : Icons.favorite_border),
               ),
             ),
@@ -205,7 +210,12 @@ class StoreDetailPage extends StatelessWidget {
               top: 12,
               right: 8,
               child: IconButton.filledTonal(
-                onPressed: () => app.toggleFavoriteStore(store.id),
+                onPressed: () async {
+                  final error = await app.toggleFavoriteStore(store.id);
+                  if (error != null && context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error)));
+                  }
+                },
                 icon: Icon(saved ? Icons.favorite : Icons.favorite_border),
               ),
             ),

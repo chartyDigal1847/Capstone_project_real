@@ -4,29 +4,28 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
 use App\Services\FirestoreService;
-use App\Services\UserResolver;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 
-/** Favorites — Firestore-backed. Owner-only access enforced in Laravel. */
+/** Favorites — Firestore-backed and scoped to the authenticated UID. */
 class FavoriteController extends Controller
 {
-    public function __construct(
-        private readonly FirestoreService $firestore,
-        private readonly UserResolver $userResolver,
-    ) {
+    public function __construct(private readonly FirestoreService $firestore)
+    {
     }
 
     public function index(Request $request)
     {
-        $user = $this->userResolver->resolve($request);
         $uid = $request->attributes->get('firebase_uid');
 
         $favorites = $this->firestore->query('favorites', [
             ['field' => 'uid', 'op' => '==', 'value' => $uid],
         ]);
 
-        return response()->json(['data' => $favorites]);
+        return response()->json(['data' => array_values(array_filter(
+            $favorites,
+            fn (array $favorite) => ($favorite['_deleted'] ?? false) !== true
+        ))]);
     }
 
     public function toggle(Request $request)
@@ -44,11 +43,21 @@ class FavoriteController extends Controller
             ['field' => 'favoritable_id', 'op' => '==', 'value' => $data['favoritable_id']],
         ]);
 
-        if (! empty($existing)) {
-            $this->firestore->update('favorites', $existing[0]['id'], ['_deleted' => true]);
-            // Firestore doesn't have a direct delete in our service wrapper —
-            // use a batch delete or mark as deleted. For now, update a flag.
+        $active = array_values(array_filter(
+            $existing,
+            fn (array $favorite) => ($favorite['_deleted'] ?? false) !== true
+        ));
+        if ($active !== []) {
+            foreach ($active as $favorite) {
+                $this->firestore->delete('favorites', $favorite['id']);
+            }
             return response()->json(['data' => ['saved' => false]]);
+        }
+
+        // Reactivate a legacy soft-deleted record rather than creating a duplicate.
+        if ($existing !== []) {
+            $this->firestore->update('favorites', $existing[0]['id'], ['_deleted' => false]);
+            return response()->json(['data' => ['saved' => true]]);
         }
 
         $this->firestore->create('favorites', [

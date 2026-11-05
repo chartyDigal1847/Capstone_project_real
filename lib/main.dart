@@ -12,8 +12,8 @@ import 'state.dart';
 import 'theme.dart';
 import 'widgets.dart';
 
-/// Firebase MUST be initialized before runApp() so that FirebaseAuth,
-/// FirebaseStorage, and FirebaseFirestore instances are available when
+/// Firebase MUST be initialized before runApp() so that FirebaseAuth and
+/// FirebaseStorage instances are available when
 /// the widget tree is first built. Any access to these instances before
 /// initializeApp() causes the [core/no-app] crash.
 Future<void> main() async {

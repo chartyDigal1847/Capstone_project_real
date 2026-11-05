@@ -23,9 +23,9 @@ class FirebaseAuthService
     private const KEY_CACHE_TAG = 'firebase_auth_public_keys';
 
     public function __construct(
-        private readonly string $projectId,
+        private readonly ?string $projectId,
         private readonly string $issuer,
-        private readonly string $audience,
+        private readonly ?string $audience,
         private readonly string $publicKeyUrl,
         private readonly int $keyCacheTtl,
         private readonly bool $allowEmulator,
@@ -43,12 +43,20 @@ class FirebaseAuthService
             throw new RuntimeException('FIREBASE_PROJECT_ID is not configured.');
         }
 
-        $keys = $this->getPublicKeys();
-
         // Decode header to get kid
         $header = $this->decodeHeader($token);
         $kid = $header['kid'] ?? null;
-        if ($kid === null || ! isset($keys[$kid])) {
+        if (($header['alg'] ?? null) !== 'RS256' || ! is_string($kid) || $kid === '') {
+            throw new RuntimeException('Token header is missing a valid RS256 key ID.');
+        }
+
+        $keys = $this->getPublicKeys();
+        if (! isset($keys[$kid])) {
+            // Google rotates signing keys. Refresh once before rejecting a key
+            // that is absent from a still-valid cached key set.
+            $keys = $this->getPublicKeys(forceRefresh: true);
+        }
+        if (! isset($keys[$kid])) {
             throw new RuntimeException('Unknown or missing key ID (kid).');
         }
 
@@ -66,7 +74,7 @@ class FirebaseAuthService
         }
 
         // Validate subject (Firebase UID)
-        if (! isset($decoded->sub) || $decoded->sub === '') {
+        if (! isset($decoded->sub) || ! is_string($decoded->sub) || $decoded->sub === '' || strlen($decoded->sub) > 128) {
             throw new RuntimeException('Token subject (uid) is empty.');
         }
 
@@ -78,6 +86,18 @@ class FirebaseAuthService
         // Validate auth_time (when the user actually authenticated)
         if (! isset($decoded->auth_time) || ! is_int($decoded->auth_time)) {
             throw new RuntimeException('Token is missing auth_time claim.');
+        }
+
+        if (! isset($decoded->exp) || ! is_int($decoded->exp) || $decoded->exp <= time()) {
+            throw new RuntimeException('Token is missing a valid expiration claim.');
+        }
+
+        $now = time();
+        if ($decoded->iat > $now + 60 || $decoded->auth_time > $now + 60) {
+            throw new RuntimeException('Token contains a future issued-at or authentication time.');
+        }
+        if ($decoded->auth_time > $decoded->iat + 60 || $decoded->iat >= $decoded->exp) {
+            throw new RuntimeException('Token contains inconsistent authentication time claims.');
         }
 
         return $decoded;
@@ -93,21 +113,41 @@ class FirebaseAuthService
      *
      * @return array<string, string> Map of key ID → PEM-encoded public key
      */
-    private function getPublicKeys(): array
+    private function getPublicKeys(bool $forceRefresh = false): array
     {
-        return Cache::remember(self::KEY_CACHE_TAG, $this->keyCacheTtl, function () {
+        $cacheKey = self::KEY_CACHE_TAG . ':' . $this->projectId;
+        if ($forceRefresh) {
+            Cache::forget($cacheKey);
+        } else {
+            $cached = Cache::get($cacheKey);
+            if (is_array($cached)) {
+                return $cached;
+            }
+        }
+
+        try {
             $response = Http::timeout(10)->get($this->publicKeyUrl);
-            if (! $response->ok()) {
-                throw new RuntimeException('Failed to fetch Firebase public keys.');
-            }
+        } catch (\Throwable $e) {
+            throw new FirebasePublicKeysUnavailable('Could not reach the Firebase public key service.', previous: $e);
+        }
+        if (! $response->ok()) {
+            throw new FirebasePublicKeysUnavailable('Firebase public key service returned an error.');
+        }
 
-            $body = $response->json();
-            if (! is_array($body) || empty($body)) {
-                throw new RuntimeException('Firebase public keys response is empty.');
-            }
+        $body = $response->json();
+        if (! is_array($body) || empty($body)) {
+            throw new FirebasePublicKeysUnavailable('Firebase public key service returned an invalid response.');
+        }
 
-            return $body;
-        });
+        $ttl = $this->keyCacheTtl;
+        if (preg_match('/(?:^|,)\s*max-age=(\d+)/i', $response->header('Cache-Control', ''), $matches) === 1) {
+            $ttl = (int) $matches[1];
+        }
+        if ($ttl > 0) {
+            Cache::put($cacheKey, $body, $ttl);
+        }
+
+        return $body;
     }
 
     /**

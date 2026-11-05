@@ -51,7 +51,7 @@ class MediaUploadService {
   /// Returns the asset ID and quarantine path.
   Future<MediaUploadResult> uploadProductPhoto({
     required String filePath,
-    int? storeId,
+    required int storeId,
   }) async {
     return _uploadFile(
       filePath: filePath,
@@ -63,7 +63,7 @@ class MediaUploadService {
   /// Upload a store image through the quarantine flow.
   Future<MediaUploadResult> uploadStoreImage({
     required String filePath,
-    int? storeId,
+    required int storeId,
   }) async {
     return _uploadFile(
       filePath: filePath,
@@ -79,7 +79,7 @@ class MediaUploadService {
   /// TourController blocks publication until processing succeeds.
   Future<MediaUploadResult> uploadTourPanorama({
     required String filePath,
-    int? storeId,
+    required int storeId,
   }) async {
     return _uploadFile(
       filePath: filePath,
@@ -98,28 +98,44 @@ class MediaUploadService {
   Future<MediaUploadResult> _uploadFile({
     required String filePath,
     required String mediaType,
-    int? storeId,
+    required int storeId,
   }) async {
-    // Determine content type from file extension
-    final ext = filePath.toLowerCase().split('.').last;
-    final contentType = switch (ext) {
-      'png' => 'image/png',
-      'webp' => 'image/webp',
-      _ => 'image/jpeg',
-    };
+    final file = File(filePath);
+    final fileSize = await file.length();
+    if (fileSize < 1) {
+      throw const FormatException('The selected image is empty. Choose another file.');
+    }
+
+    // Trust the bytes, not the file name or caller-supplied MIME type.
+    final header = await file.openRead(0, 12).fold<List<int>>(
+      <int>[],
+      (bytes, chunk) => bytes..addAll(chunk),
+    );
+    final contentType = _imageContentType(header);
+    if (contentType == null) {
+      throw const FormatException('Choose a JPEG, PNG, or WebP image.');
+    }
 
     // Step 1: Request upload intent from Laravel
     final intent = await _laravel.uploadIntent(
       mediaType: mediaType,
       contentType: contentType,
+      sizeBytes: fileSize,
       storeId: storeId,
     );
 
     final assetId = intent['asset_id'] as int;
     final quarantinePath = intent['quarantine_path'] as String;
+    final maxSizeBytes = (intent['max_size_bytes'] as num?)?.toInt() ?? 0;
+    if (maxSizeBytes < 1) {
+      throw const FormatException('The server returned an invalid upload size limit. Try again.');
+    }
+    if (fileSize > maxSizeBytes) {
+      final maxSizeMb = (maxSizeBytes / (1024 * 1024)).floor();
+      throw FormatException('This image exceeds the ${maxSizeMb} MB upload limit. Choose a smaller file.');
+    }
 
     // Step 2: Upload to Firebase Storage at the quarantine path
-    final file = File(filePath);
     final uploadTask = _storage.ref(quarantinePath).putFile(
       file,
       SettableMetadata(contentType: contentType),
@@ -127,7 +143,7 @@ class MediaUploadService {
 
     // Wait for upload to complete
     final snapshot = await uploadTask;
-    final sizeBytes = snapshot.metadata?.size ?? 0;
+    final sizeBytes = snapshot.metadata?.size ?? fileSize;
 
     // Step 3: Call Laravel finalize to verify and queue processing
     final result = await _laravel.finalizeUpload(
@@ -144,5 +160,28 @@ class MediaUploadService {
       quarantinePath: quarantinePath,
       status: result['status'] as String? ?? 'pending_review',
     );
+  }
+
+  String? _imageContentType(List<int> bytes) {
+    if (bytes.length >= 3 && bytes[0] == 0xff && bytes[1] == 0xd8 && bytes[2] == 0xff) {
+      return 'image/jpeg';
+    }
+    if (bytes.length >= 8 &&
+        bytes[0] == 0x89 &&
+        bytes[1] == 0x50 &&
+        bytes[2] == 0x4e &&
+        bytes[3] == 0x47 &&
+        bytes[4] == 0x0d &&
+        bytes[5] == 0x0a &&
+        bytes[6] == 0x1a &&
+        bytes[7] == 0x0a) {
+      return 'image/png';
+    }
+    if (bytes.length >= 12 &&
+        String.fromCharCodes(bytes.sublist(0, 4)) == 'RIFF' &&
+        String.fromCharCodes(bytes.sublist(8, 12)) == 'WEBP') {
+      return 'image/webp';
+    }
+    return null;
   }
 }

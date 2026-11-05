@@ -3,6 +3,7 @@
 namespace App\Providers;
 
 use App\Services\FirebaseAuthService;
+use App\Services\CloudStorageService;
 use App\Services\FirestoreService;
 use App\Services\UserResolver;
 use Illuminate\Cache\RateLimiting\Limit;
@@ -14,12 +15,20 @@ class AppServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
-        // FirestoreService singleton — wraps the official google/cloud-firestore PHP client.
+        // FirestoreService currently uses the Firestore REST API adapter.
         $this->app->singleton(FirestoreService::class, function ($app) {
             return new FirestoreService(
                 projectId: config('firebase.firestore.project_id'),
                 emulatorHost: config('firebase.firestore.emulator_host'),
                 credentialsPath: config('firebase.firestore.credentials'),
+            );
+        });
+
+        $this->app->singleton(CloudStorageService::class, function ($app) {
+            return new CloudStorageService(
+                projectId: config('firebase.storage.project_id'),
+                bucketName: config('firebase.storage.bucket'),
+                credentialsPath: config('firebase.storage.credentials'),
             );
         });
 

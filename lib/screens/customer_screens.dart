@@ -281,7 +281,7 @@ class _SearchPageState extends State<SearchPage> {
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
     final query = activeQuery.isEmpty ? controller.text : activeQuery;
-    final hits = app.remoteSearchHits ?? app.searchListings(query);
+    final hits = app.remoteSearchHits ?? const <SearchHit>[];
     return Column(
       children: [
         const PageHeader('Search products'),
@@ -695,7 +695,7 @@ class ProfilePage extends StatelessWidget {
               children: [
                 MenuRow(
                   icon: Icons.cloud_outlined,
-                  title: app.apiOnline ? 'Firebase connected' : 'Firebase not connected',
+                  title: app.apiOnline ? 'Firebase configured' : 'Firebase not configured',
                   subtitle: app.connectionNote,
                   onTap: () => app.bootstrap(),
                 ),

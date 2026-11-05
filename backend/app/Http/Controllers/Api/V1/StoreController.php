@@ -94,8 +94,8 @@ class StoreController extends Controller
 
         $data = $request->validate([
             'name' => ['sometimes', 'string', 'max:160'],
-            'lat' => ['sometimes', 'numeric'],
-            'lng' => ['sometimes', 'numeric'],
+            'lat' => ['sometimes', 'numeric', 'between:-90,90'],
+            'lng' => ['sometimes', 'numeric', 'between:-180,180'],
             'landmark' => ['sometimes', 'string'],
             'schedule' => ['sometimes', 'string'],
             'is_mobile' => ['sometimes', 'boolean'],
@@ -107,8 +107,10 @@ class StoreController extends Controller
         );
 
         // Recompute geohash if coordinates changed
-        if (isset($data['lat']) && isset($data['lng'])) {
-            $updateData['geohash'] = Geohash::encode((float) $data['lat'], (float) $data['lng']);
+        if (isset($data['lat']) || isset($data['lng'])) {
+            $updatedLat = (float) ($data['lat'] ?? $store['lat'] ?? 0);
+            $updatedLng = (float) ($data['lng'] ?? $store['lng'] ?? 0);
+            $updateData['geohash'] = Geohash::encode($updatedLat, $updatedLng);
         }
 
         $this->firestore->updateByNumericId('stores', $storeId, $updateData);

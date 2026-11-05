@@ -102,6 +102,10 @@ class UserResolver
             return true;
         }
 
+        if (! $this->isStoreApproved($storeNumericId)) {
+            return false;
+        }
+
         if (! in_array($user['role'] ?? '', ['owner', 'staff'], true)) {
             return false;
         }
@@ -116,9 +120,17 @@ class UserResolver
     /**
      * Check if the user has a specific store grant.
      */
-    public function hasStoreGrant(array $user, int $storeNumericId, string $grant): bool
+    public function hasStoreGrant(array $user, int $storeNumericId, string $grant, bool $requireApproved = true): bool
     {
-        if (self::isAdmin($user) || in_array($storeNumericId, $user['ownedStoreIds'] ?? [], true)) {
+        if (self::isAdmin($user)) {
+            return true;
+        }
+
+        if ($requireApproved && ! $this->isStoreApproved($storeNumericId)) {
+            return false;
+        }
+
+        if (in_array($storeNumericId, $user['ownedStoreIds'] ?? [], true)) {
             return true;
         }
 
@@ -129,5 +141,12 @@ class UserResolver
         }
 
         return false;
+    }
+
+    private function isStoreApproved(int $storeNumericId): bool
+    {
+        $store = $this->firestore->findByNumericId('stores', $storeNumericId);
+
+        return ($store['status'] ?? null) === 'approved';
     }
 }

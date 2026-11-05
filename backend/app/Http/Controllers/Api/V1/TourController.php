@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
+use App\Services\CloudStorageObjectNotFound;
+use App\Services\CloudStorageService;
 use App\Services\FirestoreService;
 use App\Services\UserResolver;
 use App\Support\CatalogCache;
@@ -15,14 +17,15 @@ use Illuminate\Http\Request;
  * Privacy processing status is tracked per node. Publication is blocked
  * until every node has a sanitized derivative and owner review.
  *
- * Actual person/face detection and Cloud Storage upload are pending
- * (plan Wave 3). The publication gate logic is implemented here.
+ * Private uploads can be verified, but actual person/face detection and
+ * sanitized derivative generation are pending (plan Wave 3).
  */
 class TourController extends Controller
 {
     public function __construct(
         private readonly FirestoreService $firestore,
         private readonly UserResolver $userResolver,
+        private readonly CloudStorageService $storage,
     ) {
     }
 
@@ -55,7 +58,21 @@ class TourController extends Controller
         abort_if($tour === null, 404, 'Tour not found.');
         abort_unless($this->userResolver->canManageStore($user, $tour['storeId'] ?? 0), 403, 'Not authorized.');
 
-        $data = $request->validate(['title' => ['required', 'string', 'max:120']]);
+        $data = $request->validate([
+            'title' => ['required', 'string', 'max:120'],
+            'media_asset_id' => ['required', 'integer'],
+        ]);
+
+        $asset = $this->firestore->findByNumericId('mediaAssets', (int) $data['media_asset_id']);
+        abort_if($asset === null, 404, 'Panorama upload was not found.');
+        abort_unless(
+            ($asset['uid'] ?? '') === $request->attributes->get('firebase_uid') &&
+            (int) ($asset['storeId'] ?? 0) === (int) ($tour['storeId'] ?? 0) &&
+            ($asset['mediaType'] ?? '') === 'tour_panorama' &&
+            ($asset['status'] ?? '') === 'pending_privacy_processing',
+            422,
+            'Panorama upload is not authorized or has not completed successfully.'
+        );
 
         $nodes = $tour['nodes'] ?? [];
         $nodeId = count($nodes) + 1;
@@ -63,6 +80,7 @@ class TourController extends Controller
             'id' => $nodeId,
             'title' => $data['title'],
             'image' => '',
+            'media_asset_id' => (int) $data['media_asset_id'],
             'connections' => empty($nodes) ? [] : [count($nodes)],
             'privacy_status' => 'processing',
             'owner_reviewed' => false,
@@ -130,10 +148,32 @@ class TourController extends Controller
             abort_if($status !== 'ready', 422, 'Every viewpoint needs privacy processing before publishing.');
             abort_if(!$reviewed, 422, 'Every viewpoint needs owner review before publishing.');
             abort_if($image === '', 422, 'Every viewpoint needs a sanitized derivative before publishing.');
+
+            $publicPath = ltrim($image, '/');
+            abort_unless(
+                str_starts_with($publicPath, 'tours/public/' . ($tour['storeId'] ?? 0) . '/'),
+                422,
+                'Every viewpoint must use an approved sanitized Storage derivative.'
+            );
+
+            try {
+                $object = $this->storage->inspectObject($publicPath);
+            } catch (CloudStorageObjectNotFound $e) {
+                abort(422, 'A sanitized panorama derivative is missing from Cloud Storage.');
+            } catch (\Throwable $e) {
+                report($e);
+                return response()->json(['message' => 'Cloud Storage could not verify the panorama derivative. Please try again.'], 503);
+            }
+
+            abort_unless(str_starts_with($object['content_type'], 'image/'), 422, 'Panorama derivative is not a supported image.');
         }
 
-        $this->firestore->updateByNumericId('tours', $tourId, ['status' => 'published']);
+        $this->firestore->updateByNumericId('tours', $tourId, [
+            'status' => 'published',
+            'privacy_verified' => true,
+        ]);
         $tour['status'] = 'published';
+        $tour['privacy_verified'] = true;
 
         // Invalidate catalog and store caches since published tours appear in catalog.
         CatalogCache::invalidateTour($tour['storeId'] ?? 0);
@@ -176,7 +216,11 @@ class TourController extends Controller
         abort_unless($this->userResolver->canManageStore($user, $tour['storeId'] ?? 0), 403, 'Not authorized.');
 
         $data = $request->validate([
-            'regions' => ['nullable', 'array'],
+            'regions' => ['nullable', 'array', 'max:32'],
+            'regions.*.x' => ['required_with:regions', 'numeric', 'between:0,1'],
+            'regions.*.y' => ['required_with:regions', 'numeric', 'between:0,1'],
+            'regions.*.w' => ['required_with:regions', 'numeric', 'gt:0', 'max:1'],
+            'regions.*.h' => ['required_with:regions', 'numeric', 'gt:0', 'max:1'],
         ]);
 
         $regions = $data['regions'] ?? [['x' => 0.35, 'y' => 0.35, 'w' => 0.3, 'h' => 0.3]];
@@ -186,7 +230,6 @@ class TourController extends Controller
         foreach ($nodes as &$node) {
             if (($node['id'] ?? 0) === $nodeId) {
                 $node['manual_blur'] = true;
-                $node['privacy_status'] = 'ready';
                 $node['blur_regions'] = array_merge($node['blur_regions'] ?? [], $regions);
                 $found = true;
                 break;
@@ -207,24 +250,7 @@ class TourController extends Controller
         $tour = $this->firestore->findByNumericId('tours', $tourId);
         abort_if($tour === null, 404, 'Tour not found.');
         abort_unless($this->userResolver->canManageStore($user, $tour['storeId'] ?? 0), 403, 'Not authorized.');
-
-        $fail = $request->boolean('fail');
-
-        $nodes = $tour['nodes'] ?? [];
-        foreach ($nodes as &$node) {
-            if (($node['id'] ?? 0) === $nodeId) {
-                $node['privacy_status'] = $fail ? 'failed' : 'ready';
-                $node['image'] = $fail ? '' : "/tours/public/{$tour['storeId']}/$nodeId.jpg";
-                $node['owner_reviewed'] = false;
-                break;
-            }
-        }
-        unset($node);
-
-        $this->firestore->updateByNumericId('tours', $tourId, ['nodes' => $nodes]);
-        $tour['nodes'] = $nodes;
-
-        return response()->json(['data' => $this->tourJson($tour)]);
+        abort(503, 'Panorama privacy processing is not configured yet. The viewpoint remains private.');
     }
 
     public function addHotspot(Request $request, int $tourId, int $nodeId)

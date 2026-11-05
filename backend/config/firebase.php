@@ -9,14 +9,15 @@ return [
     | Firebase Authentication is the sole identity provider. Laravel verifies
     | Firebase ID tokens using the documented JWT procedure (RS256 against
     | Google's public keys). Cloud Firestore is the only primary application
-    | database, accessed through the official PHP client with gRPC + ADC/IAM.
+    | database. The current adapter uses Firestore REST and Google's Auth
+    | library, with local credential files and ADC/IAM support.
     | Cloud Storage holds media; Laravel authorizes upload intents and
     | controls publication of sanitized derivatives.
     */
 
     'project_id' => env('FIREBASE_PROJECT_ID'),
 
-    // Firestore configuration — used by google/cloud-firestore PHP client.
+    // Firestore configuration — used by the Firestore REST API adapter.
     'firestore' => [
         'project_id' => env('FIREBASE_PROJECT_ID'),
         'emulator_host' => env('FIRESTORE_EMULATOR_HOST'),
