@@ -18,7 +18,8 @@ void main() {
       await tester.tap(find.text('Sign in'));
       await tester.pumpAndSettle();
 
-      expect(find.text('maria@localspot.ph'), findsOneWidget);
+    // Maria's email is also prefilled in the editable email field in debug builds.
+    expect(find.text('maria@localspot.ph'), findsWidgets);
       expect(find.text('nena@localspot.ph'), findsOneWidget);
       expect(
         find.textContaining('profile and role load from the database'),
