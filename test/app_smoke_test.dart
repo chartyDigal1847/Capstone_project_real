@@ -228,32 +228,24 @@ void main() {
     expect(app.canLoadMoreSearch, isFalse);
   });
 
-  test('unpublished tour nodes need privacy review before going live', () async {
+  test('tour nodes stay unpublished until server privacy processing completes', () async {
     final app = AppState();
-    app.currentUser = app.users.firstWhere((user) => user.email == 'nena@localspot.ph');
+    app.currentUser = UserAccount(
+      id: 2,
+      name: 'Store owner',
+      email: 'owner@test.local',
+      password: '',
+      role: AppRole.owner,
+      ownedStoreIds: const [1],
+    );
     final tour = app.addTour(1, 'Privacy tour');
-    app.addTourNode(tour, 'Door', 'https://example.com/door.jpg');
-    app.addTourNode(tour, 'Aisle', 'https://example.com/aisle.jpg');
+    app.addTourNode(tour, 'Door', 1001);
+    app.addTourNode(tour, 'Aisle', 1002);
     expect(tour.nodes.first.image, isEmpty);
     expect(tour.nodes.first.originalRetained, isTrue);
-    expect(app.publishTour(tour), isNotNull);
-    await app.processTourNode(tour, tour.nodes.first, fail: true);
-    expect(tour.nodes.first.privacyStatus, PrivacyStatus.failed);
-    expect(tour.nodes.first.image, isEmpty);
-    expect(app.publishTour(tour), isNotNull);
-    for (final node in tour.nodes) {
-      await app.processTourNode(tour, node);
-    }
-    expect(tour.nodes.first.image, isNot(contains('example.com')));
-    expect(tour.nodes.first.image, contains('sanitized.jpg'));
-    app.addManualTourBlur(tour, tour.nodes.first);
-    expect(tour.nodes.first.manualBlur, isTrue);
-    expect(tour.nodes.first.blurRegions, isNotEmpty);
-    for (final node in tour.nodes) {
-      expect(app.reviewTourNode(tour, node), isNull);
-    }
-    expect(app.publishTour(tour), isNull);
-    expect(tour.status, TourStatus.published);
+    expect(tour.nodes.first.privacyStatus, PrivacyStatus.processing);
+    expect(await app.publishTour(tour), isNotNull);
+    expect(tour.status, TourStatus.draft);
   });
 
   test('foreground location is held only while a map or navigation screen retains it', () {

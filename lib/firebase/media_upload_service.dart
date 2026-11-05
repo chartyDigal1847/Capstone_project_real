@@ -132,7 +132,7 @@ class MediaUploadService {
     }
     if (fileSize > maxSizeBytes) {
       final maxSizeMb = (maxSizeBytes / (1024 * 1024)).floor();
-      throw FormatException('This image exceeds the ${maxSizeMb} MB upload limit. Choose a smaller file.');
+      throw FormatException('This image exceeds the $maxSizeMb MB upload limit. Choose a smaller file.');
     }
 
     // Step 2: Upload to Firebase Storage at the quarantine path

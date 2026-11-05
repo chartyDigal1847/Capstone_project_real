@@ -128,6 +128,11 @@ class FirestoreTestService extends FirestoreService
         return false;
     }
 
+    public function delete(string $collection, string $docId): void
+    {
+        unset($this->collections[$collection][$docId]);
+    }
+
     public function transaction(callable $fn): mixed
     {
         return $fn($this);
