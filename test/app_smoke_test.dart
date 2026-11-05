@@ -18,9 +18,20 @@ void main() {
       await tester.tap(find.text('Sign in'));
       await tester.pumpAndSettle();
 
-    // Maria's email is also prefilled in the editable email field in debug builds.
-    expect(find.text('maria@localspot.ph'), findsWidgets);
-      expect(find.text('nena@localspot.ph'), findsOneWidget);
+      final demoEmailLabels = find.byWidgetPredicate(
+        (widget) =>
+            widget is Text &&
+            const {
+              'maria@localspot.ph',
+              'nena@localspot.ph',
+              'tonyo@localspot.ph',
+              'ana@localspot.ph',
+              'admin@localspot.ph',
+              'lito@localspot.ph',
+              'bea@localspot.ph',
+            }.contains(widget.data),
+      );
+      expect(demoEmailLabels, findsNWidgets(7));
       expect(
         find.textContaining('profile and role load from the database'),
         findsNWidgets(7),
