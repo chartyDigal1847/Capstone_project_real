@@ -359,18 +359,21 @@ class LocalSpotApiTest extends TestCase
             ->assertJsonFragment(['label' => 'No catalog match · encode manually']);
     }
 
-    public function test_owner_can_create_tour_and_publish_gate_blocks_unprocessed(): void
+    public function test_owner_can_add_authorized_tour_nodes_but_cannot_publish_unprocessed_nodes(): void
     {
         $tourId = $this->withToken($this->firebaseToken('uid-nena'))
             ->postJson('/api/v1/stores/1/tours', ['title' => 'New walkthrough'])
             ->assertCreated()
             ->json('data.id');
 
+        $this->seedTourAsset(9001);
+        $this->seedTourAsset(9002);
+
         $this->withToken($this->firebaseToken('uid-nena'))
-            ->postJson("/api/v1/tours/$tourId/nodes", ['title' => 'Door'])
+            ->postJson("/api/v1/tours/$tourId/nodes", ['title' => 'Door', 'media_asset_id' => 9001])
             ->assertOk();
         $this->withToken($this->firebaseToken('uid-nena'))
-            ->postJson("/api/v1/tours/$tourId/nodes", ['title' => 'Aisle'])
+            ->postJson("/api/v1/tours/$tourId/nodes", ['title' => 'Aisle', 'media_asset_id' => 9002])
             ->assertOk();
 
         // Cannot publish without processing + review
@@ -379,15 +382,16 @@ class LocalSpotApiTest extends TestCase
             ->assertStatus(422);
     }
 
-    public function test_tour_process_makes_node_ready_and_review_marks_reviewed(): void
+    public function test_tour_processing_fails_closed_until_privacy_processor_is_configured(): void
     {
         $tourId = $this->withToken($this->firebaseToken('uid-nena'))
             ->postJson('/api/v1/stores/1/tours', ['title' => 'Test tour'])
             ->assertCreated()
             ->json('data.id');
 
+        $this->seedTourAsset(9003);
         $response = $this->withToken($this->firebaseToken('uid-nena'))
-            ->postJson("/api/v1/tours/$tourId/nodes", ['title' => 'Entrance'])
+            ->postJson("/api/v1/tours/$tourId/nodes", ['title' => 'Entrance', 'media_asset_id' => 9003])
             ->assertOk()
             ->json('data.nodes');
 
@@ -395,13 +399,24 @@ class LocalSpotApiTest extends TestCase
 
         $this->withToken($this->firebaseToken('uid-nena'))
             ->postJson("/api/v1/tours/$tourId/nodes/$nodeId/process")
-            ->assertOk()
-            ->assertJsonFragment(['privacy_status' => 'ready']);
+            ->assertStatus(503);
 
         $this->withToken($this->firebaseToken('uid-nena'))
             ->postJson("/api/v1/tours/$tourId/nodes/$nodeId/review")
-            ->assertOk()
-            ->assertJsonFragment(['owner_reviewed' => true]);
+            ->assertStatus(422);
+
+        $this->assertSame('processing', $this->firestore->findByNumericId('tours', $tourId)['nodes'][0]['privacy_status']);
+    }
+
+    private function seedTourAsset(int $numericId): void
+    {
+        $this->firestore->seed('mediaAssets', 'tour_asset_' . $numericId, [
+            'numericId' => $numericId,
+            'uid' => 'uid-nena',
+            'storeId' => 1,
+            'mediaType' => 'tour_panorama',
+            'status' => 'pending_privacy_processing',
+        ]);
     }
 
     public function test_owner_can_submit_promotion(): void

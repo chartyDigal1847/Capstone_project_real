@@ -309,49 +309,57 @@ class CatalogCacheTest extends TestCase
         $this->assertNull(CatalogCache::getSearch($searchKey));
     }
 
-    public function test_tour_publish_invalidates_catalog_cache(): void
+    public function test_catalog_cache_is_not_invalidated_by_unprocessed_tour(): void
     {
         // Populate catalog cache
         $this->getJson('/api/v1/catalog')->assertOk();
         $this->assertNotNull(CatalogCache::getCatalog());
 
-        // Create a tour, add nodes, process, review, then publish
+        // Create a tour and add nodes backed by authorized quarantine assets.
         $tourId = $this->withToken($this->firebaseToken('uid-nena'))
             ->postJson('/api/v1/stores/1/tours', ['title' => 'Tour for cache test'])
             ->assertCreated()
             ->json('data.id');
 
-        // Add two nodes — the response includes the tour with nodes.
+        $this->seedTourAsset(9901);
+        $this->seedTourAsset(9902);
         $nodesResponse = $this->withToken($this->firebaseToken('uid-nena'))
-            ->postJson("/api/v1/tours/$tourId/nodes", ['title' => 'Node 1'])
+            ->postJson("/api/v1/tours/$tourId/nodes", ['title' => 'Node 1', 'media_asset_id' => 9901])
             ->assertOk()
             ->json('data.nodes');
 
         $nodesResponse = $this->withToken($this->firebaseToken('uid-nena'))
-            ->postJson("/api/v1/tours/$tourId/nodes", ['title' => 'Node 2'])
+            ->postJson("/api/v1/tours/$tourId/nodes", ['title' => 'Node 2', 'media_asset_id' => 9902])
             ->assertOk()
             ->json('data.nodes');
 
-        // Process and review all nodes
+        // Processing is intentionally fail-closed until a privacy processor exists.
         foreach ($nodesResponse as $node) {
             $this->withToken($this->firebaseToken('uid-nena'))
                 ->postJson("/api/v1/tours/$tourId/nodes/{$node['id']}/process")
-                ->assertOk();
+                ->assertStatus(503);
             $this->withToken($this->firebaseToken('uid-nena'))
                 ->postJson("/api/v1/tours/$tourId/nodes/{$node['id']}/review")
-                ->assertOk();
+                ->assertStatus(422);
         }
 
-        // Re-populate catalog cache
-        $this->getJson('/api/v1/catalog')->assertOk();
-        $this->assertNotNull(CatalogCache::getCatalog());
-
-        // Publish the tour — should invalidate catalog cache
+        // The private, unprocessed tour cannot publish or invalidate catalog data.
         $this->withToken($this->firebaseToken('uid-nena'))
             ->postJson("/api/v1/tours/$tourId/publish")
-            ->assertOk();
+            ->assertStatus(422);
 
-        $this->assertNull(CatalogCache::getCatalog());
+        $this->assertNotNull(CatalogCache::getCatalog());
+    }
+
+    private function seedTourAsset(int $numericId): void
+    {
+        $this->firestore->seed('mediaAssets', 'tour_asset_' . $numericId, [
+            'numericId' => $numericId,
+            'uid' => 'uid-nena',
+            'storeId' => 1,
+            'mediaType' => 'tour_panorama',
+            'status' => 'pending_privacy_processing',
+        ]);
     }
 
     // ── Query-key separation ─────────────────────────────────────────────
