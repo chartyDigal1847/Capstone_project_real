@@ -143,6 +143,8 @@ class _MapboxCanvasState extends State<_MapboxCanvas> {
   GeoJsonSource? _customerSource;
   var _styleReady = false;
   var _panChanged = false;
+  var _satellite = false;
+  var _changingStyle = false;
   String? _styleError;
   StreamSubscription<MapContentGestureContext>? _panSubscription;
 
@@ -213,6 +215,16 @@ class _MapboxCanvasState extends State<_MapboxCanvas> {
 
   Future<void> _onMapCreated(MapboxMap map) async {
     _map = map;
+    await map.gestures.updateSettings(
+      GesturesSettings(
+        scrollEnabled: true,
+        pinchToZoomEnabled: true,
+        pinchPanEnabled: true,
+        simultaneousRotateAndPinchToZoomEnabled: true,
+        doubleTapToZoomInEnabled: true,
+        doubleTouchToZoomOutEnabled: true,
+      ),
+    );
     _panSubscription = map.gestures.pan.gestureEvents.listen((event) {
       if (event.gestureState == GestureState.started) _panChanged = false;
       if (event.gestureState == GestureState.changed) _panChanged = true;
@@ -247,10 +259,22 @@ class _MapboxCanvasState extends State<_MapboxCanvas> {
     );
   }
 
+  Future<void> _zoomBy(double amount) async {
+    final map = _map;
+    if (map == null) return;
+    final camera = await map.getCameraState();
+    final zoom = (camera.zoom + amount).clamp(2.0, 20.0).toDouble();
+    await map.flyTo(
+      CameraOptions(zoom: zoom),
+      MapAnimationOptions(duration: 250),
+    );
+  }
+
   Future<void> _onStyleLoaded(StyleLoadedEventData _) async {
     final map = _map;
     if (map == null) return;
     try {
+      _styleReady = false;
       _routeSource = GeoJsonSource(id: _routeSourceId, data: _emptyCollection);
       _storesSource = GeoJsonSource(
         id: _storesSourceId,
@@ -314,6 +338,7 @@ class _MapboxCanvasState extends State<_MapboxCanvas> {
         AttributionSettings(enabled: true, clickable: true),
       );
       _styleReady = true;
+      if (mounted) setState(() => _changingStyle = false);
       await _syncFeatures();
       if (widget.route.length >= 2) {
         await _fitRoute();
@@ -322,7 +347,34 @@ class _MapboxCanvasState extends State<_MapboxCanvas> {
       }
     } catch (error) {
       if (!mounted) return;
-      setState(() => _styleError = 'Could not load map features: $error');
+      setState(() {
+        _changingStyle = false;
+        _styleError = 'Could not load map features: $error';
+      });
+    }
+  }
+
+  Future<void> _setSatellite(bool satellite) async {
+    final map = _map;
+    if (map == null || _changingStyle || satellite == _satellite) return;
+    setState(() {
+      _satellite = satellite;
+      _changingStyle = true;
+      _styleError = null;
+    });
+    try {
+      await map.style.setStyleURI(
+        satellite
+            ? 'mapbox://styles/mapbox/satellite-streets-v12'
+            : MapboxStyles.MAPBOX_STREETS,
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _satellite = !satellite;
+        _changingStyle = false;
+        _styleError = 'Could not switch map style: $error';
+      });
     }
   }
 
@@ -332,7 +384,10 @@ class _MapboxCanvasState extends State<_MapboxCanvas> {
     final stores = _storesSource;
     final selected = _selectedSource;
     final customer = _customerSource;
-    if (route == null || stores == null || selected == null || customer == null) {
+    if (route == null ||
+        stores == null ||
+        selected == null ||
+        customer == null) {
       return;
     }
 
@@ -416,6 +471,43 @@ class _MapboxCanvasState extends State<_MapboxCanvas> {
           onMapCreated: (map) => _onMapCreated(map),
           onStyleLoadedListener: _onStyleLoaded,
         ),
+        Positioned(
+          top: 12,
+          right: 12,
+          child: Material(
+            color: Colors.white.withValues(alpha: .95),
+            borderRadius: BorderRadius.circular(12),
+            child: PopupMenuButton<bool>(
+              tooltip: 'Choose map style',
+              enabled: !_changingStyle,
+              initialValue: _satellite,
+              onSelected: _setSatellite,
+              itemBuilder:
+                  (context) => const [
+                    PopupMenuItem(value: false, child: Text('Normal map')),
+                    PopupMenuItem(value: true, child: Text('Satellite map')),
+                  ],
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      _satellite ? Icons.satellite_alt : Icons.map_outlined,
+                      size: 18,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(_satellite ? 'Satellite' : 'Normal'),
+                    const Icon(Icons.arrow_drop_down),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
         if (_styleError != null)
           Positioned(
             left: 12,
@@ -436,12 +528,31 @@ class _MapboxCanvasState extends State<_MapboxCanvas> {
         if (widget.onLocateUser != null)
           Positioned(
             right: 12,
-            bottom: 38,
-            child: FloatingActionButton.small(
-              heroTag: null,
-              tooltip: 'Center on my location',
-              onPressed: widget.onLocateUser,
-              child: const Icon(Icons.my_location),
+            bottom: 12,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                FloatingActionButton.small(
+                  heroTag: null,
+                  tooltip: 'Zoom in',
+                  onPressed: () => _zoomBy(1),
+                  child: const Icon(Icons.add),
+                ),
+                const SizedBox(height: 6),
+                FloatingActionButton.small(
+                  heroTag: null,
+                  tooltip: 'Zoom out',
+                  onPressed: () => _zoomBy(-1),
+                  child: const Icon(Icons.remove),
+                ),
+                const SizedBox(height: 6),
+                FloatingActionButton.small(
+                  heroTag: null,
+                  tooltip: 'Center on my location',
+                  onPressed: widget.onLocateUser,
+                  child: const Icon(Icons.my_location),
+                ),
+              ],
             ),
           ),
       ],
@@ -592,7 +703,7 @@ class _SchematicMapView extends StatelessWidget {
                     child: Padding(
                       padding: EdgeInsets.all(10),
                       child: Text(
-                        'Mapbox is not configured. Run with a public token using --dart-define=ACCESS_TOKEN=pk.…',
+                        'Mapbox is not configured. Run with a public token using --dart-define=PUBLIC_MAPBOX_ACCESS_TOKEN=pk.…',
                         style: TextStyle(color: clay, fontSize: 12),
                       ),
                     ),

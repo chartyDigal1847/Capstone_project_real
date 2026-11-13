@@ -30,8 +30,20 @@ class ProductDetailPage extends StatelessWidget {
       children: [
         Stack(
           children: [
-            NetworkPhoto(product.image, height: 240, width: double.infinity, radius: 0),
-            Positioned(top: 12, left: 8, child: IconButton.filledTonal(onPressed: onBack, icon: const Icon(Icons.arrow_back))),
+            NetworkPhoto(
+              product.image,
+              height: 240,
+              width: double.infinity,
+              radius: 0,
+            ),
+            Positioned(
+              top: 12,
+              left: 8,
+              child: IconButton.filledTonal(
+                onPressed: onBack,
+                icon: const Icon(Icons.arrow_back),
+              ),
+            ),
             Positioned(
               top: 12,
               right: 8,
@@ -53,40 +65,79 @@ class ProductDetailPage extends StatelessWidget {
                   children: [
                     Eyebrow(product.category.toUpperCase()),
                     const SizedBox(height: 6),
-                    Text(product.name, style: const TextStyle(fontFamily: 'Georgia', fontSize: 28, height: 1.1)),
-                    if (product.brand.isNotEmpty) Text(product.brand, style: const TextStyle(color: taupe)),
-                    Text(product.packageSize, style: const TextStyle(fontSize: 13)),
+                    Text(
+                      product.name,
+                      style: const TextStyle(
+                        fontFamily: 'Georgia',
+                        fontSize: 28,
+                        height: 1.1,
+                      ),
+                    ),
+                    if (product.brand.isNotEmpty)
+                      Text(product.brand, style: const TextStyle(color: taupe)),
+                    Text(
+                      product.packageSize,
+                      style: const TextStyle(fontSize: 13),
+                    ),
                     if (product.attributes.isNotEmpty) ...[
                       const SizedBox(height: 8),
                       for (final entry in product.attributes.entries)
-                        Text('${entry.key}: ${entry.value}', style: const TextStyle(fontSize: 12, color: taupe)),
+                        Text(
+                          '${entry.key}: ${entry.value}',
+                          style: const TextStyle(fontSize: 12, color: taupe),
+                        ),
                     ],
                     const SizedBox(height: 10),
-                    Text('Also searched as: ${product.aliases.join(', ')}', style: const TextStyle(color: taupe, fontSize: 11, height: 1.4)),
+                    Text(
+                      'Also searched as: ${product.aliases.join(', ')}',
+                      style: const TextStyle(
+                        color: taupe,
+                        fontSize: 11,
+                        height: 1.4,
+                      ),
+                    ),
                   ],
                 ),
               ),
               const SizedBox(height: 18),
-              const Text('Participating sellers', style: TextStyle(fontFamily: 'Georgia', fontSize: 22)),
+              const Text(
+                'Participating sellers',
+                style: TextStyle(fontFamily: 'Georgia', fontSize: 22),
+              ),
               const SizedBox(height: 8),
               if (hits.isEmpty)
-                const EmptyNote('No approved nearby store has listed this product yet.', icon: Icons.storefront_outlined)
+                const EmptyNote(
+                  'No approved nearby store has listed this product yet.',
+                  icon: Icons.storefront_outlined,
+                )
               else
-                ...hits.map((hit) => Padding(
-                      padding: const EdgeInsets.only(bottom: 10),
-                      child: SoftCard(
-                        onTap: () => onStore(hit.store),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(hit.store.name, style: const TextStyle(fontWeight: FontWeight.w700)),
-                            Text('${hit.store.type.label} · ${hit.distanceKm.toStringAsFixed(1)} km'),
-                            Text('${peso(hit.listing.price)} / ${hit.listing.unit} · ${availabilityLabel(hit.listing.availability)}'),
-                            Text(freshness(hit.listing.lastConfirmed), style: const TextStyle(color: taupe, fontSize: 11)),
-                          ],
-                        ),
+                ...hits.map(
+                  (hit) => Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: SoftCard(
+                      onTap: () => onStore(hit.store),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            hit.store.name,
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                          Text(
+                            '${hit.store.type.label} · ${hit.distanceKm.toStringAsFixed(1)} km',
+                          ),
+                          Text(
+                            '${peso(hit.listing.price)} / ${hit.listing.unit} · ${availabilityLabel(hit.listing.availability)}',
+                          ),
+                          Text(
+                            freshness(hit.listing.lastConfirmed),
+                            style: const TextStyle(color: taupe, fontSize: 11),
+                          ),
+                        ],
                       ),
-                    )),
+                    ),
+                  ),
+                ),
             ],
           ),
         ),
@@ -122,8 +173,20 @@ class StoreDetailPage extends StatelessWidget {
       children: [
         Stack(
           children: [
-            NetworkPhoto(store.image, height: 210, width: double.infinity, radius: 0),
-            Positioned(top: 12, left: 8, child: IconButton.filledTonal(onPressed: onBack, icon: const Icon(Icons.arrow_back))),
+            NetworkPhoto(
+              store.image,
+              height: 210,
+              width: double.infinity,
+              radius: 0,
+            ),
+            Positioned(
+              top: 12,
+              left: 8,
+              child: IconButton.filledTonal(
+                onPressed: onBack,
+                icon: const Icon(Icons.arrow_back),
+              ),
+            ),
             Positioned(
               top: 12,
               right: 8,
@@ -145,15 +208,31 @@ class StoreDetailPage extends StatelessWidget {
                   children: [
                     StatusChip(storeStatusLabel(store.status)),
                     const SizedBox(height: 8),
-                    Text(store.name, style: const TextStyle(fontFamily: 'Georgia', fontSize: 28, height: 1.1)),
-                    Text(store.type.label, style: const TextStyle(color: taupe)),
+                    Text(
+                      store.name,
+                      style: const TextStyle(
+                        fontFamily: 'Georgia',
+                        fontSize: 28,
+                        height: 1.1,
+                      ),
+                    ),
+                    Text(
+                      store.type.label,
+                      style: const TextStyle(color: taupe),
+                    ),
                     const SizedBox(height: 10),
                     Text('${store.address}, ${store.barangay}, ${store.city}'),
-                    Text('Landmark: ${store.landmark}', style: const TextStyle(fontSize: 12, color: taupe)),
+                    Text(
+                      'Landmark: ${store.landmark}',
+                      style: const TextStyle(fontSize: 12, color: taupe),
+                    ),
                     Text(store.schedule, style: const TextStyle(fontSize: 12)),
                     if (store.isMobile) ...[
                       const SizedBox(height: 8),
-                      Text(_vendorLocationCopy(store), style: const TextStyle(fontSize: 11, color: taupe)),
+                      Text(
+                        _vendorLocationCopy(store),
+                        style: const TextStyle(fontSize: 11, color: taupe),
+                      ),
                     ],
                   ],
                 ),
@@ -179,17 +258,35 @@ class StoreDetailPage extends StatelessWidget {
                 ),
               ),
               if (tour != null)
-                OutlinedButton(onPressed: onTour, child: const Text('Open 360° store tour'))
+                OutlinedButton(
+                  onPressed: onTour,
+                  child: const Text('Open 360° store tour'),
+                )
               else
-                const EmptyNote('No published store tour yet.', icon: Icons.threesixty_outlined),
-              TextButton(onPressed: onReport, child: const Text('Report a problem with this listing')),
+                const EmptyNote(
+                  'No published store tour yet.',
+                  icon: Icons.threesixty_outlined,
+                ),
+              TextButton(
+                onPressed: onReport,
+                child: const Text('Report a problem with this listing'),
+              ),
               const SizedBox(height: 10),
-              const Text('Sold here', style: TextStyle(fontFamily: 'Georgia', fontSize: 22)),
+              const Text(
+                'Sold here',
+                style: TextStyle(fontFamily: 'Georgia', fontSize: 22),
+              ),
               const SizedBox(height: 8),
-              const InfoBanner('These are this store’s listings only.', icon: Icons.inventory_2_outlined),
+              const InfoBanner(
+                'These are this store’s listings only.',
+                icon: Icons.inventory_2_outlined,
+              ),
               const SizedBox(height: 12),
               if (catalog.isEmpty)
-                const EmptyNote('This store has not published products yet.', icon: Icons.inventory_2_outlined)
+                const EmptyNote(
+                  'This store has not published products yet.',
+                  icon: Icons.inventory_2_outlined,
+                )
               else
                 ...catalog.map((listing) {
                   final product = app.productById(listing.productId);
@@ -200,15 +297,34 @@ class StoreDetailPage extends StatelessWidget {
                       onTap: () => onProduct(product),
                       child: Row(
                         children: [
-                          NetworkPhoto(product.image, width: 72, height: 72, radius: 12),
+                          NetworkPhoto(
+                            product.image,
+                            width: 72,
+                            height: 72,
+                            radius: 12,
+                          ),
                           const SizedBox(width: 12),
                           Expanded(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(product.name, style: const TextStyle(fontWeight: FontWeight.w700)),
-                                Text('${peso(listing.price)} / ${listing.unit}', style: const TextStyle(fontSize: 13)),
-                                Text('${availabilityLabel(listing.availability)} · ${freshness(listing.lastConfirmed)}', style: const TextStyle(fontSize: 11, color: taupe)),
+                                Text(
+                                  product.name,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                Text(
+                                  '${peso(listing.price)} / ${listing.unit}',
+                                  style: const TextStyle(fontSize: 13),
+                                ),
+                                Text(
+                                  '${availabilityLabel(listing.availability)} · ${freshness(listing.lastConfirmed)}',
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    color: taupe,
+                                  ),
+                                ),
                               ],
                             ),
                           ),
@@ -252,14 +368,22 @@ class _TourViewerPageState extends State<TourViewerPage> {
                 builder: (context, constraints) {
                   return GestureDetector(
                     onHorizontalDragUpdate: (details) {
-                      setState(() => pan = (pan + details.delta.dx).clamp(-220.0, 220.0));
+                      setState(
+                        () =>
+                            pan = (pan + details.delta.dx).clamp(-220.0, 220.0),
+                      );
                     },
                     onHorizontalDragEnd: (details) {
-                      if (details.primaryVelocity == null || node.connections.isEmpty) return;
+                      if (details.primaryVelocity == null ||
+                          node.connections.isEmpty)
+                        return;
                       if (details.primaryVelocity!.abs() < 900) return;
                       setState(() {
                         pan = 0;
-                        nodeId = details.primaryVelocity! < 0 ? node.connections.first : node.connections.last;
+                        nodeId =
+                            details.primaryVelocity! < 0
+                                ? node.connections.first
+                                : node.connections.last;
                       });
                     },
                     child: ClipRect(
@@ -287,7 +411,10 @@ class _TourViewerPageState extends State<TourViewerPage> {
                 const Center(
                   child: Padding(
                     padding: EdgeInsets.all(24),
-                    child: EmptyNote('This viewpoint has no public privacy-processed image. The original stays private.', icon: Icons.hide_image_outlined),
+                    child: EmptyNote(
+                      'This viewpoint has no public privacy-processed image. The original stays private.',
+                      icon: Icons.hide_image_outlined,
+                    ),
                   ),
                 ),
               Positioned(
@@ -298,8 +425,14 @@ class _TourViewerPageState extends State<TourViewerPage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(node.title, style: const TextStyle(fontWeight: FontWeight.w700)),
-                      const Text('Drag to look around this viewpoint · use arrows to walk the connected tour', style: TextStyle(fontSize: 11, color: taupe)),
+                      Text(
+                        node.title,
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      const Text(
+                        'Drag to look around this viewpoint · use arrows to walk the connected tour',
+                        style: TextStyle(fontSize: 11, color: taupe),
+                      ),
                       const SizedBox(height: 8),
                       Wrap(
                         spacing: 8,
@@ -307,11 +440,16 @@ class _TourViewerPageState extends State<TourViewerPage> {
                         children: [
                           for (final id in node.connections)
                             OutlinedButton(
-                              onPressed: () => setState(() {
-                                pan = 0;
-                                nodeId = id;
-                              }),
-                              child: Text(widget.tour.nodes.firstWhere((n) => n.id == id).title),
+                              onPressed:
+                                  () => setState(() {
+                                    pan = 0;
+                                    nodeId = id;
+                                  }),
+                              child: Text(
+                                widget.tour.nodes
+                                    .firstWhere((n) => n.id == id)
+                                    .title,
+                              ),
                             ),
                         ],
                       ),
@@ -329,15 +467,22 @@ class _TourViewerPageState extends State<TourViewerPage> {
 
 String _vendorLocationCopy(Store store) {
   return switch (store.locationMode) {
-    LocationMode.live => 'Mobile vendor · live public location is on${store.locationUpdatedAt == null ? '' : ' · updated ${freshness(store.locationUpdatedAt!)}'}.',
-    LocationMode.stale => 'Mobile vendor · live session expired. Showing the regular selling area.',
-    LocationMode.regular => 'Mobile vendor · regular selling area. Live sharing is off.',
+    LocationMode.live =>
+      'Mobile vendor · live public location is on${store.locationUpdatedAt == null ? '' : ' · updated ${freshness(store.locationUpdatedAt!)}'}.',
+    LocationMode.stale =>
+      'Mobile vendor · live session expired. Showing the regular selling area.',
+    LocationMode.regular =>
+      'Mobile vendor · regular selling area. Live sharing is off.',
     LocationMode.fixed => 'Mobile vendor · registered pin.',
   };
 }
 
 class RoutePreviewPage extends StatefulWidget {
-  const RoutePreviewPage({super.key, required this.store, required this.onBack});
+  const RoutePreviewPage({
+    super.key,
+    required this.store,
+    required this.onBack,
+  });
   final Store store;
   final VoidCallback onBack;
 
@@ -393,7 +538,10 @@ class _RoutePreviewPageState extends State<RoutePreviewPage> {
     try {
       if (requestLocation) await app.requestForegroundLocation();
       if (!mounted || generation != _loadGeneration) return;
-      final result = await app.previewRoute(destLat: widget.store.lat, destLng: widget.store.lng);
+      final result = await app.previewRoute(
+        destLat: widget.store.lat,
+        destLng: widget.store.lng,
+      );
       if (!mounted || generation != _loadGeneration) return;
       setState(() {
         preview = result;
@@ -420,8 +568,14 @@ class _RoutePreviewPageState extends State<RoutePreviewPage> {
           padding: const EdgeInsets.symmetric(horizontal: 20),
           child: LocalMapView(
             stores: [widget.store],
-            centerLat: navigating ? (app.deviceLat ?? app.searchLat) : widget.store.lat,
-            centerLng: navigating ? (app.deviceLng ?? app.searchLng) : widget.store.lng,
+            centerLat:
+                navigating
+                    ? (app.deviceLat ?? app.searchLat)
+                    : widget.store.lat,
+            centerLng:
+                navigating
+                    ? (app.deviceLng ?? app.searchLng)
+                    : widget.store.lng,
             userLat: app.deviceLat,
             userLng: app.deviceLng,
             selectedId: widget.store.id,
@@ -435,39 +589,60 @@ class _RoutePreviewPageState extends State<RoutePreviewPage> {
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20),
           child: SoftCard(
-            child: loading
-                ? const Row(
-                    children: [
-                      SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      ),
-                      SizedBox(width: 10),
-                      Text('Calculating Mapbox road route…'),
-                    ],
-                  )
-                : Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(widget.store.name, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
-                      if (preview != null) ...[
-                        Text('${preview!.distanceKm.toStringAsFixed(1)} km · ${preview!.durationMinutes ?? '—'} min'),
-                        Text('Start: ${app.deviceLat != null ? 'Current GPS location' : '${app.searchAreaLabel} (approximate)'}'),
-                        Text('Destination: ${_storeDestination(widget.store)}'),
-                        Text('Road route via ${preview!.provider}', style: const TextStyle(color: taupe, fontSize: 11)),
+            child:
+                loading
+                    ? const Row(
+                      children: [
+                        SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                        SizedBox(width: 10),
+                        Text('Calculating Mapbox road route…'),
                       ],
-                      if (app.deviceLat == null) Text(app.locationNote, style: const TextStyle(color: taupe, fontSize: 11)),
-                      if (error != null) Text(error!, style: const TextStyle(color: clay)),
-                      const SizedBox(height: 8),
-                      Text(
-                        navigating
-                            ? 'Following your position on the LocalSpot map. Turn-by-turn voice guidance is a later enhancement.'
-                            : 'Stay inside LocalSpot to preview this route.',
-                        style: const TextStyle(color: taupe, fontSize: 11),
-                      ),
-                    ],
-                  ),
+                    )
+                    : Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          widget.store.name,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 16,
+                          ),
+                        ),
+                        if (preview != null) ...[
+                          Text(
+                            '${preview!.distanceKm.toStringAsFixed(1)} km · ${preview!.durationMinutes ?? '—'} min',
+                          ),
+                          Text(
+                            'Start: ${app.deviceLat != null ? 'Current GPS location' : '${app.searchAreaLabel} (approximate)'}',
+                          ),
+                          Text(
+                            'Destination: ${_storeDestination(widget.store)}',
+                          ),
+                          Text(
+                            'Road route via ${preview!.provider}',
+                            style: const TextStyle(color: taupe, fontSize: 11),
+                          ),
+                        ],
+                        if (app.deviceLat == null)
+                          Text(
+                            app.locationNote,
+                            style: const TextStyle(color: taupe, fontSize: 11),
+                          ),
+                        if (error != null)
+                          Text(error!, style: const TextStyle(color: clay)),
+                        const SizedBox(height: 8),
+                        Text(
+                          navigating
+                              ? 'Following your position on the LocalSpot map. Turn-by-turn voice guidance is a later enhancement.'
+                              : 'Stay inside LocalSpot to preview this route.',
+                          style: const TextStyle(color: taupe, fontSize: 11),
+                        ),
+                      ],
+                    ),
           ),
         ),
         Padding(
@@ -490,7 +665,9 @@ class _RoutePreviewPageState extends State<RoutePreviewPage> {
         ),
         TextButton(
           onPressed: () {
-            final uri = Uri.parse('https://www.openstreetmap.org/directions?from=${app.searchLat},${app.searchLng}&to=${widget.store.lat},${widget.store.lng}');
+            final uri = Uri.parse(
+              'https://www.openstreetmap.org/directions?from=${app.searchLat},${app.searchLng}&to=${widget.store.lat},${widget.store.lng}',
+            );
             launchUrl(uri, mode: LaunchMode.externalApplication);
           },
           child: const Text('Optional: open in an external map app'),
@@ -501,13 +678,18 @@ class _RoutePreviewPageState extends State<RoutePreviewPage> {
 }
 
 String _storeDestination(Store store) {
-  final parts = [store.address, store.barangay, store.city].where((part) => part.trim().isNotEmpty);
+  final parts = [
+    store.address,
+    store.barangay,
+    store.city,
+  ].where((part) => part.trim().isNotEmpty);
   return parts.isEmpty ? store.name : parts.join(', ');
 }
 
 class LocationPage extends StatelessWidget {
-  const LocationPage({super.key, required this.onBack});
+  const LocationPage({super.key, required this.onBack, required this.onStore});
   final VoidCallback onBack;
+  final ValueChanged<Store> onStore;
 
   @override
   Widget build(BuildContext context) {
@@ -524,12 +706,18 @@ class LocationPage extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20),
           child: LocalMapView(
-            stores: app.stores.where((s) => s.status == StoreStatus.approved).toList(),
+            stores:
+                app.stores
+                    .where((s) => s.status == StoreStatus.approved)
+                    .toList(),
             centerLat: app.searchLat,
             centerLng: app.searchLng,
             userLat: app.deviceLat,
             userLng: app.deviceLng,
-            onPick: (lat, lng) => app.setManualCenter(lat, lng, 'Pinned area · Quezon City'),
+            onSelect: onStore,
+            onPick:
+                (lat, lng) =>
+                    app.setManualCenter(lat, lng, 'Pinned area · Quezon City'),
             onLocateUser: () => app.requestForegroundLocation(),
             height: 280,
           ),
@@ -537,7 +725,10 @@ class LocationPage extends StatelessWidget {
         const SizedBox(height: 12),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20),
-          child: PrimaryButton('Use my current location', onPressed: () => app.requestForegroundLocation()),
+          child: PrimaryButton(
+            'Use my current location',
+            onPressed: () => app.requestForegroundLocation(),
+          ),
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
@@ -546,7 +737,10 @@ class LocationPage extends StatelessWidget {
             child: const Text('Use approximate Cubao area'),
           ),
         ),
-        TextButton(onPressed: app.denyLocation, child: const Text('Keep using a manual area')),
+        TextButton(
+          onPressed: app.denyLocation,
+          child: const Text('Keep using a manual area'),
+        ),
       ],
     );
   }
@@ -571,22 +765,35 @@ class _ReportPageState extends State<ReportPage> {
       padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
       children: [
         PageHeader('Report listing', onBack: widget.onBack),
-        SoftCard(child: Text(widget.target, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16))),
+        SoftCard(
+          child: Text(
+            widget.target,
+            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
+          ),
+        ),
         const SizedBox(height: 12),
         SoftCard(child: LabeledField('What is wrong?', reason, maxLines: 4)),
         const SizedBox(height: 16),
-        PrimaryButton('Submit report', onPressed: () {
-          if (reason.text.trim().isEmpty) return;
-          app.addReport(widget.target, reason.text.trim());
-          widget.onBack();
-        }),
+        PrimaryButton(
+          'Submit report',
+          onPressed: () {
+            if (reason.text.trim().isEmpty) return;
+            app.addReport(widget.target, reason.text.trim());
+            widget.onBack();
+          },
+        ),
       ],
     );
   }
 }
 
 class CameraSearchPage extends StatefulWidget {
-  const CameraSearchPage({super.key, required this.onBack, required this.onProduct, required this.onStore});
+  const CameraSearchPage({
+    super.key,
+    required this.onBack,
+    required this.onProduct,
+    required this.onStore,
+  });
   final VoidCallback onBack;
   final ValueChanged<CatalogProduct> onProduct;
   final ValueChanged<Store> onStore;
@@ -616,7 +823,8 @@ class _CameraSearchPageState extends State<CameraSearchPage> {
   List<RecognitionSuggestion> get _visibleSuggestions {
     final current = result;
     if (current == null) return const [];
-    if (selectedObject == null || current.objects.length <= 1) return current.suggestions;
+    if (selectedObject == null || current.objects.length <= 1)
+      return current.suggestions;
     return [
       for (final object in current.objects)
         if (object.label == selectedObject) ...object.suggestions,
@@ -631,23 +839,32 @@ class _CameraSearchPageState extends State<CameraSearchPage> {
         if (suggestion.product != null) suggestion.product!.id,
     };
     if (ids.isEmpty) return current.hits;
-    return [for (final hit in current.hits) if (ids.contains(hit.product.id)) hit];
+    return [
+      for (final hit in current.hits)
+        if (ids.contains(hit.product.id)) hit,
+    ];
   }
 
   Future<void> _lookup(String hint, {String? image}) async {
     setState(() => loading = true);
-    final next = await AppScope.of(context).visualSearch(hint: hint, image: image);
+    final next = await AppScope.of(
+      context,
+    ).visualSearch(hint: hint, image: image);
     if (!mounted) return;
     setState(() {
       loading = false;
       result = next;
-      selectedObject = next.objects.length > 1 ? next.objects.first.label : null;
+      selectedObject =
+          next.objects.length > 1 ? next.objects.first.label : null;
     });
   }
 
   Future<void> _pick(ImageSource source) async {
     try {
-      final file = await ImagePicker().pickImage(source: source, imageQuality: 70);
+      final file = await ImagePicker().pickImage(
+        source: source,
+        imageQuality: 70,
+      );
       if (file == null) return;
       String? image;
       try {
@@ -656,10 +873,17 @@ class _CameraSearchPageState extends State<CameraSearchPage> {
           image = 'data:image/jpeg;base64,${base64Encode(bytes)}';
         }
       } catch (_) {}
-      await _lookup(file.name.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), ' '), image: image);
+      await _lookup(
+        file.name.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), ' '),
+        image: image,
+      );
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Camera unavailable. Try a sample photo.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Camera unavailable. Try a sample photo.'),
+        ),
+      );
     }
   }
 
@@ -685,7 +909,11 @@ class _CameraSearchPageState extends State<CameraSearchPage> {
             ),
           ),
         ),
-        if (loading) const Padding(padding: EdgeInsets.all(16), child: Center(child: CircularProgressIndicator())),
+        if (loading)
+          const Padding(
+            padding: EdgeInsets.all(16),
+            child: Center(child: CircularProgressIndicator()),
+          ),
         const SizedBox(height: 12),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -693,7 +921,14 @@ class _CameraSearchPageState extends State<CameraSearchPage> {
             padding: EdgeInsets.zero,
             child: Column(
               children: [
-                for (final key in const ['mango', 'oil', 'sardines', 'hammer', 'mango and oil', 'unknown']) ...[
+                for (final key in const [
+                  'mango',
+                  'oil',
+                  'sardines',
+                  'hammer',
+                  'mango and oil',
+                  'unknown',
+                ]) ...[
                   if (key != 'mango') const Divider(height: 1),
                   MenuRow(
                     icon: Icons.image_outlined,
@@ -718,7 +953,8 @@ class _CameraSearchPageState extends State<CameraSearchPage> {
                     ChoiceChip(
                       label: Text(object.label),
                       selected: selectedObject == object.label,
-                      onSelected: (_) => setState(() => selectedObject = object.label),
+                      onSelected:
+                          (_) => setState(() => selectedObject = object.label),
                     ),
                 ],
               ),
@@ -726,7 +962,10 @@ class _CameraSearchPageState extends State<CameraSearchPage> {
           if (result!.uncertain)
             const Padding(
               padding: EdgeInsets.fromLTRB(20, 0, 20, 8),
-              child: InfoBanner('Match is uncertain. Showing similar participating listings when possible.', icon: Icons.help_outline),
+              child: InfoBanner(
+                'Match is uncertain. Showing similar participating listings when possible.',
+                icon: Icons.help_outline,
+              ),
             ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -739,8 +978,14 @@ class _CameraSearchPageState extends State<CameraSearchPage> {
                     MenuRow(
                       icon: Icons.auto_awesome_outlined,
                       title: _visibleSuggestions[i].label,
-                      subtitle: 'Confidence ${(_visibleSuggestions[i].confidence * 100).round()}%',
-                      onTap: _visibleSuggestions[i].product == null ? null : () => widget.onProduct(_visibleSuggestions[i].product!),
+                      subtitle:
+                          'Confidence ${(_visibleSuggestions[i].confidence * 100).round()}%',
+                      onTap:
+                          _visibleSuggestions[i].product == null
+                              ? null
+                              : () => widget.onProduct(
+                                _visibleSuggestions[i].product!,
+                              ),
                     ),
                   ],
                 ],
@@ -751,22 +996,33 @@ class _CameraSearchPageState extends State<CameraSearchPage> {
           if (_visibleHits.isEmpty)
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 20),
-              child: EmptyNote('No participating seller listed a match in this search area.', icon: Icons.search_off),
+              child: EmptyNote(
+                'No participating seller listed a match in this search area.',
+                icon: Icons.search_off,
+              ),
             )
           else
-            ..._visibleHits.map((hit) => Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
-                  child: SoftCard(
-                    onTap: () => widget.onStore(hit.store),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(hit.product.name, style: const TextStyle(fontWeight: FontWeight.w700)),
-                        Text('${hit.store.name} · ${peso(hit.listing.price)} / ${hit.listing.unit} · ${hit.distanceKm.toStringAsFixed(1)} km', style: const TextStyle(color: taupe, fontSize: 12)),
-                      ],
-                    ),
+            ..._visibleHits.map(
+              (hit) => Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+                child: SoftCard(
+                  onTap: () => widget.onStore(hit.store),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        hit.product.name,
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      Text(
+                        '${hit.store.name} · ${peso(hit.listing.price)} / ${hit.listing.unit} · ${hit.distanceKm.toStringAsFixed(1)} km',
+                        style: const TextStyle(color: taupe, fontSize: 12),
+                      ),
+                    ],
                   ),
-                )),
+                ),
+              ),
+            ),
         ],
       ],
     );

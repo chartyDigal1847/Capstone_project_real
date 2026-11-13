@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
@@ -37,7 +38,7 @@ class DirectionsService {
     }
     if (!_accessToken.startsWith('pk.') || _accessToken.startsWith('sk.')) {
       throw const DirectionsException(
-        'Add a public Mapbox token with --dart-define=ACCESS_TOKEN=pk.… to load road directions.',
+        'Add a public Mapbox token with --dart-define=PUBLIC_MAPBOX_ACCESS_TOKEN=pk.… to load road directions.',
       );
     }
 
@@ -51,9 +52,16 @@ class DirectionsService {
           'access_token': _accessToken,
         });
 
-    final response = await _client
-        .get(uri, headers: const {'Accept': 'application/json'})
-        .timeout(const Duration(seconds: 12));
+    late final http.Response response;
+    try {
+      response = await _client
+          .get(uri, headers: const {'Accept': 'application/json'})
+          .timeout(const Duration(seconds: 12));
+    } on http.ClientException {
+      throw const DirectionsException('No Internet Connection');
+    } on TimeoutException {
+      throw const DirectionsException('No Internet Connection');
+    }
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw DirectionsException(
         'Mapbox Directions request failed (${response.statusCode}). Check the public token and its Directions scope.',
