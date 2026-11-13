@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 const ivory = Color(0xFFF6F1E8);
 const paper = Color(0xFFFFFDF8);
