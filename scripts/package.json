@@ -4,7 +4,11 @@
   "description": "",
   "main": "seed_firestore.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "npm run smoke:ci",
+    "smoke:rules": "node firestore_rules_smoke.cjs && node firestore_access_smoke.cjs",
+    "smoke:ci": "npm run smoke:rules && node auth_profile_smoke.cjs && node backfill_search_smoke.cjs && node callable_authorization_unit_smoke.cjs && node callable_authorization_smoke.cjs && node storage_rules_smoke.cjs && node cleanup_media_smoke.cjs && node media_sanitizer_smoke.cjs",
+    "backfill:search-fields": "node backfill_search_fields.cjs",
+    "catalog:remove-unsplash": "node remove_unsplash_catalog_images.cjs"
   },
   "keywords": [],
   "author": "",

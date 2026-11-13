@@ -9,11 +9,51 @@
       ]
     },
     {
+      "collectionGroup": "listings",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "geohash", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "stores",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "geohash", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "stores",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "numericId", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "stores",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "ownerUid", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "storeMembers",
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "storeId", "order": "ASCENDING" },
         { "fieldPath": "email", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "storeMembers",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "storeId", "order": "ASCENDING" },
+        { "fieldPath": "userUid", "order": "ASCENDING" }
       ]
     },
     {
@@ -25,12 +65,36 @@
       ]
     },
     {
+      "collectionGroup": "mediaAssets",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "updatedAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "tours",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "ownerUid", "order": "ASCENDING" },
+        { "fieldPath": "numericId", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "favorites",
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "uid", "order": "ASCENDING" },
         { "fieldPath": "favoritable_type", "order": "ASCENDING" },
         { "fieldPath": "favoritable_id", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "vendorSessions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "ended_at", "order": "ASCENDING" },
+        { "fieldPath": "expiresAt", "order": "ASCENDING" }
       ]
     },
     {

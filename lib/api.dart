@@ -1,14 +1,12 @@
 // api.dart — shared data-transfer utilities for LocalSpot.
 //
-// The HTTP-based Laravel client has been removed as part of the Firebase
-// migration.  Only the exception type, JSON helpers and from-JSON
-// constructors remain here so the rest of the codebase is unaffected.
+// Shared exception type and JSON helpers used by the Firebase data layer.
 
 import 'models.dart';
 
 class ApiException implements Exception {
   ApiException(this.message, {this.status, Map<String, String>? fieldErrors})
-      : fieldErrors = fieldErrors ?? const {};
+    : fieldErrors = fieldErrors ?? const {};
 
   factory ApiException.fromResponse(int status, dynamic body) {
     final map =
@@ -18,16 +16,18 @@ class ApiException implements Exception {
     if (raw is Map) {
       for (final entry in raw.entries) {
         final value = entry.value;
-        errors[entry.key.toString()] = value is List && value.isNotEmpty
-            ? value.first.toString()
-            : value.toString();
+        errors[entry.key.toString()] =
+            value is List && value.isNotEmpty
+                ? value.first.toString()
+                : value.toString();
       }
     }
-    final message = map['message'] is String
-        ? map['message'] as String
-        : (errors.values.isNotEmpty
-            ? errors.values.first
-            : 'Request failed ($status)');
+    final message =
+        map['message'] is String
+            ? map['message'] as String
+            : (errors.values.isNotEmpty
+                ? errors.values.first
+                : 'Request failed ($status)');
     return ApiException(message, status: status, fieldErrors: errors);
   }
 
@@ -85,9 +85,16 @@ Store storeFromJson(Map<String, dynamic> json) {
     id: asInt(json['id']),
     ownerId: asInt(json['owner_id']),
     name: json['name'] as String? ?? '',
-    type: _enum(StoreType.values, json['type'] as String? ?? 'other', StoreType.other),
-    status:
-        _enum(StoreStatus.values, json['status'] as String? ?? 'pending', StoreStatus.pending),
+    type: _enum(
+      StoreType.values,
+      json['type'] as String? ?? 'other',
+      StoreType.other,
+    ),
+    status: _enum(
+      StoreStatus.values,
+      json['status'] as String? ?? 'pending',
+      StoreStatus.pending,
+    ),
     lat: (json['lat'] as num?)?.toDouble() ?? 0.0,
     lng: (json['lng'] as num?)?.toDouble() ?? 0.0,
     barangay: json['barangay'] as String? ?? '',
@@ -104,8 +111,9 @@ Store storeFromJson(Map<String, dynamic> json) {
           (json['is_mobile'] == true ? 'regular' : 'fixed'),
       LocationMode.fixed,
     ),
-    locationUpdatedAt:
-        DateTime.tryParse(json['location_updated_at'] as String? ?? ''),
+    locationUpdatedAt: DateTime.tryParse(
+      json['location_updated_at'] as String? ?? '',
+    ),
   );
 }
 
@@ -130,11 +138,13 @@ VendorSession? vendorSessionFromJson(Map<String, dynamic>? json) {
     lat: (json['lat'] as num).toDouble(),
     lng: (json['lng'] as num).toDouble(),
     startedAt:
-        DateTime.tryParse(json['started_at'] as String? ?? '') ?? DateTime.now(),
+        DateTime.tryParse(json['started_at'] as String? ?? '') ??
+        DateTime.now(),
     lastUpdateAt:
         DateTime.tryParse(json['last_update_at'] as String? ?? '') ??
-            DateTime.now(),
-    expiresAt: DateTime.tryParse(json['expires_at'] as String? ?? '') ??
+        DateTime.now(),
+    expiresAt:
+        DateTime.tryParse(json['expires_at'] as String? ?? '') ??
         DateTime.now().add(const Duration(hours: 2)),
     endedAt: DateTime.tryParse(json['ended_at'] as String? ?? ''),
   );
@@ -151,9 +161,10 @@ CatalogProduct productFromJson(Map<String, dynamic> json) {
     barcode: json['barcode'] as String?,
     image: json['image'] as String? ?? '',
     attributes: {
-      for (final entry in Map<String, dynamic>.from(
-              json['attributes'] as Map? ?? {})
-          .entries)
+      for (final entry
+          in Map<String, dynamic>.from(
+            json['attributes'] as Map? ?? {},
+          ).entries)
         entry.key: '${entry.value}',
     },
   );
@@ -168,12 +179,18 @@ StoreListing listingFromJson(Map<String, dynamic> json) {
     unit: json['unit'] as String? ?? 'piece',
     quantity: (json['quantity'] as num?)?.toInt() ?? 0,
     availability: _enum(
-        Availability.values, json['availability'] as String? ?? 'in_stock', Availability.inStock),
+      Availability.values,
+      json['availability'] as String? ?? 'in_stock',
+      Availability.inStock,
+    ),
     lastConfirmed:
         DateTime.tryParse(json['last_confirmed_at'] as String? ?? '') ??
-            DateTime.now(),
-    status: _enum(ListingStatus.values,
-        json['status'] as String? ?? 'active', ListingStatus.active),
+        DateTime.now(),
+    status: _enum(
+      ListingStatus.values,
+      json['status'] as String? ?? 'active',
+      ListingStatus.active,
+    ),
   );
 }
 
@@ -188,8 +205,11 @@ Promotion promotionFromJson(Map<String, dynamic> json) {
     endsAt:
         DateTime.tryParse(json['ends_at'] as String? ?? '') ?? DateTime.now(),
     sponsored: json['sponsored'] == true,
-    status: _enum(PromotionStatus.values, json['status'] as String,
-        PromotionStatus.pending),
+    status: _enum(
+      PromotionStatus.values,
+      json['status'] as String,
+      PromotionStatus.pending,
+    ),
   );
 }
 
@@ -198,7 +218,11 @@ StoreTour tourFromJson(Map<String, dynamic> json) {
     id: asInt(json['id']),
     storeId: asInt(json['store_id']),
     title: json['title'] as String,
-    status: _enum(TourStatus.values, json['status'] as String, TourStatus.draft),
+    status: _enum(
+      TourStatus.values,
+      json['status'] as String,
+      TourStatus.draft,
+    ),
     nodes: [
       for (final node in (json['nodes'] as List? ?? []))
         TourNode(
@@ -206,11 +230,15 @@ StoreTour tourFromJson(Map<String, dynamic> json) {
           title: node['title'] as String,
           image: node['image'] as String? ?? '',
           connections: [...?(node['connections'] as List?)?.map(asInt)],
-          privacyStatus: _enum(PrivacyStatus.values,
-              node['privacy_status'] as String? ?? 'ready', PrivacyStatus.ready),
+          privacyStatus: _enum(
+            PrivacyStatus.values,
+            node['privacy_status'] as String? ?? 'ready',
+            PrivacyStatus.ready,
+          ),
           ownerReviewed: node['owner_reviewed'] == true,
           manualBlur: node['manual_blur'] == true,
           originalRetained: node['original_retained'] == true,
+          originalStoragePath: node['original_path'] as String?,
           blurRegions: [
             for (final region in (node['blur_regions'] as List? ?? []))
               BlurRegion(
@@ -226,7 +254,7 @@ StoreTour tourFromJson(Map<String, dynamic> json) {
 }
 
 String availabilityApi(Availability value) => switch (value) {
-      Availability.inStock => 'in_stock',
-      Availability.low => 'low',
-      Availability.unavailable => 'unavailable',
-    };
+  Availability.inStock => 'in_stock',
+  Availability.low => 'low',
+  Availability.unavailable => 'unavailable',
+};

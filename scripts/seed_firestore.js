@@ -1,27 +1,36 @@
 /**
  * LocalSpot — Firestore Demo Data Seeder
  *
- * Usage:
- *   1. Go to Firebase Console → Project Settings → Service accounts
- *   2. Click "Generate new private key" and save it as serviceAccountKey.json
- *      inside this scripts/ folder (it is git-ignored).
- *   3. Run:  node scripts/seed_firestore.js
+ * Usage (Firebase Emulator only):
+ *   1. Start the Auth and Firestore emulators with a demo-* project ID.
+ *   2. Set GCLOUD_PROJECT=demo-localspot and LOCALSPOT_ALLOW_DEMO_SEED=true.
+ *   3. Set FIRESTORE_EMULATOR_HOST and FIREBASE_AUTH_EMULATOR_HOST.
+ *   4. Run: node scripts/seed_firestore.js
  *
  * This script creates demo stores, products, listings, promotions and tours
- * in your Firestore database. It also creates Firebase Auth accounts for the
+ * in the local emulator. It also creates Firebase Auth accounts for the
  * demo users using the password "demo".
  *
  * Safe to run multiple times — it checks for existing docs by numericId.
  */
 
-const { initializeApp, cert } = require('firebase-admin/app');
+const projectId = process.env.GCLOUD_PROJECT || '';
+if (
+  process.env.LOCALSPOT_ALLOW_DEMO_SEED !== 'true' ||
+  !process.env.FIRESTORE_EMULATOR_HOST ||
+  !process.env.FIREBASE_AUTH_EMULATOR_HOST ||
+  !projectId.startsWith('demo-')
+) {
+  throw new Error(
+    'Demo seeding requires explicit opt-in, Auth and Firestore Emulator hosts, and a GCLOUD_PROJECT beginning with demo-. No credentials or production projects are accepted.',
+  );
+}
+
+const { initializeApp } = require('firebase-admin/app');
 const { getFirestore } = require('firebase-admin/firestore');
 const { getAuth } = require('firebase-admin/auth');
-const path = require('path');
 
-const serviceAccount = require(path.join(__dirname, 'serviceAccountKey.json'));
-
-initializeApp({ credential: cert(serviceAccount) });
+initializeApp({ projectId });
 
 const db = getFirestore();
 const auth = getAuth();

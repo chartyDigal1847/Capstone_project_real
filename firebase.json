@@ -1,1 +1,48 @@
-{"auth":{"providers":{"emailPassword":true,"anonymous":false}},"firestore":{"database":"(default)","location":"asia-southeast1","rules":"firestore.rules","indexes":"firestore.indexes.json"},"storage":{"rules":"storage.rules"},"flutter":{"platforms":{"android":{"default":{"projectId":"capstone-project-561a2","appId":"1:861968082342:android:3144e4e8508f5dd0fd9b67","fileOutput":"android/app/google-services.json"}},"dart":{"lib/firebase_options.dart":{"projectId":"capstone-project-561a2","configurations":{"android":"1:861968082342:android:3144e4e8508f5dd0fd9b67"}}}}}}
+{
+  "functions": {
+    "source": "functions",
+    "codebase": "default"
+  },
+  "auth": {
+    "providers": {
+      "emailPassword": true,
+      "anonymous": false
+    }
+  },
+  "firestore": {
+    "database": "(default)",
+    "location": "asia-southeast1",
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "storage": {
+    "rules": "storage.rules"
+  },
+  "emulators": {
+    "auth": { "port": 9099 },
+    "firestore": { "port": 8080 },
+    "functions": { "port": 5001 },
+    "storage": { "port": 9199 },
+    "ui": { "enabled": true, "port": 4000 },
+    "singleProjectMode": true
+  },
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "capstone-project-561a2",
+          "appId": "1:861968082342:android:3144e4e8508f5dd0fd9b67",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "capstone-project-561a2",
+          "configurations": {
+            "android": "1:861968082342:android:3144e4e8508f5dd0fd9b67"
+          }
+        }
+      }
+    }
+  }
+}

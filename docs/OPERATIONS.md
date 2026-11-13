@@ -1,59 +1,36 @@
-# LocalSpot operations
+# Firebase operations
 
-Pilot operations for a single-server Docker Compose deployment. Kubernetes is not required.
+This runbook covers LocalSpot's Firebase and Flutter deployment. No application server or self-hosted database is part of the runtime architecture.
 
-## Secrets and configuration
+## Local development
 
-- Keep `.env` and production secrets out of git and out of the image (see `backend/.dockerignore`).
-- Set `APP_ENV=production`, `APP_DEBUG=false`, a unique `APP_KEY`, and database passwords on the host.
-- Sanctum tokens expire (`SANCTUM_TOKEN_EXPIRATION_MINUTES`) and logout revokes the current token.
-- Restrict public map-tile and routing keys by app and domain. Do not put MySQL or AI credentials in Flutter.
-- Third-party Street View and street-level imagery are out of scope; do not enable Google Street View, Mapillary, KartaView, or Panoramax for this release.
+1. Install Flutter, Node.js 22, Java, and Firebase CLI.
+2. Install app and Functions dependencies with `flutter pub get` and `npm --prefix functions ci`.
+3. Start the configured local services with `firebase emulators:start --project demo-localspot`.
+4. Run the app against them with `flutter run --dart-define=USE_FIREBASE_EMULATORS=true`. Android Emulator uses `10.0.2.2` to reach the host, so pass `--dart-define=FIREBASE_EMULATOR_HOST=10.0.2.2`. For a physical device, pass the development computer's private LAN address instead.
+5. Run Flutter analysis/tests and the emulator smoke scripts listed in `scripts/package.json` and the GitHub Actions workflow.
+6. Keep emulator data, debug App Check tokens, and service credentials out of production. The app rejects emulator configuration in release builds.
 
-## HTTPS and network
+## Catalog image cleanup
 
-- Publish only the reverse proxy (443). The Compose file keeps MySQL on the private `internal` network.
-- Terminate TLS at Caddy, nginx, or a managed load balancer in front of `app:8080`.
-- Do not expose port 3306 on the public internet.
+`scripts/remove_unsplash_catalog_images.cjs` clears only `images.unsplash.com` and `source.unsplash.com` values from product/store image fields and tour node images. It does not delete uploaded Storage objects or change other URLs. First run a dry run with `node scripts/remove_unsplash_catalog_images.cjs --project=<project-id>` and review the per-collection counts. To apply, add `--apply --confirm-project=<same-project-id>`. Run against a confirmed staging or production target only after reviewing the counts; blank images use the app's neutral placeholder until an owner uploads a replacement.
 
-## Images and releases
+## Project configuration and release
 
-1. CI must pass (`php artisan test`, `flutter analyze`, `flutter test`).
-2. CI builds `backend/docker/production/Dockerfile` and tags it with the git SHA. Do not deploy Sail or `latest` as the only identifier.
-3. Deploy that tag to staging, run `GET /api/v1/health`, then a login + product search smoke test.
-4. Back up production data. Run `php artisan migrate --force` as a controlled step, not from every replica on boot.
-5. Point Compose `LOCALSPOT_IMAGE` at the approved tag and recreate the `app` service.
+- Use distinct Firebase projects for development, staging, and production; the repository's checked-in Firebase configuration is not proof that production is configured.
+- Review `firestore.rules`, `storage.rules`, `firestore.indexes.json`, and every Functions change before deployment.
+- Deploy only the required Firebase resources with the Firebase CLI and an explicitly selected project. Never deploy against a project ID copied from a local development build without confirming the target.
+- Configure Firebase App Check for the registered Android application, monitor metrics, and enable enforcement for supported products after validating legitimate traffic.
+- Configure Android package identity, production Firebase app registration, upload signing, Play Integrity, and release build properties using `docs/ANDROID_RELEASE_SIGNING.md`.
+- Do not put service-account keys, API secrets, or signing keys in Flutter assets or source control. Store server secrets in Firebase Functions secret configuration.
 
-Rollback: keep the previous image tag. Restore the matching backup if a migration cannot be reversed safely. Re-point `LOCALSPOT_IMAGE` and recreate `app`.
+## Monitoring and recovery
 
-## Backups
+- Configure billing budgets and alerts, Firestore/Functions quotas, Functions max instances, and AI usage controls in the Firebase project. Budget alerts are not hard spending limits.
+- Review Cloud Functions logs, Crashlytics reports, Analytics privacy settings, and Firebase App Check metrics after each release. Avoid logging account identifiers, precise location, search terms, or uploaded media paths.
+- Define and document Firestore export and Cloud Storage backup schedules for the production recovery objective. Perform a restore drill in a separate project before relying on backups.
+- For an incident, disable the affected callable or product through Firebase configuration, preserve relevant logs, and deploy a reviewed rollback. Validate the recovery in staging before restoring normal traffic.
 
-Daily at 02:15 the app schedules `php artisan localspot:backup`, which writes JSON snapshots under `storage/app/backups`.
+## Production readiness gaps
 
-For MySQL volume backups on the host (preferred for restore drills):
-
-```bash
-docker compose -f compose.production.yaml exec mysql \
-  sh -c 'mysqldump -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE"' > backup-$(date +%Y%m%d).sql
-```
-
-Restore drill (use a separate database or staging):
-
-```bash
-php artisan localspot:restore storage/app/backups/<file>.json --force
-```
-
-A backup is not proven until it has been restored at least once in a non-production environment.
-
-Retain backups according to the pilot recovery objective (suggested: daily copies for 14 days).
-
-## Health, logs, and jobs
-
-- Container health: `GET /up` (Compose healthcheck) and `GET /api/v1/health` (app + database).
-- Logs: Docker stdout/stderr; do not log bearer tokens, passwords, or uploaded images.
-- Queue workers: add a separate process when async image recognition is enabled. Until then, `QUEUE_CONNECTION=database` with no extra worker is acceptable for the Cubao pilot.
-- 360° privacy: originals live on the private disk (`tours/originals/{id}.txt`) and expire after `TOUR_ORIGINAL_RETENTION_DAYS` (default 30). Public viewer URLs are `/storage/tours/{id}/sanitized.jpg`. This is a publication gate, not person-detection ML. Failed processing never publishes the original. Run `php artisan localspot:purge-tour-originals` daily.
-
-## Migrations
-
-Review each migration for compatibility before deploy. Prefer additive changes. Take a backup before destructive schema changes. Do not run `docker compose down -v` on production; that deletes the MySQL volume.
+The repository audit records unresolved work, including production project separation, Firebase Console setup, release identity/signing, backup restore verification, and emulator/CI checks that have not yet passed in this environment. Treat these as release gates; the presence of configuration files alone does not complete them.

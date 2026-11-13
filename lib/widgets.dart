@@ -8,7 +8,11 @@ import 'state.dart';
 import 'theme.dart';
 
 class AppScope extends InheritedNotifier<AppState> {
-  const AppScope({super.key, required AppState super.notifier, required super.child});
+  const AppScope({
+    super.key,
+    required AppState super.notifier,
+    required super.child,
+  });
 
   static AppState of(BuildContext context) {
     return context.dependOnInheritedWidgetOfExactType<AppScope>()!.notifier!;
@@ -16,7 +20,14 @@ class AppScope extends InheritedNotifier<AppState> {
 }
 
 class PageHeader extends StatelessWidget {
-  const PageHeader(this.title, {super.key, this.onBack, this.trailing, this.subtitle, this.onSubtitleTap});
+  const PageHeader(
+    this.title, {
+    super.key,
+    this.onBack,
+    this.trailing,
+    this.subtitle,
+    this.onSubtitleTap,
+  });
   final String title;
   final String? subtitle;
   final VoidCallback? onBack;
@@ -28,10 +39,23 @@ class PageHeader extends StatelessWidget {
     final titleBlock = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(title, style: const TextStyle(fontFamily: 'Georgia', fontSize: 22, height: 1.1, color: charcoal)),
+        Text(
+          title,
+          style: const TextStyle(
+            fontFamily: 'Georgia',
+            fontSize: 22,
+            height: 1.1,
+            color: charcoal,
+          ),
+        ),
         if (subtitle != null && subtitle!.isNotEmpty) ...[
           const SizedBox(height: 2),
-          Text(subtitle!, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: taupe, fontSize: 13)),
+          Text(
+            subtitle!,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(color: taupe, fontSize: 13),
+          ),
         ],
       ],
     );
@@ -42,7 +66,10 @@ class PageHeader extends StatelessWidget {
           if (onBack != null)
             IconButton.filledTonal(
               onPressed: onBack,
-              style: IconButton.styleFrom(backgroundColor: paper, foregroundColor: charcoal),
+              style: IconButton.styleFrom(
+                backgroundColor: paper,
+                foregroundColor: charcoal,
+              ),
               icon: const Icon(Icons.arrow_back_ios_new, size: 17),
             )
           else
@@ -53,13 +80,33 @@ class PageHeader extends StatelessWidget {
               decoration: BoxDecoration(
                 color: leafDark,
                 borderRadius: BorderRadius.circular(14),
-                boxShadow: const [BoxShadow(color: Color(0x332E5A27), blurRadius: 10, offset: Offset(0, 4))],
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x332E5A27),
+                    blurRadius: 10,
+                    offset: Offset(0, 4),
+                  ),
+                ],
               ),
-              child: const Text('L', style: TextStyle(color: paper, fontFamily: 'Georgia', fontSize: 20)),
+              child: const Text(
+                'L',
+                style: TextStyle(
+                  color: paper,
+                  fontFamily: 'Georgia',
+                  fontSize: 20,
+                ),
+              ),
             ),
           const SizedBox(width: 12),
           Expanded(
-            child: onSubtitleTap == null ? titleBlock : InkWell(onTap: onSubtitleTap, borderRadius: BorderRadius.circular(8), child: titleBlock),
+            child:
+                onSubtitleTap == null
+                    ? titleBlock
+                    : InkWell(
+                      onTap: onSubtitleTap,
+                      borderRadius: BorderRadius.circular(8),
+                      child: titleBlock,
+                    ),
           ),
           if (trailing != null) trailing!,
         ],
@@ -73,31 +120,62 @@ class Eyebrow extends StatelessWidget {
   final String text;
   @override
   Widget build(BuildContext context) => Text(
-        text,
-        style: const TextStyle(color: taupe, fontSize: 9, fontWeight: FontWeight.w700, letterSpacing: 1.4),
-      );
+    text,
+    style: const TextStyle(
+      color: taupe,
+      fontSize: 9,
+      fontWeight: FontWeight.w700,
+      letterSpacing: 1.4,
+    ),
+  );
 }
 
 class SectionHeading extends StatelessWidget {
-  const SectionHeading(this.title, {super.key, this.onTap, this.action = 'See all'});
+  const SectionHeading(
+    this.title, {
+    super.key,
+    this.onTap,
+    this.action = 'See all',
+  });
   final String title;
   final VoidCallback? onTap;
   final String action;
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.fromLTRB(20, 0, 20, 14),
-        child: Row(
-          children: [
-            Expanded(child: Text(title, style: const TextStyle(fontFamily: 'Georgia', fontSize: 21, color: charcoal))),
-            if (onTap != null)
-              TextButton(onPressed: onTap, child: Text(action, style: const TextStyle(color: taupe, fontSize: 11))),
-          ],
+    padding: const EdgeInsets.fromLTRB(20, 0, 20, 14),
+    child: Row(
+      children: [
+        Expanded(
+          child: Text(
+            title,
+            style: const TextStyle(
+              fontFamily: 'Georgia',
+              fontSize: 21,
+              color: charcoal,
+            ),
+          ),
         ),
-      );
+        if (onTap != null)
+          TextButton(
+            onPressed: onTap,
+            child: Text(
+              action,
+              style: const TextStyle(color: taupe, fontSize: 11),
+            ),
+          ),
+      ],
+    ),
+  );
 }
 
 class SoftCard extends StatelessWidget {
-  const SoftCard({super.key, required this.child, this.padding, this.onTap, this.color = paper});
+  const SoftCard({
+    super.key,
+    required this.child,
+    this.padding,
+    this.onTap,
+    this.color = paper,
+  });
   final Widget child;
   final EdgeInsetsGeometry? padding;
   final VoidCallback? onTap;
@@ -110,11 +188,26 @@ class SoftCard extends StatelessWidget {
         color: color,
         borderRadius: BorderRadius.circular(18),
         border: Border.all(color: line),
-        boxShadow: const [BoxShadow(color: Color(0x14000000), blurRadius: 18, offset: Offset(0, 8))],
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x14000000),
+            blurRadius: 18,
+            offset: Offset(0, 8),
+          ),
+        ],
       ),
       child: child,
     );
-    return onTap == null ? body : Material(color: Colors.transparent, child: InkWell(onTap: onTap, borderRadius: BorderRadius.circular(18), child: body));
+    return onTap == null
+        ? body
+        : Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(18),
+            child: body,
+          ),
+        );
   }
 }
 
@@ -129,7 +222,10 @@ class IconWell extends StatelessWidget {
     return Container(
       width: size,
       height: size,
-      decoration: BoxDecoration(color: color.withValues(alpha: .12), borderRadius: BorderRadius.circular(12)),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: .12),
+        borderRadius: BorderRadius.circular(12),
+      ),
       child: Icon(icon, color: color, size: size * .46),
     );
   }
@@ -167,15 +263,32 @@ class MenuRow extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(title, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14, color: charcoal)),
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 14,
+                      color: charcoal,
+                    ),
+                  ),
                   if (subtitle != null && subtitle!.isNotEmpty) ...[
                     const SizedBox(height: 2),
-                    Text(subtitle!, style: const TextStyle(color: taupe, fontSize: 11, height: 1.35)),
+                    Text(
+                      subtitle!,
+                      style: const TextStyle(
+                        color: taupe,
+                        fontSize: 11,
+                        height: 1.35,
+                      ),
+                    ),
                   ],
                 ],
               ),
             ),
-            trailing ?? (onTap == null ? const SizedBox.shrink() : const Icon(Icons.chevron_right, color: taupe)),
+            trailing ??
+                (onTap == null
+                    ? const SizedBox.shrink()
+                    : const Icon(Icons.chevron_right, color: taupe)),
           ],
         ),
       ),
@@ -184,7 +297,12 @@ class MenuRow extends StatelessWidget {
 }
 
 class InfoBanner extends StatelessWidget {
-  const InfoBanner(this.text, {super.key, this.icon = Icons.info_outline, this.tint = sand});
+  const InfoBanner(
+    this.text, {
+    super.key,
+    this.icon = Icons.info_outline,
+    this.tint = sand,
+  });
   final String text;
   final IconData icon;
   final Color tint;
@@ -199,7 +317,16 @@ class InfoBanner extends StatelessWidget {
         children: [
           Icon(icon, size: 18, color: leafDark),
           const SizedBox(width: 10),
-          Expanded(child: Text(text, style: const TextStyle(color: charcoal, fontSize: 12, height: 1.45))),
+          Expanded(
+            child: Text(
+              text,
+              style: const TextStyle(
+                color: charcoal,
+                fontSize: 12,
+                height: 1.45,
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -212,14 +339,39 @@ class SeededDataBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
-    // Hide the banner once Firebase is connected and has real data.
-    if (app.apiOnline && !app.usingSeededCatalog) return const SizedBox.shrink();
-    if (app.apiOnline && app.usingSeededCatalog) {
+    if (app.apiOnline && !app.usingSeededCatalog && app.stores.isNotEmpty) {
+      return const SizedBox.shrink();
+    }
+    if (app.apiOnline) {
+      final error = app.catalogLoadError;
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+        child: Column(
+          children: [
+            InfoBanner(
+              error == null
+                  ? 'Connected to Firebase but no catalog data yet. Register a store and add products to get started.'
+                  : 'Could not load the Firebase catalog. No sample data is being shown.',
+              icon: Icons.cloud_outlined,
+            ),
+            if (error != null)
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  onPressed: app.refreshCatalog,
+                  child: const Text('Retry Firebase catalog'),
+                ),
+              ),
+          ],
+        ),
+      );
+    }
+    if (!app.usingSeededCatalog) {
       return const Padding(
         padding: EdgeInsets.fromLTRB(20, 0, 20, 10),
         child: InfoBanner(
-          'Connected to Firebase but no catalog data yet. Register a store and add products to get started.',
-          icon: Icons.cloud_outlined,
+          'Firebase is not connected. Catalog data is unavailable until the connection is restored.',
+          icon: Icons.cloud_off_outlined,
         ),
       );
     }
@@ -234,7 +386,11 @@ class SeededDataBanner extends StatelessWidget {
 }
 
 class EmptyNote extends StatelessWidget {
-  const EmptyNote(this.text, {super.key, this.icon = Icons.storefront_outlined});
+  const EmptyNote(
+    this.text, {
+    super.key,
+    this.icon = Icons.storefront_outlined,
+  });
   final String text;
   final IconData icon;
 
@@ -245,7 +401,11 @@ class EmptyNote extends StatelessWidget {
         children: [
           IconWell(icon, size: 48, color: champagne),
           const SizedBox(height: 12),
-          Text(text, textAlign: TextAlign.center, style: const TextStyle(color: taupe, fontSize: 13, height: 1.45)),
+          Text(
+            text,
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: taupe, fontSize: 13, height: 1.45),
+          ),
         ],
       ),
     );
@@ -275,9 +435,21 @@ class DashTile extends StatelessWidget {
         children: [
           IconWell(icon, color: leafDark),
           const Spacer(),
-          Text(title, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14, color: charcoal)),
+          Text(
+            title,
+            style: const TextStyle(
+              fontWeight: FontWeight.w700,
+              fontSize: 14,
+              color: charcoal,
+            ),
+          ),
           const SizedBox(height: 4),
-          Text(subtitle, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: taupe, fontSize: 11, height: 1.3)),
+          Text(
+            subtitle,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(color: taupe, fontSize: 11, height: 1.3),
+          ),
         ],
       ),
     );
@@ -292,6 +464,7 @@ class LabeledField extends StatelessWidget {
     this.obscure = false,
     this.keyboardType,
     this.maxLines = 1,
+    this.maxLength,
   });
 
   final String label;
@@ -299,6 +472,7 @@ class LabeledField extends StatelessWidget {
   final bool obscure;
   final TextInputType? keyboardType;
   final int maxLines;
+  final int? maxLength;
 
   @override
   Widget build(BuildContext context) {
@@ -312,13 +486,26 @@ class LabeledField extends StatelessWidget {
           obscureText: obscure,
           keyboardType: keyboardType,
           maxLines: obscure ? 1 : maxLines,
+          maxLength: maxLength,
           decoration: InputDecoration(
             filled: true,
             fillColor: ivory,
-            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: line)),
-            enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: line)),
-            focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: leaf, width: 1.4)),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 12,
+              vertical: 12,
+            ),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(14),
+              borderSide: const BorderSide(color: line),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(14),
+              borderSide: const BorderSide(color: line),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(14),
+              borderSide: const BorderSide(color: leaf, width: 1.4),
+            ),
           ),
         ),
       ],
@@ -327,7 +514,12 @@ class LabeledField extends StatelessWidget {
 }
 
 class CaptureActions extends StatelessWidget {
-  const CaptureActions({super.key, this.onCamera, this.onGallery, this.extra = const []});
+  const CaptureActions({
+    super.key,
+    this.onCamera,
+    this.onGallery,
+    this.extra = const [],
+  });
   final VoidCallback? onCamera;
   final VoidCallback? onGallery;
   final List<Widget> extra;
@@ -339,9 +531,17 @@ class CaptureActions extends StatelessWidget {
       runSpacing: 8,
       children: [
         if (onCamera != null)
-          OutlinedButton.icon(onPressed: onCamera, icon: const Icon(Icons.photo_camera_outlined, size: 18), label: const Text('Camera')),
+          OutlinedButton.icon(
+            onPressed: onCamera,
+            icon: const Icon(Icons.photo_camera_outlined, size: 18),
+            label: const Text('Camera'),
+          ),
         if (onGallery != null)
-          OutlinedButton.icon(onPressed: onGallery, icon: const Icon(Icons.photo_outlined, size: 18), label: const Text('Gallery')),
+          OutlinedButton.icon(
+            onPressed: onGallery,
+            icon: const Icon(Icons.photo_outlined, size: 18),
+            label: const Text('Gallery'),
+          ),
         ...extra,
       ],
     );
@@ -379,14 +579,17 @@ class _PasswordFieldState extends State<PasswordField> {
             fillColor: ivory,
             contentPadding: const EdgeInsets.fromLTRB(12, 12, 4, 12),
             border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(14),
-                borderSide: const BorderSide(color: line)),
+              borderRadius: BorderRadius.circular(14),
+              borderSide: const BorderSide(color: line),
+            ),
             enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(14),
-                borderSide: const BorderSide(color: line)),
+              borderRadius: BorderRadius.circular(14),
+              borderSide: const BorderSide(color: line),
+            ),
             focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(14),
-                borderSide: const BorderSide(color: leaf, width: 1.4)),
+              borderRadius: BorderRadius.circular(14),
+              borderSide: const BorderSide(color: leaf, width: 1.4),
+            ),
             suffixIcon: IconButton(
               onPressed: () => setState(() => _visible = !_visible),
               icon: Icon(
@@ -422,7 +625,9 @@ class FilterMenu<T> extends StatelessWidget {
   final String? selectedLabel;
 
   String get _closedLabel {
-    if (selectedLabel != null && selectedLabel!.isNotEmpty) return selectedLabel!;
+    if (selectedLabel != null && selectedLabel!.isNotEmpty) {
+      return selectedLabel!;
+    }
     return '$value';
   }
 
@@ -437,7 +642,13 @@ class FilterMenu<T> extends StatelessWidget {
             label.toUpperCase(),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(color: taupe, fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: 0.5, height: 1.2),
+            style: const TextStyle(
+              color: taupe,
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.5,
+              height: 1.2,
+            ),
           ),
         ),
         const SizedBox(height: 6),
@@ -456,17 +667,21 @@ class FilterMenu<T> extends StatelessWidget {
               offset: const Offset(0, 4),
               color: paper,
               constraints: const BoxConstraints(maxHeight: 240, minWidth: 168),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: const BorderSide(color: line)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+                side: const BorderSide(color: line),
+              ),
               onSelected: onChanged,
-              itemBuilder: (context) => [
-                for (final item in items)
-                  PopupMenuItem<T>(
-                    value: item.value,
-                    height: 40,
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    child: item.child,
-                  ),
-              ],
+              itemBuilder:
+                  (context) => [
+                    for (final item in items)
+                      PopupMenuItem<T>(
+                        value: item.value,
+                        height: 40,
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        child: item.child,
+                      ),
+                  ],
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(12, 0, 6, 0),
                 child: Row(
@@ -476,10 +691,19 @@ class FilterMenu<T> extends StatelessWidget {
                         _closedLabel,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, height: 1.2, color: charcoal),
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          height: 1.2,
+                          color: charcoal,
+                        ),
                       ),
                     ),
-                    const Icon(Icons.keyboard_arrow_down_rounded, size: 20, color: taupe),
+                    const Icon(
+                      Icons.keyboard_arrow_down_rounded,
+                      size: 20,
+                      color: taupe,
+                    ),
                   ],
                 ),
               ),
@@ -516,12 +740,20 @@ List<DropdownMenuItem<String>> productCategoryMenuItems() {
   return [
     DropdownMenuItem(value: '', child: filterOptionLabel('All products')),
     for (final family in browseFamilies) ...[
-      DropdownMenuItem(value: familyFilterValue(family.$2), child: filterOptionLabel('All ${family.$1}')),
+      DropdownMenuItem(
+        value: familyFilterValue(family.$2),
+        child: filterOptionLabel('All ${family.$1}'),
+      ),
       for (final category in categoryFamilies[family.$2] ?? const <String>[])
-        if (seen.add(category)) DropdownMenuItem(value: category, child: filterOptionLabel(category, nested: true)),
+        if (seen.add(category))
+          DropdownMenuItem(
+            value: category,
+            child: filterOptionLabel(category, nested: true),
+          ),
     ],
     for (final category in productCategories)
-      if (seen.add(category)) DropdownMenuItem(value: category, child: filterOptionLabel(category)),
+      if (seen.add(category))
+        DropdownMenuItem(value: category, child: filterOptionLabel(category)),
   ];
 }
 
@@ -548,7 +780,12 @@ class CatalogFilters extends StatelessWidget {
                     selectedLabel: '${app.radiusKm.toStringAsFixed(0)} km',
                     items: [
                       for (final km in radiiKm)
-                        DropdownMenuItem(value: km, child: filterOptionLabel('${km.toStringAsFixed(0)} km')),
+                        DropdownMenuItem(
+                          value: km,
+                          child: filterOptionLabel(
+                            '${km.toStringAsFixed(0)} km',
+                          ),
+                        ),
                     ],
                     onChanged: (km) {
                       if (km != null) app.setRadius(km);
@@ -562,16 +799,26 @@ class CatalogFilters extends StatelessWidget {
                     value: app.typeFilter?.name ?? '',
                     selectedLabel: app.typeFilter?.label ?? 'All types',
                     items: [
-                      DropdownMenuItem(value: '', child: filterOptionLabel('All types')),
+                      DropdownMenuItem(
+                        value: '',
+                        child: filterOptionLabel('All types'),
+                      ),
                       for (final type in StoreType.values)
-                        DropdownMenuItem(value: type.name, child: filterOptionLabel(type.label)),
+                        DropdownMenuItem(
+                          value: type.name,
+                          child: filterOptionLabel(type.label),
+                        ),
                     ],
                     onChanged: (name) {
                       if (name == null || name.isEmpty) {
                         app.setTypeFilter(null);
                         return;
                       }
-                      app.setTypeFilter(StoreType.values.firstWhere((type) => type.name == name));
+                      app.setTypeFilter(
+                        StoreType.values.firstWhere(
+                          (type) => type.name == name,
+                        ),
+                      );
                     },
                   ),
                 ),
@@ -588,7 +835,12 @@ class CatalogFilters extends StatelessWidget {
                       value: app.categoryFilter ?? '',
                       selectedLabel: categoryFilterLabel(app.categoryFilter),
                       items: productCategoryMenuItems(),
-                      onChanged: (category) => app.setCategoryFilter(category == null || category.isEmpty ? null : category),
+                      onChanged:
+                          (category) => app.setCategoryFilter(
+                            category == null || category.isEmpty
+                                ? null
+                                : category,
+                          ),
                     ),
                   ),
                   const SizedBox(width: 10),
@@ -599,7 +851,10 @@ class CatalogFilters extends StatelessWidget {
                       selectedLabel: searchSortLabel(app.searchSort),
                       items: [
                         for (final sort in SearchSort.values)
-                          DropdownMenuItem(value: sort, child: filterOptionLabel(searchSortLabel(sort))),
+                          DropdownMenuItem(
+                            value: sort,
+                            child: filterOptionLabel(searchSortLabel(sort)),
+                          ),
                       ],
                       onChanged: (sort) {
                         if (sort != null) app.setSearchSort(sort);
@@ -608,6 +863,160 @@ class CatalogFilters extends StatelessWidget {
                   ),
                 ],
               ),
+              const SizedBox(height: 10),
+              FilterMenu<String>(
+                label: 'Availability',
+                value: switch (app.availabilityFilter) {
+                  Availability.inStock => 'in_stock',
+                  Availability.low => 'low',
+                  Availability.unavailable => 'unavailable',
+                  null => '',
+                },
+                selectedLabel: switch (app.availabilityFilter) {
+                  Availability.inStock => 'In stock',
+                  Availability.low => 'Low stock',
+                  Availability.unavailable => 'Unavailable',
+                  null => 'Any availability',
+                },
+                items: const [
+                  DropdownMenuItem(value: '', child: Text('Any availability')),
+                  DropdownMenuItem(value: 'in_stock', child: Text('In stock')),
+                  DropdownMenuItem(value: 'low', child: Text('Low stock')),
+                  DropdownMenuItem(
+                    value: 'unavailable',
+                    child: Text('Unavailable'),
+                  ),
+                ],
+                onChanged:
+                    (value) => app.setAvailabilityFilter(switch (value) {
+                      'in_stock' => Availability.inStock,
+                      'low' => Availability.low,
+                      'unavailable' => Availability.unavailable,
+                      _ => null,
+                    }),
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextFormField(
+                      key: ValueKey('min-price-${app.minPriceDraft}'),
+                      initialValue: app.minPriceDraft,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: const InputDecoration(
+                        labelText: 'Min price (₱)',
+                        isDense: true,
+                      ),
+                      onChanged:
+                          (value) => app.updatePriceFilterDraft(min: value),
+                      onFieldSubmitted: (_) => app.applyPriceFilter(),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: TextFormField(
+                      key: ValueKey('max-price-${app.maxPriceDraft}'),
+                      initialValue: app.maxPriceDraft,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: const InputDecoration(
+                        labelText: 'Max price (₱)',
+                        isDense: true,
+                      ),
+                      onChanged:
+                          (value) => app.updatePriceFilterDraft(max: value),
+                      onFieldSubmitted: (_) => app.applyPriceFilter(),
+                    ),
+                  ),
+                ],
+              ),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  onPressed: app.applyPriceFilter,
+                  icon: const Icon(Icons.price_check_outlined),
+                  label: Text(
+                    app.minPriceFilter == null && app.maxPriceFilter == null
+                        ? 'Apply price range'
+                        : 'Update price range',
+                  ),
+                ),
+              ),
+              if (app.priceFilterError.isNotEmpty)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    app.priceFilterError,
+                    style: const TextStyle(color: clay, fontSize: 12),
+                  ),
+                ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextFormField(
+                      key: ValueKey('attribute-key-${app.searchAttributeKey}'),
+                      initialValue: app.searchAttributeKey,
+                      decoration: const InputDecoration(
+                        labelText: 'Attribute',
+                        hintText: 'material, size, model',
+                        isDense: true,
+                      ),
+                      textInputAction: TextInputAction.next,
+                      onChanged:
+                          (value) => app.updateSearchAttributeDraft(key: value),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: TextFormField(
+                      key: ValueKey(
+                        'attribute-value-${app.searchAttributeValue}',
+                      ),
+                      initialValue: app.searchAttributeValue,
+                      decoration: const InputDecoration(
+                        labelText: 'Value',
+                        hintText: 'steel, large, USB-C',
+                        isDense: true,
+                      ),
+                      textInputAction: TextInputAction.done,
+                      onChanged:
+                          (value) =>
+                              app.updateSearchAttributeDraft(value: value),
+                      onFieldSubmitted: (_) => app.applySearchAttributeFilter(),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  onPressed: app.applySearchAttributeFilter,
+                  icon: const Icon(Icons.tune),
+                  label: const Text('Apply attribute'),
+                ),
+              ),
+              if (app.radiusKm != 3 ||
+                  app.typeFilter != null ||
+                  app.availabilityFilter != null ||
+                  app.categoryFilter != null ||
+                  app.searchSort != SearchSort.relevance ||
+                  app.minPriceFilter != null ||
+                  app.maxPriceFilter != null ||
+                  app.searchAttributeKey.isNotEmpty ||
+                  app.searchAttributeValue.isNotEmpty)
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton.icon(
+                    onPressed: app.clearSearchFilters,
+                    icon: const Icon(Icons.filter_alt_off_outlined),
+                    label: const Text('Clear all filters'),
+                  ),
+                ),
             ],
           ],
         ),
@@ -623,17 +1032,17 @@ class Pill extends StatelessWidget {
   final VoidCallback? onTap;
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.only(right: 8),
-        child: ChoiceChip(
-          label: Text(label),
-          selected: selected,
-          onSelected: (_) => onTap?.call(),
-          selectedColor: charcoal,
-          labelStyle: TextStyle(color: selected ? paper : taupe, fontSize: 11),
-          backgroundColor: paper,
-          side: const BorderSide(color: line),
-        ),
-      );
+    padding: const EdgeInsets.only(right: 8),
+    child: ChoiceChip(
+      label: Text(label),
+      selected: selected,
+      onSelected: (_) => onTap?.call(),
+      selectedColor: charcoal,
+      labelStyle: TextStyle(color: selected ? paper : taupe, fontSize: 11),
+      backgroundColor: paper,
+      side: const BorderSide(color: line),
+    ),
+  );
 }
 
 class StatusChip extends StatelessWidget {
@@ -642,10 +1051,16 @@ class StatusChip extends StatelessWidget {
   final Color color;
   @override
   Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-        decoration: BoxDecoration(color: color.withValues(alpha: .12), borderRadius: BorderRadius.circular(20)),
-        child: Text(label, style: TextStyle(fontSize: 10, color: color, fontWeight: FontWeight.w700)),
-      );
+    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+    decoration: BoxDecoration(
+      color: color.withValues(alpha: .12),
+      borderRadius: BorderRadius.circular(20),
+    ),
+    child: Text(
+      label,
+      style: TextStyle(fontSize: 10, color: color, fontWeight: FontWeight.w700),
+    ),
+  );
 }
 
 class StoreImageCard extends StatelessWidget {
@@ -679,7 +1094,12 @@ class StoreImageCard extends StatelessWidget {
           child: Stack(
             fit: StackFit.expand,
             children: [
-              NetworkPhoto(store.image, radius: 0, width: width, height: height),
+              NetworkPhoto(
+                store.image,
+                radius: 0,
+                width: width,
+                height: height,
+              ),
               const DecoratedBox(
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
@@ -702,9 +1122,27 @@ class StoreImageCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(store.name, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: paper, fontWeight: FontWeight.w700, fontSize: 14, height: 1.2)),
+                    Text(
+                      store.name,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: paper,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14,
+                        height: 1.2,
+                      ),
+                    ),
                     const SizedBox(height: 2),
-                    Text('${store.type.label} · ${distanceKm.toStringAsFixed(1)} km', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Color(0xFFE8DED0), fontSize: 11)),
+                    Text(
+                      '${store.type.label} · ${distanceKm.toStringAsFixed(1)} km',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Color(0xFFE8DED0),
+                        fontSize: 11,
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -717,7 +1155,13 @@ class StoreImageCard extends StatelessWidget {
 }
 
 class NetworkPhoto extends StatelessWidget {
-  const NetworkPhoto(this.url, {super.key, this.height, this.width, this.radius = 14});
+  const NetworkPhoto(
+    this.url, {
+    super.key,
+    this.height,
+    this.width,
+    this.radius = 14,
+  });
   final String? url;
   final double? height;
   final double? width;
@@ -728,19 +1172,39 @@ class NetworkPhoto extends StatelessWidget {
       height: height,
       width: width,
       color: sand,
-      child: Icon(url == null ? Icons.storefront_outlined : Icons.image_outlined, color: taupe),
+      child: Icon(
+        url == null ? Icons.storefront_outlined : Icons.image_outlined,
+        color: taupe,
+      ),
     );
     Widget image = fallback;
     if (url != null) {
       final source = url!.split('#').first;
-      final remote = source.startsWith('http://') || source.startsWith('https://');
-      image = (!kIsWeb && !remote)
-          ? Image.file(File(source), height: height, width: width, fit: BoxFit.cover, errorBuilder: (_, __, ___) => fallback)
-          : Image.network(source, height: height, width: width, fit: BoxFit.cover, errorBuilder: (_, __, ___) => fallback);
+      final remote =
+          source.startsWith('http://') || source.startsWith('https://');
+      image =
+          (!kIsWeb && !remote)
+              ? Image.file(
+                File(source),
+                height: height,
+                width: width,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => fallback,
+              )
+              : Image.network(
+                source,
+                height: height,
+                width: width,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => fallback,
+              );
     }
     return ClipRRect(
       borderRadius: BorderRadius.circular(radius),
-      child: (width == null && height == null) ? SizedBox.expand(child: image) : image,
+      child:
+          (width == null && height == null)
+              ? SizedBox.expand(child: image)
+              : image,
     );
   }
 }
@@ -751,21 +1215,22 @@ class PrimaryButton extends StatelessWidget {
   final VoidCallback? onPressed;
   @override
   Widget build(BuildContext context) => SizedBox(
-        width: double.infinity,
-        child: FilledButton(
-          onPressed: onPressed,
-          style: FilledButton.styleFrom(
-            backgroundColor: leafDark,
-            foregroundColor: paper,
-            padding: const EdgeInsets.all(16),
-            textStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
-          ),
-          child: Text(label),
-        ),
-      );
+    width: double.infinity,
+    child: FilledButton(
+      onPressed: onPressed,
+      style: FilledButton.styleFrom(
+        backgroundColor: leafDark,
+        foregroundColor: paper,
+        padding: const EdgeInsets.all(16),
+        textStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
+      ),
+      child: Text(label),
+    ),
+  );
 }
 
-String peso(double value) => '₱${value % 1 == 0 ? value.toStringAsFixed(0) : value.toStringAsFixed(2)}';
+String peso(double value) =>
+    '₱${value % 1 == 0 ? value.toStringAsFixed(0) : value.toStringAsFixed(2)}';
 
 String freshness(DateTime time) {
   final diff = DateTime.now().difference(time);
@@ -775,20 +1240,20 @@ String freshness(DateTime time) {
 }
 
 String availabilityLabel(Availability value) => switch (value) {
-      Availability.inStock => 'In stock',
-      Availability.low => 'Low stock',
-      Availability.unavailable => 'Unavailable',
-    };
+  Availability.inStock => 'In stock',
+  Availability.low => 'Low stock',
+  Availability.unavailable => 'Unavailable',
+};
 
 String storeStatusLabel(StoreStatus value) => switch (value) {
-      StoreStatus.pending => 'Pending review',
-      StoreStatus.approved => 'Approved',
-      StoreStatus.suspended => 'Suspended',
-    };
+  StoreStatus.pending => 'Pending review',
+  StoreStatus.approved => 'Approved',
+  StoreStatus.suspended => 'Suspended',
+};
 
 String roleLabel(AppRole role) => switch (role) {
-      AppRole.customer => 'Customer',
-      AppRole.owner => 'Store owner',
-      AppRole.staff => 'Staff',
-      AppRole.admin => 'Admin',
-    };
+  AppRole.customer => 'Customer',
+  AppRole.owner => 'Store owner',
+  AppRole.staff => 'Staff',
+  AppRole.admin => 'Admin',
+};

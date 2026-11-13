@@ -11,9 +11,14 @@ class AuthRepository {
   AuthRepository(this.api);
   final LocalSpotGateway api;
 
-  Future<Map<String, dynamic>> login(
-      {required String email, required String password}) async {
-    final data = await api.post('/auth/login', {'email': email, 'password': password});
+  Future<Map<String, dynamic>> login({
+    required String email,
+    required String password,
+  }) async {
+    final data = await api.post('/auth/login', {
+      'email': email,
+      'password': password,
+    });
     return Map<String, dynamic>.from(data as Map);
   }
 

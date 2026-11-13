@@ -4,38 +4,39 @@ Philippine local store and product locator. Vendors publish listings; customers 
 
 **Pilot area:** Cubao, Quezon City.
 
-**Backend:** Firebase Authentication, Cloud Firestore, and Cloud Storage. The Flutter app talks to Firebase with Security Rules; it does not embed database credentials. The Laravel API in `backend/` is kept as a legacy fallback until Firebase is fully configured.
+## Architecture
 
-## Layout
+LocalSpot is a Flutter app backed by Firebase Authentication, Cloud Firestore, Cloud Storage, and 2nd generation Cloud Functions. Firestore and Storage Security Rules protect client operations; privileged workflows run through authenticated callable Functions. No separate application server or database is required.
 
-- Flutter app at the repository root (`lib/`)
-- Firebase rules and indexes at the repository root (`firebase.json`, `firestore.rules`, `storage.rules`)
-- Legacy Laravel API in `backend/` (optional)
+## Repository layout
+
+- Flutter application: `lib/`
+- Firebase configuration, rules, and indexes: repository root
+- Cloud Functions (TypeScript): `functions/`
+- Emulator and maintenance scripts: `scripts/`
+- Operational and release guidance: `docs/`
 
 ## Local development
 
-1. Install Flutter and Node.js 20+.
-2. Sign in to Firebase: `npx -y firebase-tools@latest login`
-3. Create or select a Firebase project, then run `flutterfire configure` (or fill `lib/firebase_options.dart` and set `configured` to `true`).
-4. Enable Email/Password auth, create Firestore in `asia-southeast1`, and deploy rules:
-   `npx -y firebase-tools@latest deploy --only auth,firestore,storage`
-5. From the repo root: `flutter pub get` then `flutter run`.
-
-Until Firebase options are filled in, the app uses on-device demo data (password `demo1234`).
-
-Official setup references:
-- Add Firebase to Flutter: https://firebase.google.com/docs/flutter/setup
-- FlutterFire Auth: https://firebase.google.com/docs/auth/flutter/start
-- Cloud Firestore Flutter: https://firebase.google.com/docs/firestore/quickstart
-
-## Tests
+Install Flutter, Node.js 22, Java, and the Firebase CLI. Configure a Firebase project with `flutterfire configure`, enable the required Firebase products, and review [Firebase operations](docs/OPERATIONS.md) before deploying configuration.
 
 ```bash
-flutter analyze && flutter test
+flutter pub get
+flutter run
 ```
 
-Legacy API tests remain at `cd backend && php artisan test`.
+For local Firebase development, start the Local Emulator Suite using the repository's `firebase.json` configuration. Keep emulator data and development credentials out of production projects.
+
+## Checks
+
+```bash
+flutter analyze
+flutter test
+npm --prefix functions run build
+```
+
+The CI workflow also runs Firebase Emulator Suite smoke checks. See [the repository audit](docs/FIREBASE_REPOSITORY_AUDIT.md) for current verification limits and outstanding production setup.
 
 ## Production
 
-Deploy Firestore/Storage/Auth rules with the Firebase CLI. Keep client config in `lib/firebase_options.dart` / `android/app/google-services.json`. Do not put service-account keys in the app. See [docs/OPERATIONS.md](docs/OPERATIONS.md).
+Production release signing and Firebase project identity must be configured explicitly. See [Android release signing](docs/ANDROID_RELEASE_SIGNING.md) and [Firebase operations](docs/OPERATIONS.md). Never place service-account credentials in the Flutter app.

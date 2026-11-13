@@ -19,7 +19,7 @@ service cloud.firestore {
     // Collection: stores
     // Document ID: auto id (also stored as docId)
     // Fields: numericId, ownerId, ownerUid, name, type, status, lat, lng,
-    //   barangay, city, address, landmark, schedule, is_mobile, image,
+    //   geohash, barangay, city, address, landmark, schedule, is_mobile, image,
     //   verification_note, location_mode, location_updated_at
     //
     // Collection: products, listings, promotions, tours, storeMembers,
@@ -40,10 +40,6 @@ service cloud.firestore {
 
     function isAdmin() {
       return isAuthenticated() && exists(userPath()) && currentUser().role == 'admin';
-    }
-
-    function isOwnerRole() {
-      return isAuthenticated() && exists(userPath()) && currentUser().role in ['owner', 'admin'];
     }
 
     function validEmail(value) {
@@ -71,93 +67,6 @@ service cloud.firestore {
         data.storeGrants is list && data.storeGrants.size() <= 20;
     }
 
-    function storeTypes() {
-      return [
-        'sariSari', 'fruitVegetable', 'marketStall', 'streetVendor', 'convenience',
-        'supermarket', 'generalMerchandise', 'hardware', 'electronics', 'appliance',
-        'clothing', 'bookstore', 'autoParts', 'other'
-      ];
-    }
-
-    function isValidStore(data) {
-      return data.keys().hasOnly([
-          'numericId', 'ownerId', 'ownerUid', 'name', 'type', 'status', 'lat', 'lng',
-          'barangay', 'city', 'address', 'landmark', 'schedule', 'is_mobile', 'image',
-          'verification_note', 'location_mode', 'location_updated_at'
-        ]) &&
-        data.numericId is number &&
-        data.ownerId is number &&
-        data.ownerUid is string &&
-        validString(data.name, 1, 80) &&
-        data.type in storeTypes() &&
-        data.status in ['pending', 'approved', 'suspended'] &&
-        data.lat is number && data.lng is number &&
-        validString(data.barangay, 0, 80) &&
-        validString(data.city, 0, 80) &&
-        validString(data.address, 0, 160) &&
-        validString(data.landmark, 0, 160) &&
-        validString(data.schedule, 0, 120) &&
-        data.is_mobile is bool &&
-        data.location_mode in ['fixed', 'regular', 'live', 'stale'];
-    }
-
-    function isValidProduct(data) {
-      return data.keys().hasOnly([
-          'numericId', 'name', 'category', 'brand', 'package_size', 'aliases',
-          'barcode', 'image', 'attributes', 'createdByUid'
-        ]) &&
-        data.numericId is number &&
-        validString(data.name, 1, 80) &&
-        validString(data.category, 1, 40) &&
-        data.aliases is list && data.aliases.size() <= 20 &&
-        data.attributes is map;
-    }
-
-    function isValidListing(data) {
-      return data.keys().hasOnly([
-          'numericId', 'storeId', 'productId', 'price', 'unit', 'quantity',
-          'availability', 'last_confirmed_at', 'status', 'ownerUid'
-        ]) &&
-        data.numericId is number &&
-        data.storeId is number &&
-        data.productId is number &&
-        data.price is number && data.price >= 0 && data.price <= 1000000 &&
-        validString(data.unit, 1, 40) &&
-        data.quantity is number && data.quantity >= 0 && data.quantity <= 100000 &&
-        data.availability in ['in_stock', 'low', 'unavailable'] &&
-        data.status in ['active', 'archived', 'unavailable'];
-    }
-
-    function isValidPromotion(data) {
-      return data.keys().hasOnly([
-          'numericId', 'storeId', 'title', 'offer', 'starts_at', 'ends_at',
-          'sponsored', 'status', 'ownerUid'
-        ]) &&
-        data.numericId is number &&
-        data.storeId is number &&
-        validString(data.title, 1, 80) &&
-        validString(data.offer, 1, 200) &&
-        data.sponsored is bool &&
-        data.status in ['draft', 'pending', 'approved', 'rejected'];
-    }
-
-    function isValidTour(data) {
-      return data.keys().hasOnly([
-          'numericId', 'storeId', 'title', 'status', 'nodes', 'ownerUid'
-        ]) &&
-        data.numericId is number &&
-        data.storeId is number &&
-        validString(data.title, 1, 80) &&
-        data.status in ['draft', 'published'] &&
-        data.nodes is list && data.nodes.size() <= 40;
-    }
-
-    function ownsStore(storeId) {
-      return isAuthenticated() &&
-        exists(/databases/$(database)/documents/stores/$(storeId)) &&
-        get(/databases/$(database)/documents/stores/$(storeId)).data.ownerUid == request.auth.uid;
-    }
-
     function ownsStoreNumeric(storeNumericId) {
       return isAuthenticated() &&
         exists(userPath()) &&
@@ -166,103 +75,68 @@ service cloud.firestore {
 
     match /users/{userId} {
       allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
-      allow create: if isAuthenticated() && request.auth.uid == userId &&
-        isValidUser(request.resource.data) &&
-        request.resource.data.email == request.auth.token.email &&
-        (
-          request.resource.data.role in ['customer', 'owner'] ||
-          (
-            request.resource.data.role == 'admin' &&
-            request.auth.token.email == 'admin@localspot.ph'
-          )
-        );
+      // Customer profiles are initialized by the Auth trigger.
+      allow create: if false;
       allow update: if isAuthenticated() && isValidUser(request.resource.data) &&
         request.resource.data.numericId == resource.data.numericId &&
         request.resource.data.email == resource.data.email &&
         (
-          (request.auth.uid == userId && request.resource.data.role == resource.data.role) ||
+          (request.auth.uid == userId &&
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name']) &&
+            request.resource.data.role == resource.data.role &&
+            request.resource.data.ownedStoreIds == resource.data.ownedStoreIds &&
+            request.resource.data.memberStoreIds == resource.data.memberStoreIds &&
+            request.resource.data.storeGrants == resource.data.storeGrants) ||
           isAdmin()
         );
       allow delete: if isAdmin();
     }
 
     match /stores/{storeId} {
-      // Public read — catalog browsing works without sign-in.
-      allow read: if true;
-      allow create: if isOwnerRole() && isValidStore(request.resource.data) &&
-        request.resource.data.ownerUid == request.auth.uid &&
-        request.resource.data.status == 'pending';
-      allow update: if isValidStore(request.resource.data) &&
-        request.resource.data.numericId == resource.data.numericId &&
-        request.resource.data.ownerUid == resource.data.ownerUid &&
-        (
-          (resource.data.ownerUid == request.auth.uid &&
-            request.resource.data.status == resource.data.status) ||
-          isAdmin()
-        );
-      allow delete: if isAdmin();
+      // Public catalog reads are approved only; owners/admins can inspect applications.
+      allow read: if resource.data.status == 'approved' ||
+        (isAuthenticated() && resource.data.ownerUid == request.auth.uid) ||
+        isAdmin();
+      // Applications, edits, review and deletion use validated Functions.
+      allow create, update, delete: if false;
     }
 
     match /products/{id} {
       // Products are publicly readable.
       allow read: if true;
-      allow create: if isAuthenticated() && isValidProduct(request.resource.data) &&
-        request.resource.data.createdByUid == request.auth.uid;
-      allow update: if isAuthenticated() && isValidProduct(request.resource.data) &&
-        request.resource.data.numericId == resource.data.numericId &&
-        (resource.data.createdByUid == request.auth.uid || isAdmin());
-      allow delete: if isAdmin();
+      // Product catalog changes are batched with listings by Cloud Functions.
+      allow create, update, delete: if false;
     }
 
     match /listings/{id} {
       // Public read — needed for catalog queries.
       allow read: if true;
-      allow create: if isAuthenticated() && isValidListing(request.resource.data) &&
-        request.resource.data.ownerUid == request.auth.uid;
-      allow update: if isAuthenticated() && isValidListing(request.resource.data) &&
-        request.resource.data.numericId == resource.data.numericId &&
-        (resource.data.ownerUid == request.auth.uid || isAdmin());
-      allow delete: if resource.data.ownerUid == request.auth.uid || isAdmin();
+      // Listing mutations and stock history are handled by Cloud Functions.
+      allow create, update, delete: if false;
     }
 
     match /promotions/{id} {
-      // Public read — promotions shown on home screen without sign-in.
-      allow read: if true;
-      allow create: if isAuthenticated() && isValidPromotion(request.resource.data) &&
-        request.resource.data.ownerUid == request.auth.uid &&
-        request.resource.data.status == 'pending';
-      allow update: if isValidPromotion(request.resource.data) &&
-        request.resource.data.numericId == resource.data.numericId &&
-        (
-          (resource.data.ownerUid == request.auth.uid &&
-            request.resource.data.status == resource.data.status) ||
-          isAdmin()
-        );
-      allow delete: if isAdmin();
+      // Public catalog reads are approved only; owners/admins can inspect moderation state.
+      allow read: if resource.data.status == 'approved' ||
+        (isAuthenticated() && resource.data.ownerUid == request.auth.uid) ||
+        isAdmin();
+      // Submission and moderation are authorized in Cloud Functions.
+      allow create, update, delete: if false;
     }
 
     match /tours/{id} {
-      // Public read — published tours visible to everyone; drafts also readable
-      // (filtering is done in app code, not rules, to avoid collection-query failures).
-      allow read: if true;
-      allow create: if isAuthenticated() && isValidTour(request.resource.data) &&
-        request.resource.data.ownerUid == request.auth.uid &&
-        request.resource.data.status == 'draft';
-      allow update: if isValidTour(request.resource.data) &&
-        request.resource.data.numericId == resource.data.numericId &&
-        request.resource.data.ownerUid == resource.data.ownerUid &&
-        (resource.data.ownerUid == request.auth.uid || isAdmin());
-      allow delete: if isAdmin();
+      // Public catalog reads only published tours; owners may query their own drafts.
+      allow read: if resource.data.status == 'published' ||
+        (isAuthenticated() && resource.data.ownerUid == request.auth.uid) ||
+        isAdmin();
+      // Draft structure is mutated by a validated callable; privacy/review fields are server-owned.
+      allow create, update, delete: if false;
     }
 
     match /storeMembers/{id} {
-      allow read: if isAuthenticated();
-      allow create, update: if isAuthenticated() &&
-        request.resource.data.keys().hasOnly([
-          'storeId', 'email', 'userUid', 'userNumericId', 'inventory', 'promotions', 'location'
-        ]) &&
-        (ownsStoreNumeric(request.resource.data.storeId) || isAdmin());
-      allow delete: if isAdmin() || ownsStoreNumeric(resource.data.storeId);
+      allow read: if isAuthenticated() &&
+        (resource.data.userUid == request.auth.uid || ownsStoreNumeric(resource.data.storeId) || isAdmin());
+      allow create, update, delete: if false;
     }
 
     match /favorites/{id} {
@@ -271,53 +145,57 @@ service cloud.firestore {
         request.resource.data.uid == request.auth.uid &&
         request.resource.data.keys().hasOnly(['uid', 'favoritable_type', 'favoritable_id']) &&
         request.resource.data.favoritable_type in ['store', 'product'] &&
-        request.resource.data.favoritable_id is number;
+        request.resource.data.favoritable_id is int &&
+        request.resource.data.favoritable_id > 0;
     }
 
     match /reports/{id} {
       allow read: if isAdmin();
-      allow create: if isAuthenticated() &&
-        request.resource.data.keys().hasOnly(['numericId', 'userId', 'uid', 'target', 'reason', 'resolved']) &&
-        request.resource.data.uid == request.auth.uid &&
-        request.resource.data.resolved == false &&
-        validString(request.resource.data.target, 1, 120) &&
-        validString(request.resource.data.reason, 1, 400);
-      allow update: if isAdmin() && request.resource.data.resolved is bool;
+      // Submission is rate-limited and attributed by a callable function.
+      allow create, update, delete: if false;
     }
 
     match /feedback/{id} {
       allow read: if isAdmin() || (isAuthenticated() && resource.data.uid == request.auth.uid);
-      allow create: if isAuthenticated() &&
-        request.resource.data.keys().hasOnly(['numericId', 'userId', 'uid', 'topic', 'body', 'area']) &&
-        request.resource.data.uid == request.auth.uid &&
-        validString(request.resource.data.topic, 1, 80) &&
-        validString(request.resource.data.body, 1, 1000);
+      // Submission is rate-limited and attributed by a callable function.
+      allow create: if false;
+      allow update, delete: if false;
     }
 
     match /vendorSessions/{id} {
-      // Active sessions are publicly readable for the map.
-      allow read: if true;
-      allow create, update: if isAuthenticated() &&
-        request.resource.data.keys().hasOnly([
-          'numericId', 'storeId', 'lat', 'lng', 'started_at', 'last_update_at',
-          'expires_at', 'ended_at', 'ownerUid'
-        ]) &&
-        request.resource.data.ownerUid == request.auth.uid;
-      allow delete: if isAuthenticated() && resource.data.ownerUid == request.auth.uid;
+      // Public collection listing goes through an App Check callable so expiry
+      // is evaluated at server time. Direct document reads expose only active
+      // coordinates or the caller's own session.
+      allow get: if isAdmin() ||
+        (isAuthenticated() && resource.data.startedByUid == request.auth.uid) ||
+        (resource.data.ended_at == null &&
+          resource.data.expiresAt is timestamp &&
+          resource.data.expiresAt > request.time);
+      allow list: if isAdmin();
+      // Session lifecycle and authorization are enforced by Cloud Functions.
+      allow create, update, delete: if false;
     }
 
     match /stockMovements/{id} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated() &&
-        request.resource.data.keys().hasOnly([
-          'listingId', 'kind', 'quantity_delta', 'note', 'created_at', 'ownerUid'
-        ]) &&
-        request.resource.data.ownerUid == request.auth.uid;
+      // Inventory history is fetched through a callable that checks store grants.
+      allow read: if false;
+      allow create, update, delete: if false;
     }
 
     match /auditLogs/{id} {
       allow read: if isAdmin();
-      allow create: if isAdmin();
+      allow create, update, delete: if false;
+    }
+
+    match /mediaAssets/{id} {
+      allow read: if isAuthenticated() && resource.data.uid == request.auth.uid;
+      allow create, update, delete: if false;
+    }
+
+    match /systemMetadata/searchPrefixIndex {
+      // This switch only enables indexed product reads after the backfill is complete.
+      allow read: if true;
+      allow write: if false;
     }
   }
 }

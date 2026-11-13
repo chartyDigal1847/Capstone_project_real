@@ -10,12 +10,14 @@ const mapStyleUrl = String.fromEnvironment(
   defaultValue: 'https://tiles.openfreemap.org/styles/liberty',
 );
 
-bool inWidgetTest() => WidgetsBinding.instance.runtimeType.toString().contains('Test');
+bool inWidgetTest() =>
+    WidgetsBinding.instance.runtimeType.toString().contains('Test');
 
 bool useNativeMapLibre() {
   if (inWidgetTest()) return false;
   if (kIsWeb) return true;
-  return defaultTargetPlatform == TargetPlatform.android || defaultTargetPlatform == TargetPlatform.iOS;
+  return defaultTargetPlatform == TargetPlatform.android ||
+      defaultTargetPlatform == TargetPlatform.iOS;
 }
 
 class LocalMapView extends StatelessWidget {
@@ -52,33 +54,37 @@ class LocalMapView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final child = useNativeMapLibre()
-        ? _MapLibreCanvas(
-            stores: stores,
-            centerLat: centerLat,
-            centerLng: centerLng,
-            userLat: userLat,
-            userLng: userLng,
-            selectedId: selectedId,
-            onSelect: onSelect,
-            onPick: onPick,
-            onUserPan: onUserPan,
-            route: route,
-            followUser: followUser,
-            tilt: tilt,
-          )
-        : _SchematicMapView(
-            stores: stores,
-            centerLat: centerLat,
-            centerLng: centerLng,
-            userLat: userLat,
-            userLng: userLng,
-            selectedId: selectedId,
-            onSelect: onSelect,
-            onPick: onPick,
-            route: route,
-          );
-    return SizedBox(height: height, child: ClipRRect(borderRadius: BorderRadius.circular(18), child: child));
+    final child =
+        useNativeMapLibre()
+            ? _MapLibreCanvas(
+              stores: stores,
+              centerLat: centerLat,
+              centerLng: centerLng,
+              userLat: userLat,
+              userLng: userLng,
+              selectedId: selectedId,
+              onSelect: onSelect,
+              onPick: onPick,
+              onUserPan: onUserPan,
+              route: route,
+              followUser: followUser,
+              tilt: tilt,
+            )
+            : _SchematicMapView(
+              stores: stores,
+              centerLat: centerLat,
+              centerLng: centerLng,
+              userLat: userLat,
+              userLng: userLng,
+              selectedId: selectedId,
+              onSelect: onSelect,
+              onPick: onPick,
+              route: route,
+            );
+    return SizedBox(
+      height: height,
+      child: ClipRRect(borderRadius: BorderRadius.circular(18), child: child),
+    );
   }
 }
 
@@ -122,8 +128,14 @@ class _MapLibreCanvasState extends State<_MapLibreCanvas> {
   var _syncGen = 0;
   final _circles = <String, int>{};
 
-  double get _targetLat => widget.followUser ? (widget.userLat ?? widget.centerLat) : widget.centerLat;
-  double get _targetLng => widget.followUser ? (widget.userLng ?? widget.centerLng) : widget.centerLng;
+  double get _targetLat =>
+      widget.followUser
+          ? (widget.userLat ?? widget.centerLat)
+          : widget.centerLat;
+  double get _targetLng =>
+      widget.followUser
+          ? (widget.userLng ?? widget.centerLng)
+          : widget.centerLng;
 
   @override
   void didUpdateWidget(covariant _MapLibreCanvas oldWidget) {
@@ -131,8 +143,13 @@ class _MapLibreCanvasState extends State<_MapLibreCanvas> {
     if (!_styleReady) return;
     _syncAnnotations();
     final followEnabled = widget.followUser && !oldWidget.followUser;
-    final centerChanged = widget.centerLat != oldWidget.centerLat || widget.centerLng != oldWidget.centerLng;
-    final userChanged = widget.followUser && (widget.userLat != oldWidget.userLat || widget.userLng != oldWidget.userLng);
+    final centerChanged =
+        widget.centerLat != oldWidget.centerLat ||
+        widget.centerLng != oldWidget.centerLng;
+    final userChanged =
+        widget.followUser &&
+        (widget.userLat != oldWidget.userLat ||
+            widget.userLng != oldWidget.userLng);
     final tiltChanged = widget.tilt != oldWidget.tilt;
     if (followEnabled || centerChanged || userChanged || tiltChanged) {
       _moveTo(_targetLat, _targetLng);
@@ -144,11 +161,15 @@ class _MapLibreCanvasState extends State<_MapLibreCanvas> {
     if (controller == null || !_styleReady) return;
     _programmaticMove = true;
     try {
-      await controller.animateCamera(CameraUpdate.newCameraPosition(CameraPosition(
-        target: LatLng(lat, lng),
-        zoom: widget.tilt > 0 ? 16.2 : 14.6,
-        tilt: widget.tilt,
-      )));
+      await controller.animateCamera(
+        CameraUpdate.newCameraPosition(
+          CameraPosition(
+            target: LatLng(lat, lng),
+            zoom: widget.tilt > 0 ? 16.2 : 14.6,
+            tilt: widget.tilt,
+          ),
+        ),
+      );
     } catch (_) {}
     if (mounted) _programmaticMove = false;
   }
@@ -164,12 +185,16 @@ class _MapLibreCanvasState extends State<_MapLibreCanvas> {
     if (!mounted || gen != _syncGen) return;
     _circles.clear();
     if (widget.route.length >= 2) {
-      await controller.addLine(LineOptions(
-        geometry: [for (final point in widget.route) LatLng(point.lat, point.lng)],
-        lineColor: '#9E514B',
-        lineWidth: 4.5,
-        lineOpacity: 0.92,
-      ));
+      await controller.addLine(
+        LineOptions(
+          geometry: [
+            for (final point in widget.route) LatLng(point.lat, point.lng),
+          ],
+          lineColor: '#9E514B',
+          lineWidth: 4.5,
+          lineOpacity: 0.92,
+        ),
+      );
     }
     if (!mounted || gen != _syncGen) return;
     for (final store in widget.stores) {
@@ -190,13 +215,15 @@ class _MapLibreCanvasState extends State<_MapLibreCanvas> {
     final userLat = widget.userLat;
     final userLng = widget.userLng;
     if (userLat != null && userLng != null) {
-      await controller.addCircle(CircleOptions(
-        geometry: LatLng(userLat, userLng),
-        circleRadius: 7,
-        circleColor: '#C4A56B',
-        circleStrokeColor: '#FFFFFF',
-        circleStrokeWidth: 2,
-      ));
+      await controller.addCircle(
+        CircleOptions(
+          geometry: LatLng(userLat, userLng),
+          circleRadius: 7,
+          circleColor: '#C4A56B',
+          circleStrokeColor: '#FFFFFF',
+          circleStrokeWidth: 2,
+        ),
+      );
     }
   }
 
@@ -219,7 +246,8 @@ class _MapLibreCanvasState extends State<_MapLibreCanvas> {
             controller.onCircleTapped.add((circle) {
               final id = _circles[circle.id] ?? circle.data?['storeId'] as int?;
               if (id == null) return;
-              final store = widget.stores.where((item) => item.id == id).firstOrNull;
+              final store =
+                  widget.stores.where((item) => item.id == id).firstOrNull;
               if (store != null) widget.onSelect?.call(store);
             });
           },
@@ -228,7 +256,9 @@ class _MapLibreCanvasState extends State<_MapLibreCanvas> {
             _syncAnnotations();
             _moveTo(_targetLat, _targetLng);
           },
-          onMapClick: (point, latLng) => widget.onPick?.call(latLng.latitude, latLng.longitude),
+          onMapClick:
+              (point, latLng) =>
+                  widget.onPick?.call(latLng.latitude, latLng.longitude),
           onCameraIdle: () {
             if (_programmaticMove || widget.followUser) return;
             widget.onUserPan?.call();
@@ -278,8 +308,11 @@ class _SchematicMapView extends StatelessWidget {
     final maxLat = centerLat + _span;
     final minLng = centerLng - _span;
     final maxLng = centerLng + _span;
-    final x = ((lng - minLng) / (maxLng - minLng)).clamp(0.04, 0.96) * size.width;
-    final y = (1 - ((lat - minLat) / (maxLat - minLat)).clamp(0.04, 0.96)) * size.height;
+    final x =
+        ((lng - minLng) / (maxLng - minLng)).clamp(0.04, 0.96) * size.width;
+    final y =
+        (1 - ((lat - minLat) / (maxLat - minLat)).clamp(0.04, 0.96)) *
+        size.height;
     return Offset(x, y);
   }
 
@@ -289,23 +322,33 @@ class _SchematicMapView extends StatelessWidget {
       builder: (context, constraints) {
         final size = Size(constraints.maxWidth, constraints.maxHeight);
         return GestureDetector(
-          onTapDown: onPick == null
-              ? null
-              : (details) {
-                  final minLat = centerLat - _span;
-                  final maxLat = centerLat + _span;
-                  final minLng = centerLng - _span;
-                  final maxLng = centerLng + _span;
-                  final lng = minLng + (details.localPosition.dx / size.width) * (maxLng - minLng);
-                  final lat = maxLat - (details.localPosition.dy / size.height) * (maxLat - minLat);
-                  onPick!(lat, lng);
-                },
+          onTapDown:
+              onPick == null
+                  ? null
+                  : (details) {
+                    final minLat = centerLat - _span;
+                    final maxLat = centerLat + _span;
+                    final minLng = centerLng - _span;
+                    final maxLng = centerLng + _span;
+                    final lng =
+                        minLng +
+                        (details.localPosition.dx / size.width) *
+                            (maxLng - minLng);
+                    final lat =
+                        maxLat -
+                        (details.localPosition.dy / size.height) *
+                            (maxLat - minLat);
+                    onPick!(lat, lng);
+                  },
           child: Stack(
             children: [
               CustomPaint(
                 size: size,
                 painter: _MapPainter(
-                  route: [for (final point in route) _toOffset(point.lat, point.lng, size)],
+                  route: [
+                    for (final point in route)
+                      _toOffset(point.lat, point.lng, size),
+                  ],
                 ),
               ),
               ...stores.map((store) {
@@ -316,28 +359,34 @@ class _SchematicMapView extends StatelessWidget {
                   top: pos.dy - 32,
                   child: GestureDetector(
                     onTap: () => onSelect?.call(store),
-                    child: Icon(Icons.location_on, color: selected ? clay : leafDark, size: selected ? 34 : 28),
-                  ),
-                );
-              }),
-              Builder(builder: (_) {
-                final lat = userLat ?? centerLat;
-                final lng = userLng ?? centerLng;
-                final you = _toOffset(lat, lng, size);
-                return Positioned(
-                  left: you.dx - 7,
-                  top: you.dy - 7,
-                  child: Container(
-                    width: 14,
-                    height: 14,
-                    decoration: BoxDecoration(
-                      color: champagne,
-                      shape: BoxShape.circle,
-                      border: Border.all(color: Colors.white, width: 2),
+                    child: Icon(
+                      Icons.location_on,
+                      color: selected ? clay : leafDark,
+                      size: selected ? 34 : 28,
                     ),
                   ),
                 );
               }),
+              Builder(
+                builder: (_) {
+                  final lat = userLat ?? centerLat;
+                  final lng = userLng ?? centerLng;
+                  final you = _toOffset(lat, lng, size);
+                  return Positioned(
+                    left: you.dx - 7,
+                    top: you.dy - 7,
+                    child: Container(
+                      width: 14,
+                      height: 14,
+                      decoration: BoxDecoration(
+                        color: champagne,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 2),
+                      ),
+                    ),
+                  );
+                },
+              ),
               const Positioned(
                 left: 10,
                 right: 10,
@@ -361,28 +410,51 @@ class _MapPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    canvas.drawRect(Offset.zero & size, Paint()..color = const Color(0xFFCAD9C4));
-    final road = Paint()
-      ..color = const Color(0xFFEEE6D8)
-      ..strokeWidth = 10
-      ..style = PaintingStyle.stroke;
-    canvas.drawLine(Offset(0, size.height * .42), Offset(size.width, size.height * .38), road);
-    canvas.drawLine(Offset(size.width * .32, 0), Offset(size.width * .4, size.height), road);
-    canvas.drawLine(Offset(0, size.height * .72), Offset(size.width, size.height * .62), road..strokeWidth = 7);
+    canvas.drawRect(
+      Offset.zero & size,
+      Paint()..color = const Color(0xFFCAD9C4),
+    );
+    final road =
+        Paint()
+          ..color = const Color(0xFFEEE6D8)
+          ..strokeWidth = 10
+          ..style = PaintingStyle.stroke;
+    canvas.drawLine(
+      Offset(0, size.height * .42),
+      Offset(size.width, size.height * .38),
+      road,
+    );
+    canvas.drawLine(
+      Offset(size.width * .32, 0),
+      Offset(size.width * .4, size.height),
+      road,
+    );
+    canvas.drawLine(
+      Offset(0, size.height * .72),
+      Offset(size.width, size.height * .62),
+      road..strokeWidth = 7,
+    );
     canvas.drawRRect(
-      RRect.fromRectAndRadius(Rect.fromLTWH(size.width * .48, size.height * .18, 70, 48), const Radius.circular(8)),
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(size.width * .48, size.height * .18, 70, 48),
+        const Radius.circular(8),
+      ),
       Paint()..color = const Color(0xFF9BB48F),
     );
     canvas.drawRRect(
-      RRect.fromRectAndRadius(Rect.fromLTWH(size.width * .12, size.height * .52, 90, 36), const Radius.circular(8)),
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(size.width * .12, size.height * .52, 90, 36),
+        const Radius.circular(8),
+      ),
       Paint()..color = const Color(0xFF8FAF86),
     );
     if (route.length >= 2) {
-      final line = Paint()
-        ..color = clay
-        ..strokeWidth = 4
-        ..style = PaintingStyle.stroke
-        ..strokeCap = StrokeCap.round;
+      final line =
+          Paint()
+            ..color = clay
+            ..strokeWidth = 4
+            ..style = PaintingStyle.stroke
+            ..strokeCap = StrokeCap.round;
       final path = Path()..moveTo(route.first.dx, route.first.dy);
       for (final point in route.skip(1)) {
         path.lineTo(point.dx, point.dy);
@@ -392,5 +464,6 @@ class _MapPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _MapPainter oldDelegate) => oldDelegate.route != route;
+  bool shouldRepaint(covariant _MapPainter oldDelegate) =>
+      oldDelegate.route != route;
 }

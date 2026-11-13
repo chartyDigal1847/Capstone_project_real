@@ -62,19 +62,33 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
         for (final row in rows) {
           try {
             final r = Map<String, dynamic>.from(row as Map);
-            final p = productFromJson(Map<String, dynamic>.from(r['product'] as Map));
+            final p = productFromJson(
+              Map<String, dynamic>.from(r['product'] as Map),
+            );
             // Only show results for this exact product.
-            if (p.id != widget.product.id && p.name.toLowerCase() != widget.product.name.toLowerCase()) continue;
-            hits.add(SearchHit(
-              listing: listingFromJson(Map<String, dynamic>.from(r['listing'] as Map)),
-              store: storeFromJson(Map<String, dynamic>.from(r['store'] as Map)),
-              product: p,
-              distanceKm: (r['distance_km'] as num?)?.toDouble() ?? 0,
-              matchType: SearchMatchType.exact,
-            ));
+            if (p.id != widget.product.id &&
+                p.name.toLowerCase() != widget.product.name.toLowerCase()) {
+              continue;
+            }
+            hits.add(
+              SearchHit(
+                listing: listingFromJson(
+                  Map<String, dynamic>.from(r['listing'] as Map),
+                ),
+                store: storeFromJson(
+                  Map<String, dynamic>.from(r['store'] as Map),
+                ),
+                product: p,
+                distanceKm: (r['distance_km'] as num?)?.toDouble() ?? 0,
+                matchType: SearchMatchType.exact,
+              ),
+            );
           } catch (_) {}
         }
-        setState(() { _remoteHits = hits; _loading = false; });
+        setState(() {
+          _remoteHits = hits;
+          _loading = false;
+        });
         return;
       }
     } catch (_) {}
@@ -91,8 +105,20 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
       children: [
         Stack(
           children: [
-            NetworkPhoto(widget.product.image, height: 240, width: double.infinity, radius: 0),
-            Positioned(top: 12, left: 8, child: IconButton.filledTonal(onPressed: widget.onBack, icon: const Icon(Icons.arrow_back))),
+            NetworkPhoto(
+              widget.product.image,
+              height: 240,
+              width: double.infinity,
+              radius: 0,
+            ),
+            Positioned(
+              top: 12,
+              left: 8,
+              child: IconButton.filledTonal(
+                onPressed: widget.onBack,
+                icon: const Icon(Icons.arrow_back),
+              ),
+            ),
             Positioned(
               top: 12,
               right: 8,
@@ -114,56 +140,123 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
                   children: [
                     Eyebrow(widget.product.category.toUpperCase()),
                     const SizedBox(height: 6),
-                    Text(widget.product.name, style: const TextStyle(fontFamily: 'Georgia', fontSize: 28, height: 1.1)),
-                    if (widget.product.brand.isNotEmpty) Text(widget.product.brand, style: const TextStyle(color: taupe)),
-                    Text(widget.product.packageSize, style: const TextStyle(fontSize: 13)),
+                    Text(
+                      widget.product.name,
+                      style: const TextStyle(
+                        fontFamily: 'Georgia',
+                        fontSize: 28,
+                        height: 1.1,
+                      ),
+                    ),
+                    if (widget.product.brand.isNotEmpty)
+                      Text(
+                        widget.product.brand,
+                        style: const TextStyle(color: taupe),
+                      ),
+                    Text(
+                      widget.product.packageSize,
+                      style: const TextStyle(fontSize: 13),
+                    ),
                     if (widget.product.attributes.isNotEmpty) ...[
                       const SizedBox(height: 8),
                       for (final entry in widget.product.attributes.entries)
-                        Text('${entry.key}: ${entry.value}', style: const TextStyle(fontSize: 12, color: taupe)),
+                        Text(
+                          '${entry.key}: ${entry.value}',
+                          style: const TextStyle(fontSize: 12, color: taupe),
+                        ),
                     ],
                     const SizedBox(height: 10),
-                    Text('Also searched as: ${widget.product.aliases.join(', ')}', style: const TextStyle(color: taupe, fontSize: 11, height: 1.4)),
+                    Text(
+                      'Also searched as: ${widget.product.aliases.join(', ')}',
+                      style: const TextStyle(
+                        color: taupe,
+                        fontSize: 11,
+                        height: 1.4,
+                      ),
+                    ),
                   ],
                 ),
               ),
               const SizedBox(height: 18),
               Row(
                 children: [
-                  const Expanded(child: Text('Participating sellers', style: TextStyle(fontFamily: 'Georgia', fontSize: 22))),
-                  if (_loading) const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
+                  const Expanded(
+                    child: Text(
+                      'Participating sellers',
+                      style: TextStyle(fontFamily: 'Georgia', fontSize: 22),
+                    ),
+                  ),
+                  if (_loading)
+                    const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
                   if (!_loading && app.apiOnline)
-                    IconButton(icon: const Icon(Icons.refresh, size: 20), tooltip: 'Refresh sellers', onPressed: _loadRemote),
+                    IconButton(
+                      icon: const Icon(Icons.refresh, size: 20),
+                      tooltip: 'Refresh sellers',
+                      onPressed: _loadRemote,
+                    ),
                 ],
               ),
               const SizedBox(height: 8),
               if (hits.isEmpty && !_loading)
-                const EmptyNote('No approved nearby store has listed this product yet.', icon: Icons.storefront_outlined)
+                const EmptyNote(
+                  'No approved nearby store has listed this product yet.',
+                  icon: Icons.storefront_outlined,
+                )
               else
-                ...hits.map((hit) => Padding(
-                      padding: const EdgeInsets.only(bottom: 10),
-                      child: SoftCard(
-                        onTap: () => widget.onStore(hit.store),
-                        child: Row(
-                          children: [
-                            NetworkPhoto(hit.store.image, width: 60, height: 60, radius: 10),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(hit.store.name, style: const TextStyle(fontWeight: FontWeight.w700)),
-                                  Text('${hit.store.type.label} · ${hit.distanceKm.toStringAsFixed(1)} km', style: const TextStyle(color: taupe, fontSize: 11)),
-                                  Text('${peso(hit.listing.price)} / ${hit.listing.unit} · ${availabilityLabel(hit.listing.availability)}'),
-                                  Text(freshness(hit.listing.lastConfirmed), style: const TextStyle(color: taupe, fontSize: 11)),
-                                ],
-                              ),
+                ...hits.map(
+                  (hit) => Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: SoftCard(
+                      onTap: () => widget.onStore(hit.store),
+                      child: Row(
+                        children: [
+                          NetworkPhoto(
+                            hit.store.image,
+                            width: 60,
+                            height: 60,
+                            radius: 10,
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  hit.store.name,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                Text(
+                                  '${hit.store.type.label} · ${hit.distanceKm.toStringAsFixed(1)} km',
+                                  style: const TextStyle(
+                                    color: taupe,
+                                    fontSize: 11,
+                                  ),
+                                ),
+                                Text(
+                                  '${peso(hit.listing.price)} / ${hit.listing.unit} · ${availabilityLabel(hit.listing.availability)}',
+                                ),
+                                Text(
+                                  freshness(hit.listing.lastConfirmed),
+                                  style: const TextStyle(
+                                    color: taupe,
+                                    fontSize: 11,
+                                  ),
+                                ),
+                              ],
                             ),
-                            const Icon(Icons.chevron_right, color: taupe),
-                          ],
-                        ),
+                          ),
+                          const Icon(Icons.chevron_right, color: taupe),
+                        ],
                       ),
-                    )),
+                    ),
+                  ),
+                ),
             ],
           ),
         ),
@@ -199,8 +292,20 @@ class StoreDetailPage extends StatelessWidget {
       children: [
         Stack(
           children: [
-            NetworkPhoto(store.image, height: 210, width: double.infinity, radius: 0),
-            Positioned(top: 12, left: 8, child: IconButton.filledTonal(onPressed: onBack, icon: const Icon(Icons.arrow_back))),
+            NetworkPhoto(
+              store.image,
+              height: 210,
+              width: double.infinity,
+              radius: 0,
+            ),
+            Positioned(
+              top: 12,
+              left: 8,
+              child: IconButton.filledTonal(
+                onPressed: onBack,
+                icon: const Icon(Icons.arrow_back),
+              ),
+            ),
             Positioned(
               top: 12,
               right: 8,
@@ -222,15 +327,31 @@ class StoreDetailPage extends StatelessWidget {
                   children: [
                     StatusChip(storeStatusLabel(store.status)),
                     const SizedBox(height: 8),
-                    Text(store.name, style: const TextStyle(fontFamily: 'Georgia', fontSize: 28, height: 1.1)),
-                    Text(store.type.label, style: const TextStyle(color: taupe)),
+                    Text(
+                      store.name,
+                      style: const TextStyle(
+                        fontFamily: 'Georgia',
+                        fontSize: 28,
+                        height: 1.1,
+                      ),
+                    ),
+                    Text(
+                      store.type.label,
+                      style: const TextStyle(color: taupe),
+                    ),
                     const SizedBox(height: 10),
                     Text('${store.address}, ${store.barangay}, ${store.city}'),
-                    Text('Landmark: ${store.landmark}', style: const TextStyle(fontSize: 12, color: taupe)),
+                    Text(
+                      'Landmark: ${store.landmark}',
+                      style: const TextStyle(fontSize: 12, color: taupe),
+                    ),
                     Text(store.schedule, style: const TextStyle(fontSize: 12)),
                     if (store.isMobile) ...[
                       const SizedBox(height: 8),
-                      Text(_vendorLocationCopy(store), style: const TextStyle(fontSize: 11, color: taupe)),
+                      Text(
+                        _vendorLocationCopy(store),
+                        style: const TextStyle(fontSize: 11, color: taupe),
+                      ),
                     ],
                   ],
                 ),
@@ -255,60 +376,113 @@ class StoreDetailPage extends StatelessWidget {
                 ),
               ),
               if (tour != null)
-                OutlinedButton(onPressed: onTour, child: const Text('Open 360° store tour'))
+                OutlinedButton(
+                  onPressed: onTour,
+                  child: const Text('Open 360° store tour'),
+                )
               else
-                const EmptyNote('No published store tour yet.', icon: Icons.threesixty_outlined),
-              TextButton(onPressed: onReport, child: const Text('Report a problem with this listing')),
+                const EmptyNote(
+                  'No published store tour yet.',
+                  icon: Icons.threesixty_outlined,
+                ),
+              TextButton(
+                onPressed: onReport,
+                child: const Text('Report a problem with this listing'),
+              ),
               const SizedBox(height: 10),
               // ── Active promotions ──────────────────────────────────
-              Builder(builder: (context) {
-                final now = DateTime.now();
-                final promos = app.promotions.where((p) =>
-                    p.storeId == store.id &&
-                    p.status == PromotionStatus.approved &&
-                    !now.isBefore(p.startsAt) &&
-                    !now.isAfter(p.endsAt)).toList();
-                if (promos.isEmpty) return const SizedBox.shrink();
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('Promotions', style: TextStyle(fontFamily: 'Georgia', fontSize: 22)),
-                    const SizedBox(height: 8),
-                    ...promos.map((p) => Padding(
+              Builder(
+                builder: (context) {
+                  final now = DateTime.now();
+                  final promos =
+                      app.promotions
+                          .where(
+                            (p) =>
+                                p.storeId == store.id &&
+                                p.status == PromotionStatus.approved &&
+                                !now.isBefore(p.startsAt) &&
+                                !now.isAfter(p.endsAt),
+                          )
+                          .toList();
+                  if (promos.isEmpty) return const SizedBox.shrink();
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Promotions',
+                        style: TextStyle(fontFamily: 'Georgia', fontSize: 22),
+                      ),
+                      const SizedBox(height: 8),
+                      ...promos.map(
+                        (p) => Padding(
                           padding: const EdgeInsets.only(bottom: 10),
                           child: SoftCard(
                             color: sand,
                             child: Row(
                               children: [
-                                const Icon(Icons.campaign_outlined, color: leafDark),
+                                const Icon(
+                                  Icons.campaign_outlined,
+                                  color: leafDark,
+                                ),
                                 const SizedBox(width: 12),
                                 Expanded(
                                   child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
                                     children: [
-                                      Row(children: [
-                                        Expanded(child: Text(p.title, style: const TextStyle(fontWeight: FontWeight.w700))),
-                                        if (p.sponsored) const StatusChip('Sponsored', color: champagne),
-                                      ]),
+                                      Row(
+                                        children: [
+                                          Expanded(
+                                            child: Text(
+                                              p.title,
+                                              style: const TextStyle(
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                            ),
+                                          ),
+                                          if (p.sponsored)
+                                            const StatusChip(
+                                              'Sponsored',
+                                              color: champagne,
+                                            ),
+                                        ],
+                                      ),
                                       const SizedBox(height: 2),
-                                      Text(p.offer, style: const TextStyle(fontSize: 12, color: charcoal)),
+                                      Text(
+                                        p.offer,
+                                        style: const TextStyle(
+                                          fontSize: 12,
+                                          color: charcoal,
+                                        ),
+                                      ),
                                     ],
                                   ),
                                 ),
                               ],
                             ),
                           ),
-                        )),
-                    const SizedBox(height: 4),
-                  ],
-                );
-              }),
-              const Text('Sold here', style: TextStyle(fontFamily: 'Georgia', fontSize: 22)),
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                    ],
+                  );
+                },
+              ),
+              const Text(
+                'Sold here',
+                style: TextStyle(fontFamily: 'Georgia', fontSize: 22),
+              ),
               const SizedBox(height: 8),
-              const InfoBanner('These are this store’s listings only.', icon: Icons.inventory_2_outlined),
+              const InfoBanner(
+                'These are this store’s listings only.',
+                icon: Icons.inventory_2_outlined,
+              ),
               const SizedBox(height: 12),
               if (catalog.isEmpty)
-                const EmptyNote('This store has not published products yet.', icon: Icons.inventory_2_outlined)
+                const EmptyNote(
+                  'This store has not published products yet.',
+                  icon: Icons.inventory_2_outlined,
+                )
               else
                 ...catalog.map((listing) {
                   final product = app.productById(listing.productId);
@@ -319,15 +493,34 @@ class StoreDetailPage extends StatelessWidget {
                       onTap: () => onProduct(product),
                       child: Row(
                         children: [
-                          NetworkPhoto(product.image, width: 72, height: 72, radius: 12),
+                          NetworkPhoto(
+                            product.image,
+                            width: 72,
+                            height: 72,
+                            radius: 12,
+                          ),
                           const SizedBox(width: 12),
                           Expanded(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(product.name, style: const TextStyle(fontWeight: FontWeight.w700)),
-                                Text('${peso(listing.price)} / ${listing.unit}', style: const TextStyle(fontSize: 13)),
-                                Text('${availabilityLabel(listing.availability)} · ${freshness(listing.lastConfirmed)}', style: const TextStyle(fontSize: 11, color: taupe)),
+                                Text(
+                                  product.name,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                Text(
+                                  '${peso(listing.price)} / ${listing.unit}',
+                                  style: const TextStyle(fontSize: 13),
+                                ),
+                                Text(
+                                  '${availabilityLabel(listing.availability)} · ${freshness(listing.lastConfirmed)}',
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    color: taupe,
+                                  ),
+                                ),
                               ],
                             ),
                           ),
@@ -371,14 +564,23 @@ class _TourViewerPageState extends State<TourViewerPage> {
                 builder: (context, constraints) {
                   return GestureDetector(
                     onHorizontalDragUpdate: (details) {
-                      setState(() => pan = (pan + details.delta.dx).clamp(-220.0, 220.0));
+                      setState(
+                        () =>
+                            pan = (pan + details.delta.dx).clamp(-220.0, 220.0),
+                      );
                     },
                     onHorizontalDragEnd: (details) {
-                      if (details.primaryVelocity == null || node.connections.isEmpty) return;
+                      if (details.primaryVelocity == null ||
+                          node.connections.isEmpty) {
+                        return;
+                      }
                       if (details.primaryVelocity!.abs() < 900) return;
                       setState(() {
                         pan = 0;
-                        nodeId = details.primaryVelocity! < 0 ? node.connections.first : node.connections.last;
+                        nodeId =
+                            details.primaryVelocity! < 0
+                                ? node.connections.first
+                                : node.connections.last;
                       });
                     },
                     child: ClipRect(
@@ -406,7 +608,10 @@ class _TourViewerPageState extends State<TourViewerPage> {
                 const Center(
                   child: Padding(
                     padding: EdgeInsets.all(24),
-                    child: EmptyNote('This viewpoint has no public privacy-processed image. The original stays private.', icon: Icons.hide_image_outlined),
+                    child: EmptyNote(
+                      'This viewpoint has no public privacy-processed image. The original stays private.',
+                      icon: Icons.hide_image_outlined,
+                    ),
                   ),
                 ),
               Positioned(
@@ -417,8 +622,14 @@ class _TourViewerPageState extends State<TourViewerPage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(node.title, style: const TextStyle(fontWeight: FontWeight.w700)),
-                      const Text('Drag to look around this viewpoint · use arrows to walk the connected tour', style: TextStyle(fontSize: 11, color: taupe)),
+                      Text(
+                        node.title,
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      const Text(
+                        'Drag to look around this viewpoint · use arrows to walk the connected tour',
+                        style: TextStyle(fontSize: 11, color: taupe),
+                      ),
                       const SizedBox(height: 8),
                       Wrap(
                         spacing: 8,
@@ -426,11 +637,16 @@ class _TourViewerPageState extends State<TourViewerPage> {
                         children: [
                           for (final id in node.connections)
                             OutlinedButton(
-                              onPressed: () => setState(() {
-                                pan = 0;
-                                nodeId = id;
-                              }),
-                              child: Text(widget.tour.nodes.firstWhere((n) => n.id == id).title),
+                              onPressed:
+                                  () => setState(() {
+                                    pan = 0;
+                                    nodeId = id;
+                                  }),
+                              child: Text(
+                                widget.tour.nodes
+                                    .firstWhere((n) => n.id == id)
+                                    .title,
+                              ),
                             ),
                         ],
                       ),
@@ -448,15 +664,22 @@ class _TourViewerPageState extends State<TourViewerPage> {
 
 String _vendorLocationCopy(Store store) {
   return switch (store.locationMode) {
-    LocationMode.live => 'Mobile vendor · live public location is on${store.locationUpdatedAt == null ? '' : ' · updated ${freshness(store.locationUpdatedAt!)}'}.',
-    LocationMode.stale => 'Mobile vendor · live session expired. Showing the regular selling area.',
-    LocationMode.regular => 'Mobile vendor · regular selling area. Live sharing is off.',
+    LocationMode.live =>
+      'Mobile vendor · live public location is on${store.locationUpdatedAt == null ? '' : ' · updated ${freshness(store.locationUpdatedAt!)}'}.',
+    LocationMode.stale =>
+      'Mobile vendor · live session expired. Showing the regular selling area.',
+    LocationMode.regular =>
+      'Mobile vendor · regular selling area. Live sharing is off.',
     LocationMode.fixed => 'Mobile vendor · registered pin.',
   };
 }
 
 class RoutePreviewPage extends StatefulWidget {
-  const RoutePreviewPage({super.key, required this.store, required this.onBack});
+  const RoutePreviewPage({
+    super.key,
+    required this.store,
+    required this.onBack,
+  });
   final Store store;
   final VoidCallback onBack;
 
@@ -493,7 +716,10 @@ class _RoutePreviewPageState extends State<RoutePreviewPage> {
   Future<void> _load() async {
     final app = AppScope.of(context);
     try {
-      final result = await app.previewRoute(destLat: widget.store.lat, destLng: widget.store.lng);
+      final result = await app.previewRoute(
+        destLat: widget.store.lat,
+        destLng: widget.store.lng,
+      );
       if (!mounted) return;
       setState(() {
         preview = result;
@@ -520,8 +746,14 @@ class _RoutePreviewPageState extends State<RoutePreviewPage> {
           padding: const EdgeInsets.symmetric(horizontal: 20),
           child: LocalMapView(
             stores: [widget.store],
-            centerLat: navigating ? (app.deviceLat ?? app.searchLat) : widget.store.lat,
-            centerLng: navigating ? (app.deviceLng ?? app.searchLng) : widget.store.lng,
+            centerLat:
+                navigating
+                    ? (app.deviceLat ?? app.searchLat)
+                    : widget.store.lat,
+            centerLng:
+                navigating
+                    ? (app.deviceLng ?? app.searchLng)
+                    : widget.store.lng,
             userLat: app.deviceLat ?? app.searchLat,
             userLng: app.deviceLng ?? app.searchLng,
             selectedId: widget.store.id,
@@ -534,31 +766,41 @@ class _RoutePreviewPageState extends State<RoutePreviewPage> {
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20),
           child: SoftCard(
-            child: loading
-                ? const Text('Drawing the route on the LocalSpot map…')
-                : Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(widget.store.name, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
-                      if (preview != null) ...[
-                        Text('${preview!.distanceKm.toStringAsFixed(1)} km · ${preview!.durationMinutes ?? '—'} min'),
+            child:
+                loading
+                    ? const Text('Drawing the route on the LocalSpot map…')
+                    : Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
                         Text(
-                          preview!.fallback
-                              ? 'Straight-line preview · a licensed road router can replace this in production.'
-                              : 'Route from the configured provider · ${preview!.provider}',
+                          widget.store.name,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 16,
+                          ),
+                        ),
+                        if (preview != null) ...[
+                          Text(
+                            '${preview!.distanceKm.toStringAsFixed(1)} km${preview!.durationMinutes == null ? '' : ' · ${preview!.durationMinutes} min'}',
+                          ),
+                          Text(
+                            preview!.fallback
+                                ? 'Straight-line distance and preview only. This is not a road route or turn-by-turn guidance.'
+                                : 'Route from the configured provider · ${preview!.provider}',
+                            style: const TextStyle(color: taupe, fontSize: 11),
+                          ),
+                        ],
+                        if (error != null)
+                          Text(error!, style: const TextStyle(color: clay)),
+                        const SizedBox(height: 8),
+                        Text(
+                          navigating
+                              ? 'Following your position on the LocalSpot map. Turn-by-turn voice guidance is a later enhancement.'
+                              : 'Stay inside LocalSpot to preview this route.',
                           style: const TextStyle(color: taupe, fontSize: 11),
                         ),
                       ],
-                      if (error != null) Text(error!, style: const TextStyle(color: clay)),
-                      const SizedBox(height: 8),
-                      Text(
-                        navigating
-                            ? 'Following your position on the LocalSpot map. Turn-by-turn voice guidance is a later enhancement.'
-                            : 'Stay inside LocalSpot to preview this route.',
-                        style: const TextStyle(color: taupe, fontSize: 11),
-                      ),
-                    ],
-                  ),
+                    ),
           ),
         ),
         Padding(
@@ -580,7 +822,9 @@ class _RoutePreviewPageState extends State<RoutePreviewPage> {
         ),
         TextButton(
           onPressed: () {
-            final uri = Uri.parse('https://www.openstreetmap.org/directions?from=${app.searchLat},${app.searchLng}&to=${widget.store.lat},${widget.store.lng}');
+            final uri = Uri.parse(
+              'https://www.openstreetmap.org/directions?from=${app.searchLat},${app.searchLng}&to=${widget.store.lat},${widget.store.lng}',
+            );
             launchUrl(uri, mode: LaunchMode.externalApplication);
           },
           child: const Text('Optional: open in an external map app'),
@@ -609,19 +853,30 @@ class LocationPage extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20),
           child: LocalMapView(
-            stores: app.stores.where((s) => s.status == StoreStatus.approved).toList(),
+            stores:
+                app.stores
+                    .where((s) => s.status == StoreStatus.approved)
+                    .toList(),
             centerLat: app.searchLat,
             centerLng: app.searchLng,
             userLat: app.deviceLat,
             userLng: app.deviceLng,
-            onPick: (lat, lng) => app.setManualCenter(lat, lng, 'Pinned area (${lat.toStringAsFixed(4)}, ${lng.toStringAsFixed(4)})'),
+            onPick:
+                (lat, lng) => app.setManualCenter(
+                  lat,
+                  lng,
+                  'Pinned area (${lat.toStringAsFixed(4)}, ${lng.toStringAsFixed(4)})',
+                ),
             height: 280,
           ),
         ),
         const SizedBox(height: 12),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20),
-          child: PrimaryButton('Use my current location', onPressed: () => app.requestForegroundLocation()),
+          child: PrimaryButton(
+            'Use my current location',
+            onPressed: () => app.requestForegroundLocation(),
+          ),
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
@@ -630,7 +885,10 @@ class LocationPage extends StatelessWidget {
             child: const Text('Use approximate Cubao area'),
           ),
         ),
-        TextButton(onPressed: app.denyLocation, child: const Text('Keep using a manual area')),
+        TextButton(
+          onPressed: app.denyLocation,
+          child: const Text('Keep using a manual area'),
+        ),
       ],
     );
   }
@@ -647,6 +905,13 @@ class ReportPage extends StatefulWidget {
 
 class _ReportPageState extends State<ReportPage> {
   final reason = TextEditingController();
+  bool submitting = false;
+
+  @override
+  void dispose() {
+    reason.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -655,22 +920,66 @@ class _ReportPageState extends State<ReportPage> {
       padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
       children: [
         PageHeader('Report listing', onBack: widget.onBack),
-        SoftCard(child: Text(widget.target, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16))),
+        SoftCard(
+          child: Text(
+            widget.target,
+            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
+          ),
+        ),
         const SizedBox(height: 12),
-        SoftCard(child: LabeledField('What is wrong?', reason, maxLines: 4)),
+        SoftCard(
+          child: LabeledField(
+            'What is wrong?',
+            reason,
+            maxLines: 4,
+            maxLength: 400,
+          ),
+        ),
         const SizedBox(height: 16),
-        PrimaryButton('Submit report', onPressed: () {
-          if (reason.text.trim().isEmpty) return;
-          app.addReport(widget.target, reason.text.trim());
-          widget.onBack();
-        }),
+        PrimaryButton(
+          submitting ? 'Submitting report…' : 'Submit report',
+          onPressed:
+              submitting
+                  ? null
+                  : () async {
+                    if (reason.text.trim().isEmpty) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                            'Describe the issue before submitting.',
+                          ),
+                        ),
+                      );
+                      return;
+                    }
+                    setState(() => submitting = true);
+                    final error = await app.addReport(
+                      widget.target,
+                      reason.text.trim(),
+                    );
+                    if (!context.mounted) return;
+                    setState(() => submitting = false);
+                    if (error != null) {
+                      ScaffoldMessenger.of(
+                        context,
+                      ).showSnackBar(SnackBar(content: Text(error)));
+                      return;
+                    }
+                    widget.onBack();
+                  },
+        ),
       ],
     );
   }
 }
 
 class CameraSearchPage extends StatefulWidget {
-  const CameraSearchPage({super.key, required this.onBack, required this.onProduct, required this.onStore});
+  const CameraSearchPage({
+    super.key,
+    required this.onBack,
+    required this.onProduct,
+    required this.onStore,
+  });
   final VoidCallback onBack;
   final ValueChanged<CatalogProduct> onProduct;
   final ValueChanged<Store> onStore;
@@ -700,7 +1009,9 @@ class _CameraSearchPageState extends State<CameraSearchPage> {
   List<RecognitionSuggestion> get _visibleSuggestions {
     final current = result;
     if (current == null) return const [];
-    if (selectedObject == null || current.objects.length <= 1) return current.suggestions;
+    if (selectedObject == null || current.objects.length <= 1) {
+      return current.suggestions;
+    }
     return [
       for (final object in current.objects)
         if (object.label == selectedObject) ...object.suggestions,
@@ -715,23 +1026,32 @@ class _CameraSearchPageState extends State<CameraSearchPage> {
         if (suggestion.product != null) suggestion.product!.id,
     };
     if (ids.isEmpty) return current.hits;
-    return [for (final hit in current.hits) if (ids.contains(hit.product.id)) hit];
+    return [
+      for (final hit in current.hits)
+        if (ids.contains(hit.product.id)) hit,
+    ];
   }
 
   Future<void> _lookup(String hint, {String? image}) async {
     setState(() => loading = true);
-    final next = await AppScope.of(context).visualSearch(hint: hint, image: image);
+    final next = await AppScope.of(
+      context,
+    ).visualSearch(hint: hint, image: image);
     if (!mounted) return;
     setState(() {
       loading = false;
       result = next;
-      selectedObject = next.objects.length > 1 ? next.objects.first.label : null;
+      selectedObject =
+          next.objects.length > 1 ? next.objects.first.label : null;
     });
   }
 
   Future<void> _pick(ImageSource source) async {
     try {
-      final file = await ImagePicker().pickImage(source: source, imageQuality: 70);
+      final file = await ImagePicker().pickImage(
+        source: source,
+        imageQuality: 70,
+      );
       if (file == null) return;
       String? image;
       try {
@@ -740,10 +1060,17 @@ class _CameraSearchPageState extends State<CameraSearchPage> {
           image = 'data:image/jpeg;base64,${base64Encode(bytes)}';
         }
       } catch (_) {}
-      await _lookup(file.name.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), ' '), image: image);
+      await _lookup(
+        file.name.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), ' '),
+        image: image,
+      );
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Camera unavailable. Try a sample photo.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Camera unavailable. Try a sample photo.'),
+        ),
+      );
     }
   }
 
@@ -769,7 +1096,11 @@ class _CameraSearchPageState extends State<CameraSearchPage> {
             ),
           ),
         ),
-        if (loading) const Padding(padding: EdgeInsets.all(16), child: Center(child: CircularProgressIndicator())),
+        if (loading)
+          const Padding(
+            padding: EdgeInsets.all(16),
+            child: Center(child: CircularProgressIndicator()),
+          ),
         const SizedBox(height: 12),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -777,7 +1108,14 @@ class _CameraSearchPageState extends State<CameraSearchPage> {
             padding: EdgeInsets.zero,
             child: Column(
               children: [
-                for (final key in const ['mango', 'oil', 'sardines', 'hammer', 'mango and oil', 'unknown']) ...[
+                for (final key in const [
+                  'mango',
+                  'oil',
+                  'sardines',
+                  'hammer',
+                  'mango and oil',
+                  'unknown',
+                ]) ...[
                   if (key != 'mango') const Divider(height: 1),
                   MenuRow(
                     icon: Icons.image_outlined,
@@ -802,7 +1140,8 @@ class _CameraSearchPageState extends State<CameraSearchPage> {
                     ChoiceChip(
                       label: Text(object.label),
                       selected: selectedObject == object.label,
-                      onSelected: (_) => setState(() => selectedObject = object.label),
+                      onSelected:
+                          (_) => setState(() => selectedObject = object.label),
                     ),
                 ],
               ),
@@ -810,7 +1149,10 @@ class _CameraSearchPageState extends State<CameraSearchPage> {
           if (result!.uncertain)
             const Padding(
               padding: EdgeInsets.fromLTRB(20, 0, 20, 8),
-              child: InfoBanner('Match is uncertain. Showing similar participating listings when possible.', icon: Icons.help_outline),
+              child: InfoBanner(
+                'Match is uncertain. Showing similar participating listings when possible.',
+                icon: Icons.help_outline,
+              ),
             ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -823,8 +1165,14 @@ class _CameraSearchPageState extends State<CameraSearchPage> {
                     MenuRow(
                       icon: Icons.auto_awesome_outlined,
                       title: _visibleSuggestions[i].label,
-                      subtitle: 'Confidence ${(_visibleSuggestions[i].confidence * 100).round()}%',
-                      onTap: _visibleSuggestions[i].product == null ? null : () => widget.onProduct(_visibleSuggestions[i].product!),
+                      subtitle:
+                          'Confidence ${(_visibleSuggestions[i].confidence * 100).round()}%',
+                      onTap:
+                          _visibleSuggestions[i].product == null
+                              ? null
+                              : () => widget.onProduct(
+                                _visibleSuggestions[i].product!,
+                              ),
                     ),
                   ],
                 ],
@@ -835,22 +1183,33 @@ class _CameraSearchPageState extends State<CameraSearchPage> {
           if (_visibleHits.isEmpty)
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 20),
-              child: EmptyNote('No participating seller listed a match in this search area.', icon: Icons.search_off),
+              child: EmptyNote(
+                'No participating seller listed a match in this search area.',
+                icon: Icons.search_off,
+              ),
             )
           else
-            ..._visibleHits.map((hit) => Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
-                  child: SoftCard(
-                    onTap: () => widget.onStore(hit.store),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(hit.product.name, style: const TextStyle(fontWeight: FontWeight.w700)),
-                        Text('${hit.store.name} · ${peso(hit.listing.price)} / ${hit.listing.unit} · ${hit.distanceKm.toStringAsFixed(1)} km', style: const TextStyle(color: taupe, fontSize: 12)),
-                      ],
-                    ),
+            ..._visibleHits.map(
+              (hit) => Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+                child: SoftCard(
+                  onTap: () => widget.onStore(hit.store),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        hit.product.name,
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      Text(
+                        '${hit.store.name} · ${peso(hit.listing.price)} / ${hit.listing.unit} · ${hit.distanceKm.toStringAsFixed(1)} km',
+                        style: const TextStyle(color: taupe, fontSize: 12),
+                      ),
+                    ],
                   ),
-                )),
+                ),
+              ),
+            ),
         ],
       ],
     );

@@ -16,7 +16,11 @@ ThemeData localSpotTheme() {
   return ThemeData(
     useMaterial3: true,
     scaffoldBackgroundColor: ivory,
-    colorScheme: ColorScheme.fromSeed(seedColor: leaf, surface: ivory, primary: leafDark),
+    colorScheme: ColorScheme.fromSeed(
+      seedColor: leaf,
+      surface: ivory,
+      primary: leafDark,
+    ),
     fontFamily: 'Roboto',
     appBarTheme: const AppBarTheme(
       backgroundColor: ivory,
@@ -27,7 +31,9 @@ ThemeData localSpotTheme() {
     navigationBarTheme: const NavigationBarThemeData(
       backgroundColor: paper,
       indicatorColor: Color(0xFFDCE6D7),
-      labelTextStyle: WidgetStatePropertyAll(TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+      labelTextStyle: WidgetStatePropertyAll(
+        TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
+      ),
     ),
     filledButtonTheme: FilledButtonThemeData(
       style: FilledButton.styleFrom(
@@ -57,9 +63,18 @@ ThemeData localSpotTheme() {
       fillColor: paper,
       hintStyle: const TextStyle(color: Color(0xFF9A9388), fontSize: 13),
       contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: line)),
-      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: line)),
-      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: leaf, width: 1.4)),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: const BorderSide(color: line),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: const BorderSide(color: line),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: const BorderSide(color: leaf, width: 1.4),
+      ),
     ),
     chipTheme: ChipThemeData(
       selectedColor: charcoal,
