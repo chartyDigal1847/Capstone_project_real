@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 
+import 'mapbox_config.dart';
 import 'models.dart';
 import 'screens/auth_screens.dart';
 import 'screens/customer_screens.dart';
@@ -9,7 +11,13 @@ import 'state.dart';
 import 'theme.dart';
 import 'widgets.dart';
 
-void main() => runApp(const LocalSpotRoot());
+void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  if (hasMapboxPublicToken) {
+    MapboxOptions.setAccessToken(mapboxAccessToken);
+  }
+  runApp(const LocalSpotRoot());
+}
 
 class LocalSpotRoot extends StatefulWidget {
   const LocalSpotRoot({super.key});

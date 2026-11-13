@@ -161,11 +161,12 @@ class StoreDetailPage extends StatelessWidget {
               const SizedBox(height: 14),
               LocalMapView(
                 stores: [store],
-                centerLat: store.lat,
-                centerLng: store.lng,
-                userLat: app.deviceLat ?? app.searchLat,
-                userLng: app.deviceLng ?? app.searchLng,
+                centerLat: app.deviceLat ?? store.lat,
+                centerLng: app.deviceLng ?? store.lng,
+                userLat: app.deviceLat,
+                userLng: app.deviceLng,
                 selectedId: store.id,
+                onLocateUser: () => app.requestForegroundLocation(),
                 height: 160,
               ),
               const SizedBox(height: 12),
@@ -350,6 +351,7 @@ class _RoutePreviewPageState extends State<RoutePreviewPage> {
   var loading = true;
   var navigating = false;
   var _holdingLocation = false;
+  var _loadGeneration = 0;
   AppState? _app;
 
   @override
@@ -360,8 +362,18 @@ class _RoutePreviewPageState extends State<RoutePreviewPage> {
     _holdingLocation = true;
     _app!.retainForegroundLocation();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _load();
+      if (mounted) _load(requestLocation: true);
     });
+  }
+
+  @override
+  void didUpdateWidget(covariant RoutePreviewPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.store.id != widget.store.id ||
+        oldWidget.store.lat != widget.store.lat ||
+        oldWidget.store.lng != widget.store.lng) {
+      _load();
+    }
   }
 
   @override
@@ -370,19 +382,27 @@ class _RoutePreviewPageState extends State<RoutePreviewPage> {
     super.dispose();
   }
 
-  Future<void> _load() async {
+  Future<void> _load({bool requestLocation = false}) async {
     final app = AppScope.of(context);
+    final generation = ++_loadGeneration;
+    setState(() {
+      loading = true;
+      error = null;
+      preview = null;
+    });
     try {
+      if (requestLocation) await app.requestForegroundLocation();
+      if (!mounted || generation != _loadGeneration) return;
       final result = await app.previewRoute(destLat: widget.store.lat, destLng: widget.store.lng);
-      if (!mounted) return;
+      if (!mounted || generation != _loadGeneration) return;
       setState(() {
         preview = result;
         loading = false;
       });
-    } catch (_) {
-      if (!mounted) return;
+    } catch (routeError) {
+      if (!mounted || generation != _loadGeneration) return;
       setState(() {
-        error = 'Could not build a route preview.';
+        error = routeError.toString();
         loading = false;
       });
     }
@@ -402,11 +422,12 @@ class _RoutePreviewPageState extends State<RoutePreviewPage> {
             stores: [widget.store],
             centerLat: navigating ? (app.deviceLat ?? app.searchLat) : widget.store.lat,
             centerLng: navigating ? (app.deviceLng ?? app.searchLng) : widget.store.lng,
-            userLat: app.deviceLat ?? app.searchLat,
-            userLng: app.deviceLng ?? app.searchLng,
+            userLat: app.deviceLat,
+            userLng: app.deviceLng,
             selectedId: widget.store.id,
             route: route,
             followUser: navigating,
+            onLocateUser: () => _load(requestLocation: true),
             height: 280,
           ),
         ),
@@ -415,20 +436,28 @@ class _RoutePreviewPageState extends State<RoutePreviewPage> {
           padding: const EdgeInsets.symmetric(horizontal: 20),
           child: SoftCard(
             child: loading
-                ? const Text('Drawing the route on the LocalSpot map…')
+                ? const Row(
+                    children: [
+                      SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                      SizedBox(width: 10),
+                      Text('Calculating Mapbox road route…'),
+                    ],
+                  )
                 : Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(widget.store.name, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
                       if (preview != null) ...[
                         Text('${preview!.distanceKm.toStringAsFixed(1)} km · ${preview!.durationMinutes ?? '—'} min'),
-                        Text(
-                          preview!.fallback
-                              ? 'Straight-line preview · a licensed road router can replace this in production.'
-                              : 'Route from the configured provider · ${preview!.provider}',
-                          style: const TextStyle(color: taupe, fontSize: 11),
-                        ),
+                        Text('Start: ${app.deviceLat != null ? 'Current GPS location' : '${app.searchAreaLabel} (approximate)'}'),
+                        Text('Destination: ${_storeDestination(widget.store)}'),
+                        Text('Road route via ${preview!.provider}', style: const TextStyle(color: taupe, fontSize: 11)),
                       ],
+                      if (app.deviceLat == null) Text(app.locationNote, style: const TextStyle(color: taupe, fontSize: 11)),
                       if (error != null) Text(error!, style: const TextStyle(color: clay)),
                       const SizedBox(height: 8),
                       Text(
@@ -455,6 +484,7 @@ class _RoutePreviewPageState extends State<RoutePreviewPage> {
               app.setFollowMyLocation(true);
               if (!mounted) return;
               setState(() => navigating = true);
+              await _load();
             },
           ),
         ),
@@ -468,6 +498,11 @@ class _RoutePreviewPageState extends State<RoutePreviewPage> {
       ],
     );
   }
+}
+
+String _storeDestination(Store store) {
+  final parts = [store.address, store.barangay, store.city].where((part) => part.trim().isNotEmpty);
+  return parts.isEmpty ? store.name : parts.join(', ');
 }
 
 class LocationPage extends StatelessWidget {
@@ -495,6 +530,7 @@ class LocationPage extends StatelessWidget {
             userLat: app.deviceLat,
             userLng: app.deviceLng,
             onPick: (lat, lng) => app.setManualCenter(lat, lng, 'Pinned area · Quezon City'),
+            onLocateUser: () => app.requestForegroundLocation(),
             height: 280,
           ),
         ),
