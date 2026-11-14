@@ -196,7 +196,9 @@ class SoftCard extends StatelessWidget {
           ),
         ],
       ),
-      child: child,
+      // Give ListTile descendants their own Material so their selected
+      // background and ink effects paint above this card's decoration.
+      child: Material(color: Colors.transparent, child: child),
     );
     return onTap == null
         ? body
