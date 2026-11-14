@@ -5,28 +5,34 @@ import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 
 import 'api.dart';
+import 'firebase/bootstrap.dart';
+import 'firebase/gateway.dart';
+import 'firebase/product_ai.dart';
 import 'models.dart';
 import 'repositories.dart';
-import 'services/directions_service.dart';
 
 const defaultCenterLat = 14.6195;
 const defaultCenterLng = 121.0568;
 const radiiKm = [1.0, 3.0, 5.0, 10.0];
 
 class AppState extends ChangeNotifier {
-  AppState() {
-    _seed();
+  AppState({bool seedDemoData = true}) {
+    usingSeededCatalog = seedDemoData;
+    if (seedDemoData) _seed();
   }
 
-  final api = LocalSpotApi();
-  final directionsService = DirectionsService();
+  final api = LocalSpotGateway();
   late final authRepo = AuthRepository(api);
   late final catalogRepo = CatalogRepository(api);
+
+  // [apiOnline] is true after Firebase initializes. Production builds never
+  // seed demo data; test/demo roots opt in explicitly.
   bool apiOnline = false;
   bool usingSeededCatalog = true;
+  String? catalogLoadError;
   bool writeBusy = false;
   ApiException? lastApiError;
-  String connectionNote = 'Trying LocalSpot API…';
+  String connectionNote = 'Connecting to Firebase…';
 
   final users = <UserAccount>[];
   final stores = <Store>[];
@@ -49,7 +55,8 @@ class AppState extends ChangeNotifier {
   double? deviceLat;
   double? deviceLng;
   String searchAreaLabel = 'Cubao, Quezon City';
-  String locationNote = 'Foreground location is off. Pick an area on the map or allow location when you open Map.';
+  String locationNote =
+      'Foreground location is off. Pick an area on the map or allow location when you open Map.';
   double radiusKm = 3;
   DateTime? _lastCatalogRefreshAt;
   DateTime? _lastVendorPingAt;
@@ -60,7 +67,19 @@ class AppState extends ChangeNotifier {
   final vendorSessions = <int, VendorSession>{};
   RoutePreview? lastRoute;
   StoreType? typeFilter;
+  Availability? availabilityFilter;
   String? categoryFilter;
+  double? minPriceFilter;
+  double? maxPriceFilter;
+  String minPriceDraft = '';
+  String maxPriceDraft = '';
+  String priceFilterError = '';
+  String searchAttributeKey = '';
+  String searchAttributeValue = '';
+  bool aiSearchInterpreting = false;
+  String aiSearchNote = '';
+  String? _aiIntentForQuery;
+  Map<String, String> _aiSearchIntent = const {};
   String searchDraft = '';
   SearchSort searchSort = SearchSort.relevance;
   List<SearchHit>? remoteSearchHits;
@@ -70,6 +89,8 @@ class AppState extends ChangeNotifier {
   int searchPage = 1;
   int searchLastPage = 1;
   int searchTotal = 0;
+  String? searchNextCursor;
+  bool searchResultsTruncated = false;
   int _searchGeneration = 0;
   int _recognitionGeneration = 0;
 
@@ -104,7 +125,10 @@ class AppState extends ChangeNotifier {
     if (user == null) return [];
     return stores.where((store) {
       if (store.ownerId == user.id) return true;
-      if (user.ownedStoreIds.contains(store.id) || user.memberStoreIds.contains(store.id)) return true;
+      if (user.ownedStoreIds.contains(store.id) ||
+          user.memberStoreIds.contains(store.id)) {
+        return true;
+      }
       return false;
     }).toList();
   }
@@ -121,27 +145,62 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> bootstrap() async {
-    await api.restoreToken();
-    try {
-      final data = await catalogRepo.catalog();
-      _applyCatalog(data);
+    // Initialise Firebase (reads firebase_options.dart).
+    final firebaseReady = await initLocalSpotFirebase();
+
+    if (firebaseReady) {
       apiOnline = true;
-      usingSeededCatalog = false;
-      connectionNote = 'Connected to Laravel API · Cubao pilot';
-      if (api.token != null) {
-        try {
-          await _hydrateSession();
-        } catch (_) {
-          await api.persistToken(null);
-          currentUser = null;
+      _clearSeededData();
+      try {
+        final data = await catalogRepo.catalog();
+        _applyCatalog(data);
+        usingSeededCatalog = stores.isEmpty;
+        catalogLoadError = null;
+        connectionNote = 'Connected to Firebase · Cubao pilot';
+        // Restore session from Firebase Auth persisted state if available.
+        if (api.token != null) {
+          try {
+            await _hydrateSession();
+          } catch (_) {
+            // Auth token may have expired; clear and fall through to guest mode.
+            currentUser = null;
+          }
         }
+      } catch (e) {
+        // Stay empty when Firebase is unavailable; never restore bundled data.
+        usingSeededCatalog = false;
+        catalogLoadError = '$e';
+        connectionNote = 'Firebase connected · catalog could not be loaded';
       }
-    } catch (_) {
+    } else {
+      // Demo roots may show fixtures offline; the real app opts out.
       apiOnline = false;
-      usingSeededCatalog = true;
-      connectionNote = 'API offline · using on-device demo data';
+      usingSeededCatalog = stores.isNotEmpty;
+      connectionNote =
+          usingSeededCatalog
+              ? 'Firebase not configured · using on-device demo data · connect Firebase for live listings'
+              : 'Firebase is not connected · catalog data is unavailable';
     }
     notifyListeners();
+  }
+
+  void _clearSeededData() {
+    users.clear();
+    stores.clear();
+    products.clear();
+    listings.clear();
+    promotions.clear();
+    tours.clear();
+    reports.clear();
+    feedback.clear();
+    favoriteStoreIds.clear();
+    favoriteProductIds.clear();
+    stockChanges.clear();
+    auditLogs.clear();
+    vendorSessions.clear();
+    currentUser = null;
+    remoteSearchHits = null;
+    usingSeededCatalog = false;
   }
 
   Future<void> _hydrateSession() async {
@@ -152,6 +211,13 @@ class AppState extends ChangeNotifier {
       stores.removeWhere((item) => item.id == store.id);
       stores.add(store);
     }
+    if (currentUser?.role == AppRole.owner) {
+      for (final store in stores.where(
+        (item) => item.ownerId == currentUser!.id,
+      )) {
+        await loadStoreStaff(store.id);
+      }
+    }
     try {
       final favs = await api.get('/favorites');
       if (favs is List) {
@@ -159,7 +225,8 @@ class AppState extends ChangeNotifier {
         favoriteProductIds.clear();
         for (final row in favs) {
           final map = Map<String, dynamic>.from(row as Map);
-          final id = map['favoritable_id'] as int? ?? map['favoritableId'] as int?;
+          final id =
+              map['favoritable_id'] as int? ?? map['favoritableId'] as int?;
           final type = map['favoritable_type'] as String? ?? '';
           if (id == null) continue;
           if (type == 'store') favoriteStoreIds.add(id);
@@ -188,6 +255,39 @@ class AppState extends ChangeNotifier {
               createdAt: DateTime.tryParse(row['created_at'] as String? ?? ''),
             ),
         ]);
+      // Also refresh reports and feedback from Firestore for admin view.
+      try {
+        final reportRows = await api.get('/admin/reports') as List;
+        reports
+          ..clear()
+          ..addAll(
+            reportRows.map(
+              (e) => ReportItem(
+                id: (e as Map)['id'] as int? ?? 0,
+                userId: e['user_id'] as int? ?? 0,
+                target: e['target'] as String? ?? '',
+                reason: e['reason'] as String? ?? '',
+                resolved: e['resolved'] == true,
+              ),
+            ),
+          );
+      } catch (_) {}
+      try {
+        final feedbackRows = await api.get('/admin/feedback') as List;
+        feedback
+          ..clear()
+          ..addAll(
+            feedbackRows.map(
+              (e) => PilotFeedback(
+                id: (e as Map)['id'] as int? ?? 0,
+                userId: e['user_id'] as int? ?? 0,
+                topic: e['topic'] as String? ?? '',
+                body: e['body'] as String? ?? '',
+                area: e['area'] as String?,
+              ),
+            ),
+          );
+      } catch (_) {}
       notifyListeners();
     } catch (_) {}
   }
@@ -203,7 +303,9 @@ class AppState extends ChangeNotifier {
                 kind: (row as Map)['kind'] as String? ?? 'adjust',
                 quantityDelta: (row['quantity_delta'] as num?)?.toInt() ?? 0,
                 note: row['note'] as String? ?? '',
-                at: DateTime.tryParse(row['created_at'] as String? ?? '') ?? DateTime.now(),
+                at:
+                    DateTime.tryParse(row['created_at'] as String? ?? '') ??
+                    DateTime.now(),
               ),
           ];
           stockChanges[listing.id] = parsed;
@@ -215,23 +317,44 @@ class AppState extends ChangeNotifier {
     return stockChanges[listing.id] ?? const [];
   }
 
-  void _recordMovement(StoreListing listing, {required String kind, required int delta, String note = ''}) {
+  void _recordMovement(
+    StoreListing listing, {
+    required String kind,
+    required int delta,
+    String note = '',
+  }) {
     stockChanges.putIfAbsent(listing.id, () => []);
     stockChanges[listing.id]!.insert(
       0,
-      StockChange(kind: kind, quantityDelta: delta, note: note, at: DateTime.now()),
+      StockChange(
+        kind: kind,
+        quantityDelta: delta,
+        note: note,
+        at: DateTime.now(),
+      ),
     );
   }
 
   Future<void> refreshCatalog() async {
     if (!apiOnline) return;
-    final data = await catalogRepo.catalog();
-    _applyCatalog(data);
-    notifyListeners();
+    try {
+      final data = await catalogRepo.catalog();
+      _applyCatalog(data);
+      usingSeededCatalog = false;
+      catalogLoadError = null;
+      connectionNote = 'Connected to Firebase · Cubao pilot';
+      notifyListeners();
+    } catch (error) {
+      catalogLoadError = '$error';
+      connectionNote = 'Firebase connected · catalog could not be loaded';
+      notifyListeners();
+    }
   }
 
   Future<void> refreshNearby() async {
     if (!apiOnline) return;
+    // Firebase catalog is the source of truth — use the full catalog
+    // path which already returns location-aware store data.
     try {
       final query = {
         'lat': searchLat.toString(),
@@ -253,7 +376,9 @@ class AppState extends ChangeNotifier {
           existing.locationUpdatedAt = incoming.locationUpdatedAt;
         }
         final live = map['live_session'];
-        final session = vendorSessionFromJson(live is Map ? Map<String, dynamic>.from(live) : null);
+        final session = vendorSessionFromJson(
+          live is Map ? Map<String, dynamic>.from(live) : null,
+        );
         if (session != null) {
           vendorSessions[session.storeId] = session;
         } else {
@@ -267,25 +392,49 @@ class AppState extends ChangeNotifier {
   void _applyCatalog(Map data) {
     stores
       ..clear()
-      ..addAll([...((data['stores'] as List?) ?? []).map((e) => storeFromJson(Map<String, dynamic>.from(e)))]);
+      ..addAll([
+        ...((data['stores'] as List?) ?? []).map(
+          (e) => storeFromJson(Map<String, dynamic>.from(e)),
+        ),
+      ]);
     vendorSessions.clear();
     for (final row in (data['stores'] as List? ?? [])) {
       final map = Map<String, dynamic>.from(row as Map);
-      final session = vendorSessionFromJson(map['live_session'] is Map ? Map<String, dynamic>.from(map['live_session'] as Map) : null);
+      final session = vendorSessionFromJson(
+        map['live_session'] is Map
+            ? Map<String, dynamic>.from(map['live_session'] as Map)
+            : null,
+      );
       if (session != null) vendorSessions[session.storeId] = session;
     }
     products
       ..clear()
-      ..addAll([...((data['products'] as List?) ?? []).map((e) => productFromJson(Map<String, dynamic>.from(e)))]);
+      ..addAll([
+        ...((data['products'] as List?) ?? []).map(
+          (e) => productFromJson(Map<String, dynamic>.from(e)),
+        ),
+      ]);
     listings
       ..clear()
-      ..addAll([...((data['listings'] as List?) ?? []).map((e) => listingFromJson(Map<String, dynamic>.from(e)))]);
+      ..addAll([
+        ...((data['listings'] as List?) ?? []).map(
+          (e) => listingFromJson(Map<String, dynamic>.from(e)),
+        ),
+      ]);
     promotions
       ..clear()
-      ..addAll([...((data['promotions'] as List?) ?? []).map((e) => promotionFromJson(Map<String, dynamic>.from(e)))]);
+      ..addAll([
+        ...((data['promotions'] as List?) ?? []).map(
+          (e) => promotionFromJson(Map<String, dynamic>.from(e)),
+        ),
+      ]);
     tours
       ..clear()
-      ..addAll([...((data['tours'] as List?) ?? []).map((e) => tourFromJson(Map<String, dynamic>.from(e)))]);
+      ..addAll([
+        ...((data['tours'] as List?) ?? []).map(
+          (e) => tourFromJson(Map<String, dynamic>.from(e)),
+        ),
+      ]);
   }
 
   Future<ApiException?> register({
@@ -297,10 +446,18 @@ class AppState extends ChangeNotifier {
     lastApiError = null;
     if (apiOnline) {
       try {
-        final data = await authRepo.register(name: name, email: email, password: password, role: role);
-        await api.persistToken(data['token'] as String);
-        currentUser = userFromJson(Map<String, dynamic>.from(data['user'] as Map));
-        await _hydrateSession();
+        final data = await authRepo.register(
+          name: name,
+          email: email,
+          password: password,
+          role: role,
+        );
+        // Firebase Auth manages the session — token is the UID.
+        currentUser = userFromJson(
+          Map<String, dynamic>.from(data['user'] as Map),
+        );
+        // Hydrate catalog/favorites in the background; don't block the UI.
+        unawaited(_hydrateSession().catchError((_) {}));
         notifyListeners();
         return null;
       } on ApiException catch (error) {
@@ -309,6 +466,7 @@ class AppState extends ChangeNotifier {
         return error;
       }
     }
+    // Offline / demo mode.
     final user = UserAccount(
       id: _nextUser++,
       name: name,
@@ -326,28 +484,42 @@ class AppState extends ChangeNotifier {
     if (apiOnline) {
       try {
         final data = await authRepo.login(email: email, password: password);
-        await api.persistToken(data['token'] as String);
-        currentUser = userFromJson(Map<String, dynamic>.from(data['user'] as Map));
-        await _hydrateSession();
-        if (currentUser!.role == AppRole.admin) {
-          final reportData = await api.get('/admin/reports') as List;
-          reports
-            ..clear()
-            ..addAll(reportData.map((e) => ReportItem(
-                  id: e['id'] as int,
-                  userId: e['user_id'] as int,
-                  target: e['target'] as String,
-                  reason: e['reason'] as String,
-                  resolved: e['resolved'] == true,
-                )));
-        }
+        currentUser = userFromJson(
+          Map<String, dynamic>.from(data['user'] as Map),
+        );
+        // Hydrate in background so the UI navigates immediately.
+        unawaited(() async {
+          try {
+            await _hydrateSession();
+            if (currentUser?.role == AppRole.admin) {
+              final reportData = await api.get('/admin/reports') as List;
+              reports
+                ..clear()
+                ..addAll(
+                  reportData.map(
+                    (e) => ReportItem(
+                      id: e['id'] as int,
+                      userId: e['user_id'] as int,
+                      target: e['target'] as String,
+                      reason: e['reason'] as String,
+                      resolved: e['resolved'] == true,
+                    ),
+                  ),
+                );
+              notifyListeners();
+            }
+          } catch (_) {}
+        }());
         notifyListeners();
         return null;
       } on ApiException catch (error) {
         return error.message;
       }
     }
-    final match = users.where((u) => u.email == email && u.password == password);
+    // Offline / demo mode.
+    final match = users.where(
+      (u) => u.email == email && u.password == password,
+    );
     if (match.isEmpty) return 'Email or password is incorrect.';
     currentUser = match.first;
     notifyListeners();
@@ -355,14 +527,34 @@ class AppState extends ChangeNotifier {
   }
 
   void logout() {
-    if (apiOnline && api.token != null) {
+    // Firebase sign-out is handled inside the gateway's delete('/auth/logout').
+    if (apiOnline) {
       unawaited(api.delete('/auth/logout'));
     }
-    unawaited(api.persistToken(null));
     currentUser = null;
     followMyLocation = false;
     unawaited(stopLocationUpdates());
     notifyListeners();
+  }
+
+  Future<String?> deleteAccount() async {
+    if (!apiOnline || api.token == null) {
+      return 'Account deletion requires a connected Firebase account.';
+    }
+    try {
+      await api.delete('/auth/account');
+      await api.delete('/auth/logout');
+      currentUser = null;
+      followMyLocation = false;
+      unawaited(stopLocationUpdates());
+      notifyListeners();
+      return null;
+    } catch (error) {
+      final message = error.toString();
+      return message.startsWith('[') && message.contains('] ')
+          ? message.substring(message.indexOf('] ') + 2)
+          : message;
+    }
   }
 
   void useApproximateLocation() {
@@ -373,7 +565,8 @@ class AppState extends ChangeNotifier {
     deviceLat = defaultCenterLat;
     deviceLng = defaultCenterLng;
     searchAreaLabel = 'Approximate area · Cubao, Quezon City';
-    locationNote = 'Using an approximate Cubao fix. Allow precise location on a device to follow your position.';
+    locationNote =
+        'Using an approximate Cubao fix. Allow precise location on a device to follow your position.';
     notifyListeners();
   }
 
@@ -381,7 +574,8 @@ class AppState extends ChangeNotifier {
     locationAllowed = false;
     followMyLocation = false;
     unawaited(stopLocationUpdates());
-    locationNote = 'Location permission is off. Choose a search area on the map.';
+    locationNote =
+        'Location permission is off. Choose a search area on the map.';
     notifyListeners();
   }
 
@@ -410,7 +604,8 @@ class AppState extends ChangeNotifier {
       final service = await Geolocator.isLocationServiceEnabled();
       if (!service) {
         locationAllowed = false;
-        locationNote = 'Device location is off. Turn it on, or pick an area manually.';
+        locationNote =
+            'Device location is off. Turn it on, or pick an area manually.';
         notifyListeners();
         return;
       }
@@ -418,22 +613,34 @@ class AppState extends ChangeNotifier {
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
       }
-      if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) {
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
         denyLocation();
-        locationNote = permission == LocationPermission.deniedForever
-            ? 'Location is blocked for this app. Use a manual search area.'
-            : 'Location permission denied. Use a manual search area.';
+        locationNote =
+            permission == LocationPermission.deniedForever
+                ? 'Location is blocked for this app. Use a manual search area.'
+                : 'Location permission denied. Use a manual search area.';
         notifyListeners();
         return;
       }
-      final position = await Geolocator.getCurrentPosition(locationSettings: const LocationSettings(accuracy: LocationAccuracy.high));
-      _applyDevicePosition(position.latitude, position.longitude, recenterSearch: true);
+      final position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+        ),
+      );
+      _applyDevicePosition(
+        position.latitude,
+        position.longitude,
+        recenterSearch: true,
+      );
       locationAllowed = true;
-      locationNote = 'Foreground location is on. LocalSpot does not request background tracking.';
+      locationNote =
+          'Foreground location is on. LocalSpot does not request background tracking.';
       if (startUpdates) await startLocationUpdates();
       notifyListeners();
     } catch (_) {
-      locationNote = 'Could not read GPS on this device. Pick an area or use the Cubao approximate fix.';
+      locationNote =
+          'Could not read GPS on this device. Pick an area or use the Cubao approximate fix.';
       notifyListeners();
     }
   }
@@ -442,9 +649,16 @@ class AppState extends ChangeNotifier {
     await _positionSub?.cancel();
     if (!locationAllowed) return;
     _positionSub = Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(accuracy: LocationAccuracy.high, distanceFilter: 8),
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 8,
+      ),
     ).listen((position) {
-      _applyDevicePosition(position.latitude, position.longitude, recenterSearch: followMyLocation);
+      _applyDevicePosition(
+        position.latitude,
+        position.longitude,
+        recenterSearch: followMyLocation,
+      );
     }, onError: (_) {});
   }
 
@@ -476,7 +690,11 @@ class AppState extends ChangeNotifier {
     _applyDevicePosition(lat, lng, recenterSearch: false);
   }
 
-  void _applyDevicePosition(double lat, double lng, {required bool recenterSearch}) {
+  void _applyDevicePosition(
+    double lat,
+    double lng, {
+    required bool recenterSearch,
+  }) {
     deviceLat = lat;
     deviceLng = lng;
     if (recenterSearch) {
@@ -484,9 +702,13 @@ class AppState extends ChangeNotifier {
       searchLng = lng;
       searchAreaLabel = 'Current location';
     }
-    final movedFar = _lastCatalogLat == null ||
+    final movedFar =
+        _lastCatalogLat == null ||
         distanceKm(_lastCatalogLat!, _lastCatalogLng ?? lng, lat, lng) >= 0.15;
-    final stale = _lastCatalogRefreshAt == null || DateTime.now().difference(_lastCatalogRefreshAt!) > const Duration(seconds: 45);
+    final stale =
+        _lastCatalogRefreshAt == null ||
+        DateTime.now().difference(_lastCatalogRefreshAt!) >
+            const Duration(seconds: 45);
     if (movedFar && stale) {
       _lastCatalogLat = lat;
       _lastCatalogLng = lng;
@@ -500,7 +722,9 @@ class AppState extends ChangeNotifier {
   void _maybePingVendorSessions(double lat, double lng) {
     if (currentUser == null) return;
     if (role != AppRole.owner && role != AppRole.staff) return;
-    if (_lastVendorPingAt != null && DateTime.now().difference(_lastVendorPingAt!) < const Duration(seconds: 15)) {
+    if (_lastVendorPingAt != null &&
+        DateTime.now().difference(_lastVendorPingAt!) <
+            const Duration(seconds: 15)) {
       return;
     }
     for (final store in managedStores()) {
@@ -512,17 +736,54 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  Future<RoutePreview> previewRoute({required double destLat, required double destLng}) async {
+  Future<RoutePreview> previewRoute({
+    required double destLat,
+    required double destLng,
+  }) async {
     final originLat = deviceLat ?? searchLat;
     final originLng = deviceLng ?? searchLng;
-    lastRoute = await directionsService.getDrivingRoute(
-      originLat: originLat,
-      originLng: originLng,
-      destinationLat: destLat,
-      destinationLng: destLng,
-    );
+    if (apiOnline) {
+      try {
+        final data =
+            await api.post('/routes/preview', {
+                  'origin_lat': originLat,
+                  'origin_lng': originLng,
+                  'destination_lat': destLat,
+                  'destination_lng': destLng,
+                })
+                as Map;
+        lastRoute = routePreviewFromJson(Map<String, dynamic>.from(data));
+        notifyListeners();
+        return lastRoute!;
+      } catch (_) {}
+    }
+    lastRoute = _localRoute(originLat, originLng, destLat, destLng);
     notifyListeners();
     return lastRoute!;
+  }
+
+  RoutePreview _localRoute(
+    double originLat,
+    double originLng,
+    double destLat,
+    double destLng,
+  ) {
+    const steps = 16;
+    final points = <GeoPoint>[
+      for (var i = 0; i <= steps; i++)
+        GeoPoint(
+          originLat + (destLat - originLat) * (i / steps),
+          originLng + (destLng - originLng) * (i / steps),
+        ),
+    ];
+    final km = distanceKm(originLat, originLng, destLat, destLng);
+    return RoutePreview(
+      coordinates: points,
+      distanceKm: km,
+      durationMinutes: null,
+      provider: 'localspot',
+      fallback: true,
+    );
   }
 
   VendorSession? sessionFor(Store store) {
@@ -546,7 +807,8 @@ class AppState extends ChangeNotifier {
     final user = currentUser;
     if (user == null) return false;
     if (user.role == AppRole.admin || store.ownerId == user.id) return true;
-    return user.storeGrants[store.id]?.inventory ?? user.memberStoreIds.contains(store.id);
+    return user.storeGrants[store.id]?.inventory ??
+        user.memberStoreIds.contains(store.id);
   }
 
   bool canManagePromotions(Store store) {
@@ -556,7 +818,11 @@ class AppState extends ChangeNotifier {
     return user.storeGrants[store.id]?.promotions == true;
   }
 
-  Future<void> startVendorSession(Store store, {double? lat, double? lng}) async {
+  Future<void> startVendorSession(
+    Store store, {
+    double? lat,
+    double? lng,
+  }) async {
     if (!canShareLiveLocation(store)) return;
     final nextLat = lat ?? deviceLat ?? store.lat;
     final nextLng = lng ?? deviceLng ?? store.lng;
@@ -576,10 +842,12 @@ class AppState extends ChangeNotifier {
     notifyListeners();
     if (apiOnline && api.token != null) {
       try {
-        final data = await api.post('/stores/${store.id}/location-sessions', {
-          'lat': nextLat,
-          'lng': nextLng,
-        }) as Map;
+        final data =
+            await api.post('/stores/${store.id}/location-sessions', {
+                  'lat': nextLat,
+                  'lng': nextLng,
+                })
+                as Map;
         final remote = vendorSessionFromJson(Map<String, dynamic>.from(data));
         if (remote != null) vendorSessions[store.id] = remote;
       } catch (_) {}
@@ -598,7 +866,12 @@ class AppState extends ChangeNotifier {
     store.locationUpdatedAt = session.lastUpdateAt;
     notifyListeners();
     if (apiOnline && api.token != null) {
-      unawaited(api.patch('/stores/${store.id}/location-sessions/current', {'lat': lat, 'lng': lng}));
+      unawaited(
+        api.patch('/stores/${store.id}/location-sessions/current', {
+          'lat': lat,
+          'lng': lng,
+        }),
+      );
     }
   }
 
@@ -606,7 +879,8 @@ class AppState extends ChangeNotifier {
     if (!canShareLiveLocation(store)) return;
     final session = vendorSessions[store.id];
     session?.endedAt = DateTime.now();
-    store.locationMode = store.isMobile ? LocationMode.regular : LocationMode.fixed;
+    store.locationMode =
+        store.isMobile ? LocationMode.regular : LocationMode.fixed;
     notifyListeners();
     if (apiOnline && api.token != null) {
       try {
@@ -629,6 +903,70 @@ class AppState extends ChangeNotifier {
     unawaited(fetchSearch(lastSearchQuery));
   }
 
+  void setAvailabilityFilter(Availability? availability) {
+    availabilityFilter = availability;
+    notifyListeners();
+    unawaited(fetchSearch(lastSearchQuery));
+  }
+
+  void updatePriceFilterDraft({String? min, String? max}) {
+    if (min != null) minPriceDraft = min;
+    if (max != null) maxPriceDraft = max;
+  }
+
+  void applyPriceFilter() {
+    double? parse(String value) =>
+        value.trim().isEmpty ? null : double.tryParse(value.trim());
+    final min = parse(minPriceDraft);
+    final max = parse(maxPriceDraft);
+    if ((minPriceDraft.trim().isNotEmpty &&
+            (min == null || !min.isFinite || min < 0)) ||
+        (maxPriceDraft.trim().isNotEmpty &&
+            (max == null || !max.isFinite || max < 0))) {
+      priceFilterError = 'Enter valid non-negative prices.';
+      notifyListeners();
+      return;
+    }
+    if (min != null && max != null && min > max) {
+      priceFilterError = 'Minimum price must not exceed maximum price.';
+      notifyListeners();
+      return;
+    }
+    minPriceFilter = min;
+    maxPriceFilter = max;
+    priceFilterError = '';
+    notifyListeners();
+    unawaited(fetchSearch(lastSearchQuery));
+  }
+
+  void clearPriceFilter() {
+    minPriceFilter = null;
+    maxPriceFilter = null;
+    minPriceDraft = '';
+    maxPriceDraft = '';
+    priceFilterError = '';
+    notifyListeners();
+    unawaited(fetchSearch(lastSearchQuery));
+  }
+
+  void clearSearchFilters() {
+    radiusKm = 3;
+    typeFilter = null;
+    availabilityFilter = null;
+    categoryFilter = null;
+    searchSort = SearchSort.relevance;
+    minPriceFilter = null;
+    maxPriceFilter = null;
+    minPriceDraft = '';
+    maxPriceDraft = '';
+    priceFilterError = '';
+    searchAttributeKey = '';
+    searchAttributeValue = '';
+    notifyListeners();
+    unawaited(refreshNearby());
+    unawaited(fetchSearch(lastSearchQuery));
+  }
+
   void setCategoryFilter(String? category) {
     categoryFilter = category;
     notifyListeners();
@@ -641,10 +979,77 @@ class AppState extends ChangeNotifier {
     unawaited(fetchSearch(lastSearchQuery));
   }
 
-  bool get canLoadMoreSearch => apiOnline && searchPage < searchLastPage && !searchBusy;
+  void updateSearchAttributeDraft({String? key, String? value}) {
+    if (key != null) searchAttributeKey = key;
+    if (value != null) searchAttributeValue = value;
+  }
+
+  void applySearchAttributeFilter() {
+    searchAttributeKey = searchAttributeKey
+        .trim()
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9_]+'), '_')
+        .replaceAll(RegExp(r'_+'), '_');
+    searchAttributeValue = searchAttributeValue.trim();
+    notifyListeners();
+    unawaited(fetchSearch(lastSearchQuery));
+  }
+
+  Future<void> interpretSearchIntent(String query) async {
+    final phrase = query.trim();
+    if (phrase.isEmpty) return;
+    lastSearchQuery = phrase;
+    final generation = ++_searchGeneration;
+    aiSearchInterpreting = true;
+    aiSearchNote = '';
+    String? fallbackNote;
+    notifyListeners();
+    try {
+      final intent = await ProductAiSuggestionService.interpretSearchIntent(
+        phrase,
+      );
+      if (generation != _searchGeneration || lastSearchQuery != phrase) return;
+      _aiIntentForQuery = phrase;
+      _aiSearchIntent = intent;
+      aiSearchNote = 'AI filters applied · review results before choosing';
+    } catch (_) {
+      if (generation != _searchGeneration || lastSearchQuery != phrase) return;
+      _aiIntentForQuery = null;
+      _aiSearchIntent = const {};
+      fallbackNote = 'AI interpretation unavailable · using standard search';
+    }
+    if (generation != _searchGeneration) return;
+    aiSearchInterpreting = false;
+    notifyListeners();
+    await fetchSearch(phrase);
+    if (fallbackNote != null && lastSearchQuery == phrase) {
+      aiSearchNote = fallbackNote;
+      notifyListeners();
+    }
+  }
+
+  void clearSearchIntent() {
+    _aiIntentForQuery = null;
+    _aiSearchIntent = const {};
+    aiSearchNote = '';
+    aiSearchInterpreting = false;
+    notifyListeners();
+    unawaited(fetchSearch(lastSearchQuery));
+  }
+
+  bool get canLoadMoreSearch =>
+      apiOnline && searchNextCursor != null && !searchBusy;
+  bool get hasSearchIntent =>
+      _aiIntentForQuery == lastSearchQuery && _aiSearchIntent.isNotEmpty;
 
   Future<void> fetchSearch(String query, {bool nextPage = false}) async {
     lastSearchQuery = query;
+    if (_aiIntentForQuery != query.trim()) {
+      _aiIntentForQuery = null;
+      _aiSearchIntent = const {};
+      aiSearchInterpreting = false;
+      aiSearchNote = '';
+    }
     if (!apiOnline) {
       remoteSearchHits = null;
       searchBusy = false;
@@ -652,60 +1057,128 @@ class AppState extends ChangeNotifier {
       searchPage = 1;
       searchLastPage = 1;
       searchTotal = 0;
+      searchNextCursor = null;
+      searchResultsTruncated = false;
       notifyListeners();
       return;
     }
     if (nextPage) {
-      if (searchPage >= searchLastPage) return;
+      if (searchNextCursor == null) return;
       searchPage += 1;
     } else {
       searchPage = 1;
+      searchLastPage = 1;
+      searchTotal = 0;
+      searchNextCursor = null;
+      searchResultsTruncated = false;
     }
     final generation = ++_searchGeneration;
     searchBusy = true;
     notifyListeners();
     try {
+      final hasAiIntent = _aiIntentForQuery == query.trim();
+      final aiSearchTerm = _aiSearchIntent['search_term'] ?? '';
+      final aiFamily = _aiSearchIntent['category_family'] ?? 'none';
+      final aiAttributeKey = _aiSearchIntent['attribute_key'] ?? 'none';
+      final aiAttributeValue = _aiSearchIntent['attribute_value'] ?? '';
       final envelope = await catalogRepo.searchListings({
-        'q': query,
+        'q': hasAiIntent && aiSearchTerm.isNotEmpty ? aiSearchTerm : query,
         'lat': searchLat.toString(),
         'lng': searchLng.toString(),
         'radius_km': radiusKm.toString(),
         'sort': searchSort.name,
-        'page': searchPage.toString(),
         'per_page': '20',
+        if (nextPage) 'cursor': searchNextCursor!,
+        if (!nextPage) 'page': '1',
         if (typeFilter != null) 'type': typeFilter!.name,
-        if (categoryFilter != null) 'category': categoryFilter!,
+        if (availabilityFilter != null)
+          'availability': switch (availabilityFilter!) {
+            Availability.inStock => 'in_stock',
+            Availability.low => 'low',
+            Availability.unavailable => 'unavailable',
+          },
+        if (minPriceFilter != null) 'min_price': minPriceFilter.toString(),
+        if (maxPriceFilter != null) 'max_price': maxPriceFilter.toString(),
+        if (categoryFilter != null)
+          'category': categoryFilter!
+        else if (hasAiIntent && aiFamily != 'none')
+          'category': 'family:$aiFamily',
+        if (searchAttributeKey.isNotEmpty && searchAttributeValue.isNotEmpty)
+          'attribute.$searchAttributeKey': searchAttributeValue,
+        if (hasAiIntent &&
+            aiAttributeKey != 'none' &&
+            aiAttributeValue.isNotEmpty)
+          'attribute.$aiAttributeKey': aiAttributeValue,
       });
       if (generation != _searchGeneration) return;
       final rows = envelope['data'];
-      final meta = envelope['meta'] is Map ? Map<String, dynamic>.from(envelope['meta'] as Map) : const <String, dynamic>{};
-      searchTotal = (meta['total'] as num?)?.toInt() ?? (rows is List ? rows.length : 0);
+      final meta =
+          envelope['meta'] is Map
+              ? Map<String, dynamic>.from(envelope['meta'] as Map)
+              : const <String, dynamic>{};
+      if (meta['cursor_expired'] == true) {
+        searchNextCursor = null;
+        searchPage = 1;
+        searchLastPage = 1;
+        searchNote =
+            'Search results expired · run the search again to continue';
+        searchBusy = false;
+        notifyListeners();
+        return;
+      }
+      searchTotal =
+          (meta['total'] as num?)?.toInt() ?? (rows is List ? rows.length : 0);
+      searchPage = (meta['current_page'] as num?)?.toInt() ?? searchPage;
       searchLastPage = (meta['last_page'] as num?)?.toInt() ?? 1;
+      searchNextCursor = meta['next_cursor'] as String?;
+      searchResultsTruncated = meta['candidate_truncated'] == true;
       if (rows is! List) {
         if (!nextPage) remoteSearchHits = null;
-        searchNote = 'Search API unavailable · showing on-device results';
+        searchNote = 'Firebase search returned no catalog results · retry';
       } else {
-        final pageHits = [
-          for (final row in rows)
-            SearchHit(
-              listing: listingFromJson(Map<String, dynamic>.from((row as Map)['listing'] as Map)),
-              store: storeFromJson(Map<String, dynamic>.from(row['store'] as Map)),
-              product: productFromJson(Map<String, dynamic>.from(row['product'] as Map)),
-              distanceKm: (row['distance_km'] as num?)?.toDouble() ?? 0,
-              matchType: _parseMatchType(row['match_type'] as String?),
-            ),
-        ];
+        final pageHits = <SearchHit>[];
+        for (final row in rows) {
+          try {
+            final r = Map<String, dynamic>.from(row as Map);
+            pageHits.add(
+              SearchHit(
+                listing: listingFromJson(
+                  Map<String, dynamic>.from(r['listing'] as Map),
+                ),
+                store: storeFromJson(
+                  Map<String, dynamic>.from(r['store'] as Map),
+                ),
+                product: productFromJson(
+                  Map<String, dynamic>.from(r['product'] as Map),
+                ),
+                distanceKm: (r['distance_km'] as num?)?.toDouble() ?? 0,
+                matchType: _parseMatchType(r['match_type'] as String?),
+              ),
+            );
+          } catch (_) {
+            // Skip malformed rows rather than dropping the whole result.
+          }
+        }
         if (nextPage && remoteSearchHits != null) {
           remoteSearchHits = [...remoteSearchHits!, ...pageHits];
         } else {
           remoteSearchHits = pageHits;
         }
-        searchNote = '';
+        final notes = <String>[
+          if (meta['index_fallback'] == true && query.trim().isNotEmpty)
+            'Searching the Firebase catalog directly',
+          if (searchResultsTruncated)
+            'Partial sample · Load more shows its remaining matches; narrow the area or filters to improve coverage',
+          if (pageHits.isEmpty && rows.isNotEmpty)
+            'Some results could not be parsed · showing what loaded',
+        ];
+        searchNote = notes.join(' · ');
       }
-    } catch (_) {
+    } catch (e) {
       if (generation != _searchGeneration) return;
       if (!nextPage) remoteSearchHits = null;
-      searchNote = 'Search API unavailable · showing on-device results';
+      searchNote =
+          'Firebase search failed · check your connection or access, then retry';
     }
     if (generation != _searchGeneration) return;
     searchBusy = false;
@@ -715,6 +1188,7 @@ class AppState extends ChangeNotifier {
   SearchMatchType _parseMatchType(String? raw) {
     return switch (raw) {
       'category' => SearchMatchType.category,
+      'attribute' => SearchMatchType.attribute,
       'similar' => SearchMatchType.similar,
       'identifier' => SearchMatchType.identifier,
       'semantic' => SearchMatchType.semantic,
@@ -725,7 +1199,12 @@ class AppState extends ChangeNotifier {
   void toggleFavoriteStore(int id) {
     if (!favoriteStoreIds.add(id)) favoriteStoreIds.remove(id);
     if (apiOnline && api.token != null) {
-      unawaited(api.post('/favorites/toggle', {'favoritable_type': 'store', 'favoritable_id': id}));
+      unawaited(
+        api.post('/favorites/toggle', {
+          'favoritable_type': 'store',
+          'favoritable_id': id,
+        }),
+      );
     }
     notifyListeners();
   }
@@ -733,7 +1212,12 @@ class AppState extends ChangeNotifier {
   void toggleFavoriteProduct(int id) {
     if (!favoriteProductIds.add(id)) favoriteProductIds.remove(id);
     if (apiOnline && api.token != null) {
-      unawaited(api.post('/favorites/toggle', {'favoritable_type': 'product', 'favoritable_id': id}));
+      unawaited(
+        api.post('/favorites/toggle', {
+          'favoritable_type': 'product',
+          'favoritable_id': id,
+        }),
+      );
     }
     notifyListeners();
   }
@@ -750,6 +1234,7 @@ class AppState extends ChangeNotifier {
     required String schedule,
     required bool isMobile,
     required String verificationNote,
+    String? imageAssetId,
   }) {
     _beginWrite();
     final store = Store(
@@ -785,6 +1270,7 @@ class AppState extends ChangeNotifier {
             'schedule': schedule,
             'is_mobile': isMobile,
             'verification_note': verificationNote,
+            if (imageAssetId != null) 'image_asset_id': imageAssetId,
           });
           await refreshCatalog();
         } finally {
@@ -797,16 +1283,18 @@ class AppState extends ChangeNotifier {
     return store;
   }
 
-  String? inviteStaff({
+  Future<String?> inviteStaff({
     required int storeId,
     required String email,
     bool inventory = true,
     bool promotions = false,
     bool location = false,
-  }) {
+  }) async {
     final owner = currentUser;
     final store = storeById(storeId);
-    if (owner == null || store == null) return 'Sign in as the store owner first.';
+    if (owner == null || store == null) {
+      return 'Sign in as the store owner first.';
+    }
     if (owner.role != AppRole.owner && owner.role != AppRole.admin) {
       return 'Only the store owner can invite staff.';
     }
@@ -814,41 +1302,132 @@ class AppState extends ChangeNotifier {
       return 'You can only invite staff to your own store.';
     }
     final normalized = email.trim().toLowerCase();
+    if (apiOnline && api.token != null) {
+      _beginWrite();
+      try {
+        await api.post('/stores/$storeId/staff', {
+          'email': normalized,
+          'can_inventory': inventory,
+          'can_promotions': promotions,
+          'can_location': location,
+        });
+        final loadError = await loadStoreStaff(storeId);
+        return loadError;
+      } catch (error) {
+        return _submissionError(error);
+      } finally {
+        _endWrite();
+      }
+    }
     final match = users.where((user) => user.email.toLowerCase() == normalized);
     if (match.isEmpty) return 'No LocalSpot account uses that email.';
     final member = match.first;
-    if (member.role == AppRole.admin) return 'Administrators cannot be added as store staff.';
-    if (member.id == store.ownerId) return 'The owner already manages this store.';
+    if (member.role == AppRole.admin) {
+      return 'Administrators cannot be added as store staff.';
+    }
+    if (member.id == store.ownerId) {
+      return 'The owner already manages this store.';
+    }
     if (!member.memberStoreIds.contains(storeId)) {
       member.memberStoreIds = [...member.memberStoreIds, storeId];
     }
     if (member.role == AppRole.customer) member.role = AppRole.staff;
-    member.storeGrants[storeId] = StoreGrant(inventory: inventory, promotions: promotions, location: location);
+    member.storeGrants[storeId] = StoreGrant(
+      inventory: inventory,
+      promotions: promotions,
+      location: location,
+    );
     notifyListeners();
-    if (apiOnline && api.token != null) {
-      unawaited(api.post('/stores/$storeId/staff', {
-        'email': member.email,
-        'can_inventory': inventory,
-        'can_promotions': promotions,
-        'can_location': location,
-      }));
-    }
     return null;
   }
 
-  void setStaffGrant(int storeId, UserAccount member, {bool? inventory, bool? promotions, bool? location}) {
+  Future<String?> loadStoreStaff(int storeId) async {
+    if (!apiOnline || api.token == null) return null;
+    try {
+      final response = await api.get('/stores/$storeId/staff');
+      final rows = response is Map ? response['members'] : null;
+      if (rows is! List) return 'Staff list response was invalid.';
+      final incoming = [
+        for (final row in rows)
+          userFromJson(Map<String, dynamic>.from(row as Map)),
+      ];
+      final incomingIds = incoming.map((user) => user.id).toSet();
+      for (final existing in [...users]) {
+        if (existing.memberStoreIds.contains(storeId) &&
+            !incomingIds.contains(existing.id)) {
+          existing.memberStoreIds = [
+            ...existing.memberStoreIds.where((id) => id != storeId),
+          ];
+          existing.storeGrants.remove(storeId);
+          if (existing.memberStoreIds.isEmpty) users.remove(existing);
+        }
+      }
+      for (final user in incoming) {
+        final index = users.indexWhere((existing) => existing.id == user.id);
+        if (index < 0) {
+          users.add(user);
+        } else {
+          users[index] = user;
+        }
+      }
+      notifyListeners();
+      return null;
+    } catch (error) {
+      return _submissionError(error);
+    }
+  }
+
+  Future<String?> setStaffGrant(
+    int storeId,
+    UserAccount member, {
+    bool? inventory,
+    bool? promotions,
+    bool? location,
+  }) async {
     final grant = member.storeGrants.putIfAbsent(storeId, () => StoreGrant());
+    final previousInventory = grant.inventory;
+    final previousPromotions = grant.promotions;
+    final previousLocation = grant.location;
     if (inventory != null) grant.inventory = inventory;
     if (promotions != null) grant.promotions = promotions;
     if (location != null) grant.location = location;
     notifyListeners();
     if (apiOnline && api.token != null) {
-      unawaited(api.patch('/stores/$storeId/staff/${member.id}', {
-        if (inventory != null) 'can_inventory': inventory,
-        if (promotions != null) 'can_promotions': promotions,
-        if (location != null) 'can_location': location,
-      }));
+      try {
+        await api.patch('/stores/$storeId/staff/${member.id}', {
+          if (inventory != null) 'can_inventory': inventory,
+          if (promotions != null) 'can_promotions': promotions,
+          if (location != null) 'can_location': location,
+        });
+      } catch (error) {
+        if (inventory != null) grant.inventory = previousInventory;
+        if (promotions != null) grant.promotions = previousPromotions;
+        if (location != null) grant.location = previousLocation;
+        notifyListeners();
+        return _submissionError(error);
+      }
     }
+    return null;
+  }
+
+  Future<String?> removeStaff(int storeId, UserAccount member) async {
+    if (apiOnline && api.token != null) {
+      try {
+        await api.delete('/stores/$storeId/staff/${member.id}');
+      } catch (error) {
+        final message = error.toString();
+        return message.startsWith('[') && message.contains('] ')
+            ? message.substring(message.indexOf('] ') + 2)
+            : message;
+      }
+    }
+    member.memberStoreIds.remove(storeId);
+    member.storeGrants.remove(storeId);
+    if (member.role == AppRole.staff && member.memberStoreIds.isEmpty) {
+      member.role = AppRole.customer;
+    }
+    notifyListeners();
+    return null;
   }
 
   List<UserAccount> staffForStore(int storeId) =>
@@ -857,13 +1436,15 @@ class AppState extends ChangeNotifier {
   void updateStore(Store store) {
     notifyListeners();
     if (apiOnline && api.token != null) {
-      unawaited(api.patch('/stores/${store.id}', {
-        'lat': store.lat,
-        'lng': store.lng,
-        'landmark': store.landmark,
-        'schedule': store.schedule,
-        'is_mobile': store.isMobile,
-      }));
+      unawaited(
+        api.patch('/stores/${store.id}', {
+          'lat': store.lat,
+          'lng': store.lng,
+          'landmark': store.landmark,
+          'schedule': store.schedule,
+          'is_mobile': store.isMobile,
+        }),
+      );
     }
   }
 
@@ -873,29 +1454,61 @@ class AppState extends ChangeNotifier {
     updateStore(store);
   }
 
-  void addFeedback({required String topic, required String body, String? area}) {
-    feedback.add(PilotFeedback(
+  Future<String?> addFeedback({
+    required String topic,
+    required String body,
+    String? area,
+  }) async {
+    final cleanTopic = topic.trim();
+    final cleanBody = body.trim();
+    final cleanArea = area?.trim();
+    if (cleanTopic.isEmpty || cleanTopic.length > 80) {
+      return 'Topic must be between 1 and 80 characters.';
+    }
+    if (cleanBody.isEmpty || cleanBody.length > 1000) {
+      return 'Feedback must be between 1 and 1000 characters.';
+    }
+    if (cleanArea != null && cleanArea.length > 120) {
+      return 'Area must be 120 characters or fewer.';
+    }
+    final entry = PilotFeedback(
       id: _nextFeedback++,
       userId: currentUser?.id ?? 0,
-      topic: topic,
-      body: body,
-      area: area,
-    ));
+      topic: cleanTopic,
+      body: cleanBody,
+      area: cleanArea,
+    );
+    feedback.add(entry);
     notifyListeners();
     if (apiOnline && api.token != null) {
-      unawaited(api.post('/feedback', {
-        'topic': topic,
-        'body': body,
-        'area': area,
-      }));
+      try {
+        await api.post('/feedback', {
+          'topic': cleanTopic,
+          'body': cleanBody,
+          if (cleanArea != null) 'area': cleanArea,
+        });
+      } catch (error) {
+        feedback.remove(entry);
+        notifyListeners();
+        return _submissionError(error);
+      }
     }
+    return null;
+  }
+
+  String _submissionError(Object error) {
+    final message = error.toString();
+    final delimiter = message.indexOf('] ');
+    return delimiter >= 0 ? message.substring(delimiter + 2) : message;
   }
 
   void setStoreStatus(Store store, StoreStatus status) {
     store.status = status;
     notifyListeners();
     if (apiOnline && api.token != null) {
-      unawaited(api.patch('/admin/stores/${store.id}', {'status': status.name}));
+      unawaited(
+        api.patch('/admin/stores/${store.id}', {'status': status.name}),
+      );
     }
   }
 
@@ -938,9 +1551,12 @@ class AppState extends ChangeNotifier {
     required int quantity,
     required Availability availability,
     Map<String, String> attributes = const {},
+    String? imageUrl,
+    String? imageAssetId,
   }) {
     _beginWrite();
-    final resolvedId = productId ??
+    final resolvedId =
+        productId ??
         createProduct(
           name: name,
           category: category,
@@ -948,7 +1564,11 @@ class AppState extends ChangeNotifier {
           packageSize: packageSize,
           aliases: [name.toLowerCase()],
           barcode: barcode,
-          image: 'https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&w=800&q=80',
+          image:
+              imageUrl ??
+              (apiOnline
+                  ? ''
+                  : 'https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&w=800&q=80'),
           attributes: attributes,
         ).id;
     final listing = StoreListing(
@@ -962,7 +1582,12 @@ class AppState extends ChangeNotifier {
       lastConfirmed: DateTime.now(),
     );
     listings.add(listing);
-    _recordMovement(listing, kind: 'add', delta: quantity, note: 'Owner confirmed listing');
+    _recordMovement(
+      listing,
+      kind: 'add',
+      delta: quantity,
+      note: 'Owner confirmed listing',
+    );
     notifyListeners();
     if (apiOnline && api.token != null) {
       unawaited(() async {
@@ -979,6 +1604,7 @@ class AppState extends ChangeNotifier {
             'quantity': quantity,
             'availability': availabilityApi(availability),
             'attributes': attributes,
+            if (imageAssetId != null) 'image_asset_id': imageAssetId,
           });
           await refreshCatalog();
         } finally {
@@ -991,10 +1617,19 @@ class AppState extends ChangeNotifier {
     return listing;
   }
 
-  void updateListing(StoreListing listing, {int? quantityDelta, String note = 'Stock update'}) {
+  void updateListing(
+    StoreListing listing, {
+    int? quantityDelta,
+    String note = 'Stock update',
+  }) {
     _beginWrite();
     listing.lastConfirmed = DateTime.now();
-    _recordMovement(listing, kind: listing.status == ListingStatus.archived ? 'archive' : 'adjust', delta: quantityDelta ?? 0, note: note);
+    _recordMovement(
+      listing,
+      kind: listing.status == ListingStatus.archived ? 'archive' : 'adjust',
+      delta: quantityDelta ?? 0,
+      note: note,
+    );
     notifyListeners();
     if (apiOnline && api.token != null) {
       unawaited(() async {
@@ -1068,11 +1703,13 @@ class AppState extends ChangeNotifier {
     promo.status = status;
     notifyListeners();
     if (apiOnline && api.token != null) {
-      unawaited(api.patch('/admin/promotions/${promo.id}', {'status': status.name}));
+      unawaited(
+        api.patch('/admin/promotions/${promo.id}', {'status': status.name}),
+      );
     }
   }
 
-  StoreTour addTour(int storeId, String title) {
+  Future<String?> addTour(int storeId, String title) async {
     final tour = StoreTour(
       id: _nextTour++,
       storeId: storeId,
@@ -1083,12 +1720,17 @@ class AppState extends ChangeNotifier {
     tours.add(tour);
     notifyListeners();
     if (apiOnline && api.token != null) {
-      unawaited(() async {
-        final data = await api.post('/stores/$storeId/tours', {'title': title}) as Map;
+      try {
+        final data =
+            await api.post('/stores/$storeId/tours', {'title': title}) as Map;
         _replaceTour(tour.id, tourFromJson(Map<String, dynamic>.from(data)));
-      }());
+      } catch (error) {
+        tours.remove(tour);
+        notifyListeners();
+        return error.toString();
+      }
     }
-    return tour;
+    return null;
   }
 
   void _replaceTour(int localId, StoreTour incoming) {
@@ -1097,20 +1739,43 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  void connectTourNodes(StoreTour tour, TourNode from, TourNode to) {
+  Future<String?> connectTourNodes(
+    StoreTour tour,
+    TourNode from,
+    TourNode to,
+  ) async {
+    final oldFrom = [...from.connections];
+    final oldTo = [...to.connections];
     if (!from.connections.contains(to.id)) from.connections.add(to.id);
     if (!to.connections.contains(from.id)) to.connections.add(from.id);
     notifyListeners();
     if (apiOnline && api.token != null) {
-      unawaited(api.post('/tours/${tour.id}/connections', {
-        'from_node_id': from.id,
-        'to_node_id': to.id,
-      }));
+      try {
+        final data =
+            await api.post('/tours/${tour.id}/connections', {
+                  'from_node_id': from.id,
+                  'to_node_id': to.id,
+                })
+                as Map;
+        _replaceTour(tour.id, tourFromJson(Map<String, dynamic>.from(data)));
+      } catch (error) {
+        from.connections = oldFrom;
+        to.connections = oldTo;
+        notifyListeners();
+        return error.toString();
+      }
     }
+    return null;
   }
 
-  void addTourNode(StoreTour tour, String title, String image) {
+  Future<String?> addTourNode(
+    StoreTour tour,
+    String title,
+    String image, {
+    String? originalStoragePath,
+  }) async {
     _beginWrite();
+    final previousNode = tour.nodes.isEmpty ? null : tour.nodes.last;
     final node = TourNode(
       id: tour.nodes.length + 1,
       title: title,
@@ -1119,28 +1784,49 @@ class AppState extends ChangeNotifier {
       privacyStatus: PrivacyStatus.processing,
       ownerReviewed: false,
       originalRetained: true,
+      originalStoragePath: originalStoragePath,
     );
-    if (tour.nodes.isNotEmpty) {
-      tour.nodes.last.connections.add(node.id);
-      node.connections.add(tour.nodes.last.id);
+    if (previousNode != null) {
+      previousNode.connections.add(node.id);
+      node.connections.add(previousNode.id);
     }
     tour.nodes.add(node);
     notifyListeners();
     if (apiOnline && api.token != null) {
-      unawaited(() async {
-        try {
-          final data = await api.post('/tours/${tour.id}/nodes', {'title': title, 'image': image}) as Map;
-          _replaceTour(tour.id, tourFromJson(Map<String, dynamic>.from(data)));
-        } finally {
-          _endWrite();
-        }
-      }());
+      try {
+        final data =
+            await api.post('/tours/${tour.id}/nodes', {
+                  'title': title,
+                  'image': '',
+                  'node_id': node.id,
+                  'original_path': originalStoragePath,
+                })
+                as Map;
+        _replaceTour(tour.id, tourFromJson(Map<String, dynamic>.from(data)));
+        return null;
+      } catch (error) {
+        tour.nodes.remove(node);
+        previousNode?.connections.remove(node.id);
+        notifyListeners();
+        final message = error.toString();
+        return message.startsWith('[') && message.contains('] ')
+            ? message.substring(message.indexOf('] ') + 2)
+            : message;
+      } finally {
+        _endWrite();
+      }
     } else {
       _endWrite();
     }
+    return null;
   }
 
-  Future<void> processTourNode(StoreTour tour, TourNode node, {bool fail = false}) async {
+  Future<void> processTourNode(
+    StoreTour tour,
+    TourNode node, {
+    bool fail = false,
+  }) async {
+    if (apiOnline && api.token != null) return;
     if (fail) {
       node.privacyStatus = PrivacyStatus.failed;
       node.image = '';
@@ -1150,27 +1836,28 @@ class AppState extends ChangeNotifier {
       node.image = '/storage/tours/${node.id}/sanitized.jpg';
     }
     notifyListeners();
-    if (apiOnline && api.token != null) {
-      try {
-        final data = await api.post('/tours/${tour.id}/nodes/${node.id}/process', {'fail': fail}) as Map;
-        _replaceTour(tour.id, tourFromJson(Map<String, dynamic>.from(data)));
-      } catch (_) {}
-    }
   }
 
   String? reviewTourNode(StoreTour tour, TourNode node) {
+    if (apiOnline && api.token != null) {
+      return 'Trusted panorama privacy processing is not available yet. The original remains private.';
+    }
     if (node.privacyStatus != PrivacyStatus.ready) {
       return 'Privacy processing must finish before review.';
     }
     node.ownerReviewed = true;
     notifyListeners();
-    if (apiOnline && api.token != null) {
-      unawaited(api.post('/tours/${tour.id}/nodes/${node.id}/review'));
-    }
     return null;
   }
 
-  void addManualTourBlur(StoreTour tour, TourNode node, {BlurRegion? region}) {
+  String? addManualTourBlur(
+    StoreTour tour,
+    TourNode node, {
+    BlurRegion? region,
+  }) {
+    if (apiOnline && api.token != null) {
+      return 'Manual masks can be saved after the panorama privacy processor is configured.';
+    }
     final mask = region ?? const BlurRegion(x: 0.35, y: 0.35, w: 0.3, h: 0.3);
     node.manualBlur = true;
     node.privacyStatus = PrivacyStatus.ready;
@@ -1179,19 +1866,23 @@ class AppState extends ChangeNotifier {
     }
     node.blurRegions = [...node.blurRegions, mask];
     notifyListeners();
-    if (apiOnline && api.token != null) {
-      unawaited(api.post('/tours/${tour.id}/nodes/${node.id}/manual-blurs', {
-        'regions': [
-          {'x': mask.x, 'y': mask.y, 'w': mask.w, 'h': mask.h},
-        ],
-      }));
-    }
+    return null;
   }
 
   String? publishTour(StoreTour tour) {
-    if (tour.nodes.length < 2) return 'Connect at least two viewpoints before publishing.';
-    if (tour.nodes.any((node) => !node.canPublish || node.image.contains('#') || node.image.contains('tours/originals'))) {
+    if (tour.nodes.length < 2) {
+      return 'Connect at least two viewpoints before publishing.';
+    }
+    if (tour.nodes.any(
+      (node) =>
+          !node.canPublish ||
+          node.image.contains('#') ||
+          node.image.contains('tours/originals'),
+    )) {
       return 'Every viewpoint needs privacy processing and owner review before publishing.';
+    }
+    if (apiOnline && api.token != null) {
+      return 'Publishing is unavailable until the sanitized media pipeline is configured.';
     }
     _beginWrite();
     tour.status = TourStatus.published;
@@ -1211,17 +1902,36 @@ class AppState extends ChangeNotifier {
     return null;
   }
 
-  void addReport(String target, String reason) {
-    reports.add(ReportItem(
+  Future<String?> addReport(String target, String reason) async {
+    final cleanTarget = target.trim();
+    final cleanReason = reason.trim();
+    if (cleanTarget.isEmpty || cleanTarget.length > 120) {
+      return 'Report target must be between 1 and 120 characters.';
+    }
+    if (cleanReason.isEmpty || cleanReason.length > 400) {
+      return 'Report reason must be between 1 and 400 characters.';
+    }
+    final report = ReportItem(
       id: _nextReport++,
       userId: currentUser?.id ?? 0,
-      target: target,
-      reason: reason,
-    ));
+      target: cleanTarget,
+      reason: cleanReason,
+    );
+    reports.add(report);
     notifyListeners();
     if (apiOnline && api.token != null) {
-      unawaited(api.post('/reports', {'target': target, 'reason': reason}));
+      try {
+        await api.post('/reports', {
+          'target': cleanTarget,
+          'reason': cleanReason,
+        });
+      } catch (error) {
+        reports.remove(report);
+        notifyListeners();
+        return _submissionError(error);
+      }
     }
+    return null;
   }
 
   void resolveReport(ReportItem report) {
@@ -1254,21 +1964,39 @@ class AppState extends ChangeNotifier {
       if (store == null || product == null) continue;
       if (store.status != StoreStatus.approved) continue;
       if (typeFilter != null && store.type != typeFilter) continue;
-      if (!productMatchesCategoryFilter(product.category, categoryFilter)) continue;
+      if (availabilityFilter != null &&
+          listing.availability != availabilityFilter) {
+        continue;
+      }
+      if (minPriceFilter != null && listing.price < minPriceFilter!) continue;
+      if (maxPriceFilter != null && listing.price > maxPriceFilter!) continue;
+      if (!productMatchesCategoryFilter(product.category, categoryFilter)) {
+        continue;
+      }
       final distance = distanceKm(searchLat, searchLng, store.lat, store.lng);
       if (distance > radiusKm) continue;
       final keyword = q.isEmpty || _matchesProduct(product, q);
-      final categoryHit = familyCats.any((cat) => cat.toLowerCase() == product.category.toLowerCase());
-      if (q.isNotEmpty && !keyword && !categoryHit && !_semanticMatch(product, q)) continue;
-      hits.add(SearchHit(
-        listing: listing,
-        store: store,
-        product: product,
-        distanceKm: distance,
-        matchType: q.isEmpty
-            ? SearchMatchType.exact
-            : _matchKind(product, q, familyCats),
-      ));
+      final categoryHit = familyCats.any(
+        (cat) => cat.toLowerCase() == product.category.toLowerCase(),
+      );
+      if (q.isNotEmpty &&
+          !keyword &&
+          !categoryHit &&
+          !_semanticMatch(product, q)) {
+        continue;
+      }
+      hits.add(
+        SearchHit(
+          listing: listing,
+          store: store,
+          product: product,
+          distanceKm: distance,
+          matchType:
+              q.isEmpty
+                  ? SearchMatchType.exact
+                  : _matchKind(product, q, familyCats),
+        ),
+      );
     }
     hits.sort((a, b) {
       switch (searchSort) {
@@ -1280,7 +2008,11 @@ class AppState extends ChangeNotifier {
           return a.distanceKm.compareTo(b.distanceKm);
         case SearchSort.relevance:
           if (q.isNotEmpty) {
-            final byRelevance = _relevance(a.product, q, familyCats).compareTo(_relevance(b.product, q, familyCats));
+            final byRelevance = _relevance(
+              a.product,
+              q,
+              familyCats,
+            ).compareTo(_relevance(b.product, q, familyCats));
             if (byRelevance != 0) return byRelevance;
           }
           final byDistance = a.distanceKm.compareTo(b.distanceKm);
@@ -1298,19 +2030,28 @@ class AppState extends ChangeNotifier {
       final hotA = sponsoredIds.contains(a.id) ? 0 : 1;
       final hotB = sponsoredIds.contains(b.id) ? 0 : 1;
       if (hotA != hotB) return hotA.compareTo(hotB);
-      return listingsForStore(b.id).length.compareTo(listingsForStore(a.id).length);
+      return listingsForStore(
+        b.id,
+      ).length.compareTo(listingsForStore(a.id).length);
     });
     return stores;
   }
 
   List<Store> nearbyStores() {
-    final result = stores.where((s) {
-      if (s.status != StoreStatus.approved) return false;
-      if (typeFilter != null && s.type != typeFilter) return false;
-      return distanceKm(searchLat, searchLng, s.lat, s.lng) <= radiusKm;
-    }).toList()
-      ..sort((a, b) => distanceKm(searchLat, searchLng, a.lat, a.lng)
-          .compareTo(distanceKm(searchLat, searchLng, b.lat, b.lng)));
+    final result =
+        stores.where((s) {
+            if (s.status != StoreStatus.approved) return false;
+            if (typeFilter != null && s.type != typeFilter) return false;
+            return distanceKm(searchLat, searchLng, s.lat, s.lng) <= radiusKm;
+          }).toList()
+          ..sort(
+            (a, b) => distanceKm(
+              searchLat,
+              searchLng,
+              a.lat,
+              a.lng,
+            ).compareTo(distanceKm(searchLat, searchLng, b.lat, b.lng)),
+          );
     return result;
   }
 
@@ -1319,28 +2060,44 @@ class AppState extends ChangeNotifier {
   List<Promotion> liveSponsored() {
     final now = DateTime.now();
     return promotions
-        .where((p) =>
-            p.status == PromotionStatus.approved &&
-            p.sponsored &&
-            !now.isBefore(p.startsAt) &&
-            !now.isAfter(p.endsAt))
+        .where(
+          (p) =>
+              p.status == PromotionStatus.approved &&
+              p.sponsored &&
+              !now.isBefore(p.startsAt) &&
+              !now.isAfter(p.endsAt),
+        )
         .toList();
   }
 
   Store? storeById(int id) => stores.where((s) => s.id == id).firstOrNull;
-  CatalogProduct? productById(int id) => products.where((p) => p.id == id).firstOrNull;
+  CatalogProduct? productById(int id) =>
+      products.where((p) => p.id == id).firstOrNull;
   List<StoreListing> listingsForStore(int storeId) =>
-      listings.where((l) => l.storeId == storeId && l.status == ListingStatus.active).toList();
+      listings
+          .where(
+            (l) => l.storeId == storeId && l.status == ListingStatus.active,
+          )
+          .toList();
   List<SearchHit> listingsForProduct(int productId) =>
       searchListings('').where((h) => h.product.id == productId).toList();
-  StoreTour? tourForStore(int storeId) => tours
-      .where((t) => t.storeId == storeId && t.status == TourStatus.published)
-      .firstOrNull;
+  StoreTour? tourForStore(int storeId) =>
+      tours
+          .where(
+            (t) => t.storeId == storeId && t.status == TourStatus.published,
+          )
+          .firstOrNull;
   StoreTour? draftOrPublishedTour(int storeId) =>
       tours.where((t) => t.storeId == storeId).firstOrNull;
 
   CatalogProduct? _named(String needle) =>
-      products.where((p) => p.name.toLowerCase().contains(needle) || p.aliases.any((a) => a.toLowerCase().contains(needle))).firstOrNull;
+      products
+          .where(
+            (p) =>
+                p.name.toLowerCase().contains(needle) ||
+                p.aliases.any((a) => a.toLowerCase().contains(needle)),
+          )
+          .firstOrNull;
 
   Future<dynamic> _awaitRecognitionJob(dynamic data, int generation) async {
     if (data is! Map) return data;
@@ -1350,34 +2107,62 @@ class AppState extends ChangeNotifier {
     for (var i = 0; i < 8 && status == 'pending' && id != null; i++) {
       await Future<void>.delayed(const Duration(milliseconds: 200));
       if (generation != _recognitionGeneration) return current;
-      current = Map<String, dynamic>.from(await api.get('/product-recognition/jobs/$id') as Map);
+      current = Map<String, dynamic>.from(
+        await api.get('/product-recognition/jobs/$id') as Map,
+      );
       status = current['status'] as String?;
     }
     return current;
   }
 
   List<RecognitionSuggestion> _suggestionsFrom(dynamic data) {
-    final rows = data is List
-        ? data
-        : data is Map && data['suggestions'] is List
+    final rows =
+        data is List
+            ? data
+            : data is Map && data['suggestions'] is List
             ? data['suggestions'] as List
             : const [];
     return [
       for (final row in rows)
         RecognitionSuggestion(
-          row['product'] == null ? null : productFromJson(Map<String, dynamic>.from(row['product'] as Map)),
+          row['product'] == null
+              ? null
+              : productFromJson(
+                Map<String, dynamic>.from(row['product'] as Map),
+              ),
           row['label'] as String? ?? 'Suggestion',
           (row['confidence'] as num?)?.toDouble() ?? 0.4,
-          unknownFields: row['unknown_fields'] is List
-              ? [...(row['unknown_fields'] as List).map((e) => e.toString())]
-              : const ['price', 'stock'],
+          unknownFields:
+              row['unknown_fields'] is List
+                  ? [
+                    ...(row['unknown_fields'] as List).map((e) => e.toString()),
+                  ]
+                  : const ['price', 'stock'],
           ocrText: row['ocr'] as String?,
+          suggestedName: row['suggested_name'] as String?,
+          suggestedCategory: row['suggested_category'] as String?,
+          suggestedBrand: row['suggested_brand'] as String?,
+          suggestedPackageSize: row['suggested_package_size'] as String?,
+          suggestedAttributes:
+              row['suggested_attributes'] is Map
+                  ? Map<String, String>.from(
+                    (row['suggested_attributes'] as Map).map(
+                      (key, value) => MapEntry('$key', '$value'),
+                    ),
+                  )
+                  : const {},
+          isAiGenerated: row['is_ai_generated'] == true,
         ),
     ];
   }
 
-  List<RecognizedObject> _objectsFrom(dynamic data, List<RecognitionSuggestion> fallback) {
-    if (data is Map && data['objects'] is List && (data['objects'] as List).isNotEmpty) {
+  List<RecognizedObject> _objectsFrom(
+    dynamic data,
+    List<RecognitionSuggestion> fallback,
+  ) {
+    if (data is Map &&
+        data['objects'] is List &&
+        (data['objects'] as List).isNotEmpty) {
       return [
         for (final row in data['objects'] as List)
           RecognizedObject(
@@ -1386,31 +2171,40 @@ class AppState extends ChangeNotifier {
           ),
       ];
     }
-    return fallback.isEmpty ? const [] : [RecognizedObject(label: 'item', suggestions: fallback)];
+    return fallback.isEmpty
+        ? const []
+        : [RecognizedObject(label: 'item', suggestions: fallback)];
   }
 
   List<String> _objectHints(String hint) {
-    final parts = hint
-        .split(RegExp(r'\s*(?:,|&|\band\b)\s+', caseSensitive: false))
-        .map((part) => part.trim())
-        .where((part) => part.isNotEmpty)
-        .toList();
+    final parts =
+        hint
+            .split(RegExp(r'\s*(?:,|&|\band\b)\s+', caseSensitive: false))
+            .map((part) => part.trim())
+            .where((part) => part.isNotEmpty)
+            .toList();
     return parts.isEmpty ? [hint] : parts;
   }
 
-  Future<List<RecognitionSuggestion>> suggestFromCapture({String? hint, String? barcode, String? image}) async {
+  Future<List<RecognitionSuggestion>> suggestFromCapture({
+    String? hint,
+    String? barcode,
+    String? image,
+  }) async {
     final generation = ++_recognitionGeneration;
     if (apiOnline) {
       try {
         var data = await api.post('/product-recognition/suggest', {
           if (hint != null && hint.trim().isNotEmpty) 'hint': hint.trim(),
-          if (barcode != null && barcode.trim().isNotEmpty) 'barcode': barcode.trim(),
+          if (barcode != null && barcode.trim().isNotEmpty)
+            'barcode': barcode.trim(),
           if (image != null && image.isNotEmpty) 'image': image,
         });
         if (generation != _recognitionGeneration) return const [];
         data = await _awaitRecognitionJob(data, generation);
         if (generation != _recognitionGeneration) return const [];
-        return _suggestionsFrom(data);
+        final remoteSuggestions = _suggestionsFrom(data);
+        if (remoteSuggestions.isNotEmpty) return remoteSuggestions;
       } catch (_) {}
     }
     if (generation != _recognitionGeneration) return const [];
@@ -1419,28 +2213,46 @@ class AppState extends ChangeNotifier {
     return [for (final part in parts) ...suggestFromPhoto(part)];
   }
 
-  Future<VisualSearchResult> visualSearch({String? hint, String? barcode, String? image}) async {
+  Future<VisualSearchResult> visualSearch({
+    String? hint,
+    String? barcode,
+    String? image,
+  }) async {
     final generation = ++_recognitionGeneration;
     if (apiOnline) {
       try {
-        final data = await api.post('/search/by-image', {
-          if (hint != null && hint.trim().isNotEmpty) 'hint': hint.trim(),
-          if (barcode != null && barcode.trim().isNotEmpty) 'barcode': barcode.trim(),
-          if (image != null && image.isNotEmpty) 'image': image,
-          'lat': searchLat.toString(),
-          'lng': searchLng.toString(),
-          'radius_km': radiusKm.toString(),
-        }) as Map;
+        final data =
+            await api.post('/search/by-image', {
+                  if (hint != null && hint.trim().isNotEmpty)
+                    'hint': hint.trim(),
+                  if (barcode != null && barcode.trim().isNotEmpty)
+                    'barcode': barcode.trim(),
+                  if (image != null && image.isNotEmpty) 'image': image,
+                  'lat': searchLat.toString(),
+                  'lng': searchLng.toString(),
+                  'radius_km': radiusKm.toString(),
+                })
+                as Map;
         if (generation != _recognitionGeneration) {
-          return VisualSearchResult(suggestions: const [], hits: const [], uncertain: true);
+          return VisualSearchResult(
+            suggestions: const [],
+            hits: const [],
+            uncertain: true,
+          );
         }
         final suggestions = _suggestionsFrom(data);
         final hits = [
           for (final row in (data['hits'] as List? ?? []))
             SearchHit(
-              listing: listingFromJson(Map<String, dynamic>.from((row as Map)['listing'] as Map)),
-              store: storeFromJson(Map<String, dynamic>.from(row['store'] as Map)),
-              product: productFromJson(Map<String, dynamic>.from(row['product'] as Map)),
+              listing: listingFromJson(
+                Map<String, dynamic>.from((row as Map)['listing'] as Map),
+              ),
+              store: storeFromJson(
+                Map<String, dynamic>.from(row['store'] as Map),
+              ),
+              product: productFromJson(
+                Map<String, dynamic>.from(row['product'] as Map),
+              ),
               distanceKm: (row['distance_km'] as num?)?.toDouble() ?? 0,
               matchType: SearchMatchType.similar,
             ),
@@ -1448,12 +2260,18 @@ class AppState extends ChangeNotifier {
         return VisualSearchResult(
           suggestions: suggestions,
           hits: hits,
-          uncertain: data['uncertain'] == true || suggestions.every((s) => s.product == null || s.confidence < 0.5),
+          uncertain:
+              data['uncertain'] == true ||
+              suggestions.every((s) => s.product == null || s.confidence < 0.5),
           objects: _objectsFrom(data, suggestions),
         );
       } catch (_) {}
     }
-    final suggestions = await suggestFromCapture(hint: hint, barcode: barcode, image: image);
+    final suggestions = await suggestFromCapture(
+      hint: hint,
+      barcode: barcode,
+      image: image,
+    );
     final hits = <SearchHit>[];
     final seen = <int>{};
     for (final suggestion in suggestions) {
@@ -1461,13 +2279,15 @@ class AppState extends ChangeNotifier {
       if (product == null) continue;
       for (final hit in listingsForProduct(product.id)) {
         if (seen.add(hit.listing.id)) {
-          hits.add(SearchHit(
-            listing: hit.listing,
-            store: hit.store,
-            product: hit.product,
-            distanceKm: hit.distanceKm,
-            matchType: SearchMatchType.similar,
-          ));
+          hits.add(
+            SearchHit(
+              listing: hit.listing,
+              store: hit.store,
+              product: hit.product,
+              distanceKm: hit.distanceKm,
+              matchType: SearchMatchType.similar,
+            ),
+          );
         }
       }
     }
@@ -1477,60 +2297,115 @@ class AppState extends ChangeNotifier {
         if (seen.add(hit.listing.id)) hits.add(hit);
       }
     }
-    final uncertain = suggestions.isEmpty || suggestions.every((s) => s.product == null || s.confidence < 0.5);
+    final uncertain =
+        suggestions.isEmpty ||
+        suggestions.every((s) => s.product == null || s.confidence < 0.5);
     final objects = [
       for (final part in _objectHints(hint ?? barcode ?? 'item'))
         RecognizedObject(label: part, suggestions: suggestFromPhoto(part)),
     ];
-    return VisualSearchResult(suggestions: suggestions, hits: hits, uncertain: uncertain, objects: objects);
+    return VisualSearchResult(
+      suggestions: suggestions,
+      hits: hits,
+      uncertain: uncertain,
+      objects: objects,
+    );
   }
 
   List<RecognitionSuggestion> suggestFromPhoto(String imageKey) {
     return switch (imageKey) {
       'mango' => [
-          RecognitionSuggestion(_named('mango'), 'Likely mango · produce', 0.86, unknownFields: const ['price', 'stock', 'variety']),
-          RecognitionSuggestion(_named('banana'), 'Similar fruit · banana', 0.41, unknownFields: const ['price', 'stock', 'variety']),
-        ],
+        RecognitionSuggestion(
+          _named('mango'),
+          'Likely mango · produce',
+          0.86,
+          unknownFields: const ['price', 'stock', 'variety'],
+        ),
+        RecognitionSuggestion(
+          _named('banana'),
+          'Similar fruit · banana',
+          0.41,
+          unknownFields: const ['price', 'stock', 'variety'],
+        ),
+      ],
       'oil' => [
-          RecognitionSuggestion(_named('oil'), 'Cooking oil bottle detected', 0.78, ocrText: 'Minola 1L', unknownFields: const ['price', 'stock']),
-        ],
+        RecognitionSuggestion(
+          _named('oil'),
+          'Cooking oil bottle detected',
+          0.78,
+          ocrText: 'Minola 1L',
+          unknownFields: const ['price', 'stock'],
+        ),
+      ],
       'sardines' => [
-          RecognitionSuggestion(_named('sardine'), 'Canned sardines · OCR: YOUNG\'S', 0.81, ocrText: "YOUNG'S TOWN", unknownFields: const ['price', 'stock']),
-        ],
+        RecognitionSuggestion(
+          _named('sardine'),
+          'Canned sardines · OCR: YOUNG\'S',
+          0.81,
+          ocrText: "YOUNG'S TOWN",
+          unknownFields: const ['price', 'stock'],
+        ),
+      ],
       'hammer' => [
-          RecognitionSuggestion(_named('hammer'), 'Likely claw hammer · hardware', 0.84, unknownFields: const ['price', 'stock', 'dimensions']),
-        ],
+        RecognitionSuggestion(
+          _named('hammer'),
+          'Likely claw hammer · hardware',
+          0.84,
+          unknownFields: const ['price', 'stock', 'dimensions'],
+        ),
+      ],
       _ => [
-          RecognitionSuggestion(null, 'Uncertain match · encode manually', 0.22, unknownFields: const ['identity', 'price', 'stock']),
-        ],
+        RecognitionSuggestion(
+          null,
+          'Uncertain match · encode manually',
+          0.22,
+          unknownFields: const ['identity', 'price', 'stock'],
+        ),
+      ],
     };
   }
 
   bool _matchesProduct(CatalogProduct product, String q) {
     if (_identifierMatch(product, q) || _semanticMatch(product, q)) return true;
     for (final field in _productFields(product)) {
-      if (field.contains(q) || (field.length >= 3 && q.contains(field)) || _lev(field, q) <= 2) return true;
+      if (field.contains(q) ||
+          (field.length >= 3 && q.contains(field)) ||
+          _lev(field, q) <= 2) {
+        return true;
+      }
       for (final token in field.split(RegExp(r'[^a-z0-9]+'))) {
         if (token.length < 3) continue;
-        if (token.contains(q) || q.contains(token) || _lev(token, q) <= 2) return true;
+        if (token.contains(q) || q.contains(token) || _lev(token, q) <= 2) {
+          return true;
+        }
       }
     }
     return false;
   }
 
-  SearchMatchType _matchKind(CatalogProduct product, String q, List<String> familyCats) {
+  SearchMatchType _matchKind(
+    CatalogProduct product,
+    String q,
+    List<String> familyCats,
+  ) {
     if (_identifierMatch(product, q)) return SearchMatchType.identifier;
     final rank = _relevance(product, q, familyCats);
     if (rank <= 3) return SearchMatchType.exact;
     if (_semanticMatch(product, q)) return SearchMatchType.semantic;
-    if (familyCats.any((cat) => cat.toLowerCase() == product.category.toLowerCase())) return SearchMatchType.category;
+    if (familyCats.any(
+      (cat) => cat.toLowerCase() == product.category.toLowerCase(),
+    )) {
+      return SearchMatchType.category;
+    }
     return SearchMatchType.exact;
   }
 
   bool _identifierMatch(CatalogProduct product, String q) {
     final isBarcode = RegExp(r'^\d{8,14}$').hasMatch(q);
     final isModel = RegExp(r'[a-z]+\d|\d+[a-z]').hasMatch(q);
-    if (product.barcode != null && product.barcode!.toLowerCase() == q) return true;
+    if (product.barcode != null && product.barcode!.toLowerCase() == q) {
+      return true;
+    }
     for (final field in _productFields(product)) {
       if (field == q) return true;
       if (isBarcode && field.replaceAll(RegExp(r'\D+'), '') == q) return true;
@@ -1540,34 +2415,71 @@ class AppState extends ChangeNotifier {
   }
 
   bool _semanticMatch(CatalogProduct product, String q) {
-    const stop = {'for', 'the', 'a', 'an', 'of', 'and', 'or', 'to', 'in', 'on', 'near', 'me', 'nearby', 'with', 'from'};
-    final qTokens = q.split(RegExp(r'[^a-z0-9]+')).where((t) => t.length >= 2 && !stop.contains(t)).toList();
+    const stop = {
+      'for',
+      'the',
+      'a',
+      'an',
+      'of',
+      'and',
+      'or',
+      'to',
+      'in',
+      'on',
+      'near',
+      'me',
+      'nearby',
+      'with',
+      'from',
+    };
+    final qTokens =
+        q
+            .split(RegExp(r'[^a-z0-9]+'))
+            .where((t) => t.length >= 2 && !stop.contains(t))
+            .toList();
     if (qTokens.length < 2) return false;
-    final hay = _productFields(product).join(' ').split(RegExp(r'[^a-z0-9]+')).where((t) => t.length >= 2).toSet();
+    final hay =
+        _productFields(product)
+            .join(' ')
+            .split(RegExp(r'[^a-z0-9]+'))
+            .where((t) => t.length >= 2)
+            .toSet();
     final overlap = qTokens.where(hay.contains).length;
     return overlap / qTokens.length >= 0.4;
   }
 
-  int _relevance(CatalogProduct product, String q, [List<String> familyCats = const []]) {
+  int _relevance(
+    CatalogProduct product,
+    String q, [
+    List<String> familyCats = const [],
+  ]) {
     final name = product.name.toLowerCase();
     if (_identifierMatch(product, q)) return 0;
     if (name == q) return 0;
     if (name.startsWith(q)) return 1;
     if (name.contains(q)) return 2;
-    if (product.aliases.any((alias) => alias.toLowerCase() == q || alias.toLowerCase().contains(q))) return 3;
+    if (product.aliases.any(
+      (alias) => alias.toLowerCase() == q || alias.toLowerCase().contains(q),
+    )) {
+      return 3;
+    }
     if (_semanticMatch(product, q)) return 4;
-    if (familyCats.any((cat) => cat.toLowerCase() == product.category.toLowerCase())) return 5;
+    if (familyCats.any(
+      (cat) => cat.toLowerCase() == product.category.toLowerCase(),
+    )) {
+      return 5;
+    }
     return 8;
   }
 
   Iterable<String> _productFields(CatalogProduct product) => [
-        product.name,
-        product.brand,
-        product.category,
-        product.packageSize,
-        ...product.aliases,
-        ...product.attributes.values,
-      ].map((e) => e.toLowerCase());
+    product.name,
+    product.brand,
+    product.category,
+    product.packageSize,
+    ...product.aliases,
+    ...product.attributes.values,
+  ].map((e) => e.toLowerCase());
 
   int _lev(String a, String b) {
     if (a == b) return 0;
@@ -1580,7 +2492,8 @@ class AppState extends ChangeNotifier {
       prev[0] = i + 1;
       for (var j = 0; j < b.length; j++) {
         final tmp = prev[j + 1];
-        prev[j + 1] = a[i] == b[j] ? diag : 1 + min(min(diag, prev[j]), prev[j + 1]);
+        prev[j + 1] =
+            a[i] == b[j] ? diag : 1 + min(min(diag, prev[j]), prev[j + 1]);
         diag = tmp;
       }
     }
@@ -1591,7 +2504,8 @@ class AppState extends ChangeNotifier {
     const r = 6371.0;
     final dLat = _rad(lat2 - lat1);
     final dLng = _rad(lng2 - lng1);
-    final a = sin(dLat / 2) * sin(dLat / 2) +
+    final a =
+        sin(dLat / 2) * sin(dLat / 2) +
         cos(_rad(lat1)) * cos(_rad(lat2)) * sin(dLng / 2) * sin(dLng / 2);
     return r * 2 * atan2(sqrt(a), sqrt(1 - a));
   }
@@ -1600,13 +2514,61 @@ class AppState extends ChangeNotifier {
 
   void _seed() {
     users.addAll([
-      UserAccount(id: 1, name: 'Maria Santos', email: 'maria@localspot.ph', password: 'demo', role: AppRole.customer),
-      UserAccount(id: 2, name: 'Aling Nena', email: 'nena@localspot.ph', password: 'demo', role: AppRole.owner, ownedStoreIds: [1]),
-      UserAccount(id: 3, name: 'Mang Tonyo', email: 'tonyo@localspot.ph', password: 'demo', role: AppRole.owner, ownedStoreIds: [2]),
-      UserAccount(id: 4, name: 'Ana Cruz', email: 'ana@localspot.ph', password: 'demo', role: AppRole.staff, memberStoreIds: [1], storeGrants: {1: StoreGrant(inventory: true)}),
-      UserAccount(id: 5, name: 'Admin Reyes', email: 'admin@localspot.ph', password: 'demo', role: AppRole.admin),
-      UserAccount(id: 6, name: 'Lito Mercado', email: 'lito@localspot.ph', password: 'demo', role: AppRole.owner, ownedStoreIds: [6]),
-      UserAccount(id: 7, name: 'Bea Tan', email: 'bea@localspot.ph', password: 'demo', role: AppRole.owner, ownedStoreIds: [7]),
+      UserAccount(
+        id: 1,
+        name: 'Maria Santos',
+        email: 'maria@localspot.ph',
+        password: 'demo1234',
+        role: AppRole.customer,
+      ),
+      UserAccount(
+        id: 2,
+        name: 'Aling Nena',
+        email: 'nena@localspot.ph',
+        password: 'demo1234',
+        role: AppRole.owner,
+        ownedStoreIds: [1],
+      ),
+      UserAccount(
+        id: 3,
+        name: 'Mang Tonyo',
+        email: 'tonyo@localspot.ph',
+        password: 'demo1234',
+        role: AppRole.owner,
+        ownedStoreIds: [2],
+      ),
+      UserAccount(
+        id: 4,
+        name: 'Ana Cruz',
+        email: 'ana@localspot.ph',
+        password: 'demo1234',
+        role: AppRole.staff,
+        memberStoreIds: [1],
+        storeGrants: {1: StoreGrant(inventory: true)},
+      ),
+      UserAccount(
+        id: 5,
+        name: 'Admin Reyes',
+        email: 'admin@localspot.ph',
+        password: 'demo1234',
+        role: AppRole.admin,
+      ),
+      UserAccount(
+        id: 6,
+        name: 'Lito Mercado',
+        email: 'lito@localspot.ph',
+        password: 'demo1234',
+        role: AppRole.owner,
+        ownedStoreIds: [6],
+      ),
+      UserAccount(
+        id: 7,
+        name: 'Bea Tan',
+        email: 'bea@localspot.ph',
+        password: 'demo1234',
+        role: AppRole.owner,
+        ownedStoreIds: [7],
+      ),
     ]);
 
     stores.addAll([
@@ -1624,7 +2586,8 @@ class AppState extends ChangeNotifier {
         landmark: 'Beside the waiting shed near Aurora Blvd',
         schedule: 'Daily 6:00 AM – 10:00 PM',
         isMobile: false,
-        image: 'https://images.unsplash.com/photo-1604719312566-8912e9227c6a?auto=format&fit=crop&w=900&q=80',
+        image:
+            'https://images.unsplash.com/photo-1604719312566-8912e9227c6a?auto=format&fit=crop&w=900&q=80',
       ),
       Store(
         id: 2,
@@ -1640,7 +2603,8 @@ class AppState extends ChangeNotifier {
         landmark: 'Near the mango row, green tarpaulin',
         schedule: 'Tue–Sun 5:00 AM – 6:00 PM',
         isMobile: false,
-        image: 'https://images.unsplash.com/photo-1488459716781-31db52582fe9?auto=format&fit=crop&w=900&q=80',
+        image:
+            'https://images.unsplash.com/photo-1488459716781-31db52582fe9?auto=format&fit=crop&w=900&q=80',
       ),
       Store(
         id: 3,
@@ -1656,7 +2620,8 @@ class AppState extends ChangeNotifier {
         landmark: 'Across the jeepney stop',
         schedule: 'Open 24 hours',
         isMobile: false,
-        image: 'https://images.unsplash.com/photo-1604719311684-14b4bd8fda7c?auto=format&fit=crop&w=900&q=80',
+        image:
+            'https://images.unsplash.com/photo-1604719311684-14b4bd8fda7c?auto=format&fit=crop&w=900&q=80',
       ),
       Store(
         id: 4,
@@ -1673,7 +2638,8 @@ class AppState extends ChangeNotifier {
         schedule: 'Mon–Sat 6:00 AM – 11:00 AM',
         isMobile: true,
         locationMode: LocationMode.regular,
-        image: 'https://images.unsplash.com/photo-1540189549336-e6e99c3679fe?auto=format&fit=crop&w=900&q=80',
+        image:
+            'https://images.unsplash.com/photo-1540189549336-e6e99c3679fe?auto=format&fit=crop&w=900&q=80',
       ),
       Store(
         id: 6,
@@ -1689,7 +2655,8 @@ class AppState extends ChangeNotifier {
         landmark: 'Orange facade beside the pawnshop',
         schedule: 'Mon–Sat 7:30 AM – 7:00 PM',
         isMobile: false,
-        image: 'https://images.unsplash.com/photo-1504148455328-c376907d081c?auto=format&fit=crop&w=900&q=80',
+        image:
+            'https://images.unsplash.com/photo-1504148455328-c376907d081c?auto=format&fit=crop&w=900&q=80',
       ),
       Store(
         id: 7,
@@ -1705,7 +2672,8 @@ class AppState extends ChangeNotifier {
         landmark: 'Next to the phone repair alley',
         schedule: 'Daily 10:00 AM – 8:00 PM',
         isMobile: false,
-        image: 'https://images.unsplash.com/photo-1519389950473-47ba0277781c?auto=format&fit=crop&w=900&q=80',
+        image:
+            'https://images.unsplash.com/photo-1519389950473-47ba0277781c?auto=format&fit=crop&w=900&q=80',
       ),
       Store(
         id: 5,
@@ -1732,7 +2700,8 @@ class AppState extends ChangeNotifier {
         brand: '',
         packageSize: 'per kilo',
         aliases: ['mangga', 'indian mango', 'mango'],
-        image: 'https://images.unsplash.com/photo-1553279768-865429fa0078?auto=format&fit=crop&w=800&q=80',
+        image:
+            'https://images.unsplash.com/photo-1553279768-865429fa0078?auto=format&fit=crop&w=800&q=80',
         attributes: const {'variety': 'Carabao'},
       ),
       CatalogProduct(
@@ -1743,7 +2712,8 @@ class AppState extends ChangeNotifier {
         packageSize: '1 L bottle',
         aliases: ['mantika', 'vegetable oil'],
         barcode: '4807770123456',
-        image: 'https://images.unsplash.com/photo-1474979266404-7eaacbcd87c5?auto=format&fit=crop&w=800&q=80',
+        image:
+            'https://images.unsplash.com/photo-1474979266404-7eaacbcd87c5?auto=format&fit=crop&w=800&q=80',
       ),
       CatalogProduct(
         id: 3,
@@ -1752,7 +2722,8 @@ class AppState extends ChangeNotifier {
         brand: '',
         packageSize: 'per kilo',
         aliases: ['bigas', 'sinandomeng', 'rice'],
-        image: 'https://images.unsplash.com/photo-1586201375761-83865001e31c?auto=format&fit=crop&w=800&q=80',
+        image:
+            'https://images.unsplash.com/photo-1586201375761-83865001e31c?auto=format&fit=crop&w=800&q=80',
       ),
       CatalogProduct(
         id: 4,
@@ -1761,7 +2732,8 @@ class AppState extends ChangeNotifier {
         brand: '',
         packageSize: 'per piece',
         aliases: ['pandesal', 'bread'],
-        image: 'https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=800&q=80',
+        image:
+            'https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=800&q=80',
       ),
       CatalogProduct(
         id: 5,
@@ -1770,7 +2742,8 @@ class AppState extends ChangeNotifier {
         brand: '',
         packageSize: 'per kilo',
         aliases: ['saging', 'banana', 'lakatan'],
-        image: 'https://images.unsplash.com/photo-1571771894821-ce9b6c11b08e?auto=format&fit=crop&w=800&q=80',
+        image:
+            'https://images.unsplash.com/photo-1571771894821-ce9b6c11b08e?auto=format&fit=crop&w=800&q=80',
       ),
       CatalogProduct(
         id: 6,
@@ -1780,7 +2753,8 @@ class AppState extends ChangeNotifier {
         packageSize: '155 g can',
         aliases: ['sardinas', 'sardines'],
         barcode: '4800015123456',
-        image: 'https://images.unsplash.com/photo-1598515214211-89d3c73ae83b?auto=format&fit=crop&w=800&q=80',
+        image:
+            'https://images.unsplash.com/photo-1598515214211-89d3c73ae83b?auto=format&fit=crop&w=800&q=80',
       ),
       CatalogProduct(
         id: 7,
@@ -1789,7 +2763,8 @@ class AppState extends ChangeNotifier {
         brand: '',
         packageSize: 'per cup',
         aliases: ['taho', 'soy pudding'],
-        image: 'https://images.unsplash.com/photo-1569718212165-3a8278d5f624?auto=format&fit=crop&w=800&q=80',
+        image:
+            'https://images.unsplash.com/photo-1569718212165-3a8278d5f624?auto=format&fit=crop&w=800&q=80',
       ),
       CatalogProduct(
         id: 8,
@@ -1798,7 +2773,8 @@ class AppState extends ChangeNotifier {
         brand: 'Lucky Me',
         packageSize: '55 g pack',
         aliases: ['pancit canton', 'noodles', 'lucky me'],
-        image: 'https://images.unsplash.com/photo-1612929635977-2bddc1c0c0b0?auto=format&fit=crop&w=800&q=80',
+        image:
+            'https://images.unsplash.com/photo-1612929635977-2bddc1c0c0b0?auto=format&fit=crop&w=800&q=80',
       ),
       CatalogProduct(
         id: 9,
@@ -1808,7 +2784,8 @@ class AppState extends ChangeNotifier {
         packageSize: '16 oz',
         aliases: ['martilyo', 'hammer'],
         barcode: '4808880123456',
-        image: 'https://images.unsplash.com/photo-1586864387963-0a911f4c0c1d?auto=format&fit=crop&w=800&q=80',
+        image:
+            'https://images.unsplash.com/photo-1586864387963-0a911f4c0c1d?auto=format&fit=crop&w=800&q=80',
         attributes: const {'material': 'steel'},
       ),
       CatalogProduct(
@@ -1819,8 +2796,13 @@ class AppState extends ChangeNotifier {
         packageSize: '1 m',
         aliases: ['type c cable', 'charger cable', 'usb c'],
         barcode: '4809990123456',
-        image: 'https://images.unsplash.com/photo-1583863788434-e58a36330cf0?auto=format&fit=crop&w=800&q=80',
-        attributes: const {'model': 'USB-C', 'capacity': '1 m', 'compatibility': 'USB-C Samsung Type-C phones'},
+        image:
+            'https://images.unsplash.com/photo-1583863788434-e58a36330cf0?auto=format&fit=crop&w=800&q=80',
+        attributes: const {
+          'model': 'USB-C',
+          'capacity': '1 m',
+          'compatibility': 'USB-C Samsung Type-C phones',
+        },
       ),
       CatalogProduct(
         id: 11,
@@ -1829,7 +2811,8 @@ class AppState extends ChangeNotifier {
         brand: 'Havaianas',
         packageSize: 'pair',
         aliases: ['tsinelas', 'slippers', 'flip flops'],
-        image: 'https://images.unsplash.com/photo-1603487742131-4160ec999275?auto=format&fit=crop&w=800&q=80',
+        image:
+            'https://images.unsplash.com/photo-1603487742131-4160ec999275?auto=format&fit=crop&w=800&q=80',
       ),
       CatalogProduct(
         id: 12,
@@ -1839,27 +2822,163 @@ class AppState extends ChangeNotifier {
         packageSize: '1 L bottle',
         aliases: ['motor oil', 'engine oil'],
         barcode: '4811110123456',
-        image: 'https://images.unsplash.com/photo-1486262715619-67b85e0b08d3?auto=format&fit=crop&w=800&q=80',
+        image:
+            'https://images.unsplash.com/photo-1486262715619-67b85e0b08d3?auto=format&fit=crop&w=800&q=80',
       ),
     ]);
 
     final now = DateTime.now();
     listings.addAll([
-      StoreListing(id: 1, storeId: 1, productId: 2, price: 98, unit: 'bottle', quantity: 8, availability: Availability.inStock, lastConfirmed: now.subtract(const Duration(hours: 3))),
-      StoreListing(id: 2, storeId: 1, productId: 3, price: 56, unit: 'kilo', quantity: 20, availability: Availability.inStock, lastConfirmed: now.subtract(const Duration(hours: 5))),
-      StoreListing(id: 3, storeId: 1, productId: 4, price: 4, unit: 'piece', quantity: 40, availability: Availability.low, lastConfirmed: now.subtract(const Duration(hours: 1))),
-      StoreListing(id: 4, storeId: 1, productId: 6, price: 28, unit: 'can', quantity: 15, availability: Availability.inStock, lastConfirmed: now.subtract(const Duration(hours: 8))),
-      StoreListing(id: 5, storeId: 1, productId: 8, price: 16, unit: 'pack', quantity: 24, availability: Availability.inStock, lastConfirmed: now.subtract(const Duration(minutes: 40))),
-      StoreListing(id: 6, storeId: 2, productId: 1, price: 180, unit: 'kilo', quantity: 12, availability: Availability.inStock, lastConfirmed: now.subtract(const Duration(hours: 2))),
-      StoreListing(id: 7, storeId: 2, productId: 5, price: 70, unit: 'kilo', quantity: 18, availability: Availability.inStock, lastConfirmed: now.subtract(const Duration(hours: 2))),
-      StoreListing(id: 8, storeId: 3, productId: 2, price: 112, unit: 'bottle', quantity: 30, availability: Availability.inStock, lastConfirmed: now.subtract(const Duration(hours: 12))),
-      StoreListing(id: 9, storeId: 3, productId: 6, price: 32, unit: 'can', quantity: 40, availability: Availability.inStock, lastConfirmed: now.subtract(const Duration(hours: 12))),
-      StoreListing(id: 10, storeId: 3, productId: 8, price: 18, unit: 'pack', quantity: 50, availability: Availability.inStock, lastConfirmed: now.subtract(const Duration(hours: 6))),
-      StoreListing(id: 11, storeId: 4, productId: 7, price: 25, unit: 'cup', quantity: 20, availability: Availability.inStock, lastConfirmed: now.subtract(const Duration(hours: 1))),
-      StoreListing(id: 12, storeId: 6, productId: 9, price: 285, unit: 'piece', quantity: 14, availability: Availability.inStock, lastConfirmed: now.subtract(const Duration(hours: 4))),
-      StoreListing(id: 13, storeId: 7, productId: 10, price: 249, unit: 'piece', quantity: 22, availability: Availability.inStock, lastConfirmed: now.subtract(const Duration(hours: 6))),
-      StoreListing(id: 14, storeId: 6, productId: 11, price: 120, unit: 'pair', quantity: 18, availability: Availability.inStock, lastConfirmed: now.subtract(const Duration(hours: 9))),
-      StoreListing(id: 15, storeId: 6, productId: 12, price: 390, unit: 'bottle', quantity: 7, availability: Availability.low, lastConfirmed: now.subtract(const Duration(hours: 2))),
+      StoreListing(
+        id: 1,
+        storeId: 1,
+        productId: 2,
+        price: 98,
+        unit: 'bottle',
+        quantity: 8,
+        availability: Availability.inStock,
+        lastConfirmed: now.subtract(const Duration(hours: 3)),
+      ),
+      StoreListing(
+        id: 2,
+        storeId: 1,
+        productId: 3,
+        price: 56,
+        unit: 'kilo',
+        quantity: 20,
+        availability: Availability.inStock,
+        lastConfirmed: now.subtract(const Duration(hours: 5)),
+      ),
+      StoreListing(
+        id: 3,
+        storeId: 1,
+        productId: 4,
+        price: 4,
+        unit: 'piece',
+        quantity: 40,
+        availability: Availability.low,
+        lastConfirmed: now.subtract(const Duration(hours: 1)),
+      ),
+      StoreListing(
+        id: 4,
+        storeId: 1,
+        productId: 6,
+        price: 28,
+        unit: 'can',
+        quantity: 15,
+        availability: Availability.inStock,
+        lastConfirmed: now.subtract(const Duration(hours: 8)),
+      ),
+      StoreListing(
+        id: 5,
+        storeId: 1,
+        productId: 8,
+        price: 16,
+        unit: 'pack',
+        quantity: 24,
+        availability: Availability.inStock,
+        lastConfirmed: now.subtract(const Duration(minutes: 40)),
+      ),
+      StoreListing(
+        id: 6,
+        storeId: 2,
+        productId: 1,
+        price: 180,
+        unit: 'kilo',
+        quantity: 12,
+        availability: Availability.inStock,
+        lastConfirmed: now.subtract(const Duration(hours: 2)),
+      ),
+      StoreListing(
+        id: 7,
+        storeId: 2,
+        productId: 5,
+        price: 70,
+        unit: 'kilo',
+        quantity: 18,
+        availability: Availability.inStock,
+        lastConfirmed: now.subtract(const Duration(hours: 2)),
+      ),
+      StoreListing(
+        id: 8,
+        storeId: 3,
+        productId: 2,
+        price: 112,
+        unit: 'bottle',
+        quantity: 30,
+        availability: Availability.inStock,
+        lastConfirmed: now.subtract(const Duration(hours: 12)),
+      ),
+      StoreListing(
+        id: 9,
+        storeId: 3,
+        productId: 6,
+        price: 32,
+        unit: 'can',
+        quantity: 40,
+        availability: Availability.inStock,
+        lastConfirmed: now.subtract(const Duration(hours: 12)),
+      ),
+      StoreListing(
+        id: 10,
+        storeId: 3,
+        productId: 8,
+        price: 18,
+        unit: 'pack',
+        quantity: 50,
+        availability: Availability.inStock,
+        lastConfirmed: now.subtract(const Duration(hours: 6)),
+      ),
+      StoreListing(
+        id: 11,
+        storeId: 4,
+        productId: 7,
+        price: 25,
+        unit: 'cup',
+        quantity: 20,
+        availability: Availability.inStock,
+        lastConfirmed: now.subtract(const Duration(hours: 1)),
+      ),
+      StoreListing(
+        id: 12,
+        storeId: 6,
+        productId: 9,
+        price: 285,
+        unit: 'piece',
+        quantity: 14,
+        availability: Availability.inStock,
+        lastConfirmed: now.subtract(const Duration(hours: 4)),
+      ),
+      StoreListing(
+        id: 13,
+        storeId: 7,
+        productId: 10,
+        price: 249,
+        unit: 'piece',
+        quantity: 22,
+        availability: Availability.inStock,
+        lastConfirmed: now.subtract(const Duration(hours: 6)),
+      ),
+      StoreListing(
+        id: 14,
+        storeId: 6,
+        productId: 11,
+        price: 120,
+        unit: 'pair',
+        quantity: 18,
+        availability: Availability.inStock,
+        lastConfirmed: now.subtract(const Duration(hours: 9)),
+      ),
+      StoreListing(
+        id: 15,
+        storeId: 6,
+        productId: 12,
+        price: 390,
+        unit: 'bottle',
+        quantity: 7,
+        availability: Availability.low,
+        lastConfirmed: now.subtract(const Duration(hours: 2)),
+      ),
     ]);
 
     promotions.addAll([
@@ -1885,42 +3004,49 @@ class AppState extends ChangeNotifier {
       ),
     ]);
 
-    tours.add(StoreTour(
-      id: 1,
-      storeId: 1,
-      title: 'Walk through Aling Nena’s',
-      status: TourStatus.published,
-      nodes: [
-        TourNode(
-          id: 1,
-          title: 'Storefront',
-          image: 'https://images.unsplash.com/photo-1604719312566-8912e9227c6a?auto=format&fit=crop&w=1200&q=80',
-          connections: [2],
-          ownerReviewed: true,
-        ),
-        TourNode(
-          id: 2,
-          title: 'Grocery shelf',
-          image: 'https://images.unsplash.com/photo-1578916171728-46686eac8d58?auto=format&fit=crop&w=1200&q=80',
-          connections: [1, 3],
-          ownerReviewed: true,
-        ),
-        TourNode(
-          id: 3,
-          title: 'Counter',
-          image: 'https://images.unsplash.com/photo-1534723452862-4c874018d66d?auto=format&fit=crop&w=1200&q=80',
-          connections: [2],
-          ownerReviewed: true,
-        ),
-      ],
-    ));
+    tours.add(
+      StoreTour(
+        id: 1,
+        storeId: 1,
+        title: 'Walk through Aling Nena’s',
+        status: TourStatus.published,
+        nodes: [
+          TourNode(
+            id: 1,
+            title: 'Storefront',
+            image:
+                'https://images.unsplash.com/photo-1604719312566-8912e9227c6a?auto=format&fit=crop&w=1200&q=80',
+            connections: [2],
+            ownerReviewed: true,
+          ),
+          TourNode(
+            id: 2,
+            title: 'Grocery shelf',
+            image:
+                'https://images.unsplash.com/photo-1578916171728-46686eac8d58?auto=format&fit=crop&w=1200&q=80',
+            connections: [1, 3],
+            ownerReviewed: true,
+          ),
+          TourNode(
+            id: 3,
+            title: 'Counter',
+            image:
+                'https://images.unsplash.com/photo-1534723452862-4c874018d66d?auto=format&fit=crop&w=1200&q=80',
+            connections: [2],
+            ownerReviewed: true,
+          ),
+        ],
+      ),
+    );
 
-    reports.add(ReportItem(
-      id: 1,
-      userId: 1,
-      target: 'QuickGo Mini Mart · cooking oil price',
-      reason: 'Listed ₱112 but the shelf tag yesterday was ₱108.',
-    ));
+    reports.add(
+      ReportItem(
+        id: 1,
+        userId: 1,
+        target: 'QuickGo Mini Mart · cooking oil price',
+        reason: 'Listed ₱112 but the shelf tag yesterday was ₱108.',
+      ),
+    );
 
     favoriteStoreIds.add(1);
     favoriteProductIds.add(1);
@@ -1934,12 +3060,24 @@ class RecognitionSuggestion {
     this.confidence, {
     this.unknownFields = const ['price', 'stock'],
     this.ocrText,
+    this.suggestedName,
+    this.suggestedCategory,
+    this.suggestedBrand,
+    this.suggestedPackageSize,
+    this.suggestedAttributes = const {},
+    this.isAiGenerated = false,
   });
   final CatalogProduct? product;
   final String label;
   final double confidence;
   final List<String> unknownFields;
   final String? ocrText;
+  final String? suggestedName;
+  final String? suggestedCategory;
+  final String? suggestedBrand;
+  final String? suggestedPackageSize;
+  final Map<String, String> suggestedAttributes;
+  final bool isAiGenerated;
 }
 
 class RecognizedObject {
@@ -1949,7 +3087,12 @@ class RecognizedObject {
 }
 
 class VisualSearchResult {
-  VisualSearchResult({required this.suggestions, required this.hits, required this.uncertain, this.objects = const []});
+  VisualSearchResult({
+    required this.suggestions,
+    required this.hits,
+    required this.uncertain,
+    this.objects = const [],
+  });
   final List<RecognitionSuggestion> suggestions;
   final List<SearchHit> hits;
   final bool uncertain;

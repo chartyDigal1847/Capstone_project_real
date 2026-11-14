@@ -1,4 +1,6 @@
-import 'package:flutter/material.dart';
+import 'dart:io';
+
+import 'package:material_ui/material_ui.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 
 import 'mapbox_config.dart';
@@ -16,21 +18,24 @@ void main() {
   if (hasMapboxPublicToken) {
     MapboxOptions.setAccessToken(mapboxAccessToken);
   }
-  runApp(const LocalSpotRoot());
+  runApp(const LocalSpotRoot(enableDemoData: false));
 }
 
 class LocalSpotRoot extends StatefulWidget {
-  const LocalSpotRoot({super.key});
+  const LocalSpotRoot({super.key, this.enableDemoData = true});
+  final bool enableDemoData;
+
   @override
   State<LocalSpotRoot> createState() => _LocalSpotRootState();
 }
 
 class _LocalSpotRootState extends State<LocalSpotRoot> {
-  final state = AppState();
+  late final AppState state;
 
   @override
   void initState() {
     super.initState();
+    state = AppState(seedDemoData: widget.enableDemoData);
     state.bootstrap();
   }
 
@@ -84,6 +89,59 @@ class _LocalSpotShellState extends State<LocalSpotShell> {
   Store? store;
   StoreTour? tour;
   String reportTarget = '';
+
+  // For "press back again to exit" behaviour on the root tab.
+  DateTime? _lastBackPress;
+
+  /// Returns true if the back event was consumed (stay in app),
+  /// false if the app should exit.
+  bool _handleBack() {
+    final app = AppScope.of(context);
+
+    // ── Auth screens ──────────────────────────────────────────────
+    if (!app.signedIn) {
+      if (authView != AuthView.welcome) {
+        setState(() => authView = AuthView.welcome);
+        return true;
+      }
+      return false; // let the system exit at the welcome screen
+    }
+
+    // ── Nested overlays: route → store, tour → store ─────────────
+    if (overlay == OverlayView.route || overlay == OverlayView.tour) {
+      setState(() => overlay = OverlayView.store);
+      return true;
+    }
+
+    // ── Any other overlay → close it ─────────────────────────────
+    if (overlay != OverlayView.none) {
+      setState(() => overlay = OverlayView.none);
+      return true;
+    }
+
+    // ── On a non-home tab → go to tab 0 ──────────────────────────
+    if (tab != 0) {
+      setState(() => tab = 0);
+      return true;
+    }
+
+    // ── Already at root (tab 0, no overlay) ──────────────────────
+    // Show a "press back again to exit" snackbar.
+    final now = DateTime.now();
+    if (_lastBackPress == null ||
+        now.difference(_lastBackPress!) > const Duration(seconds: 2)) {
+      _lastBackPress = now;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Press back again to exit'),
+          duration: Duration(seconds: 2),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return true; // consumed — don't exit yet
+    }
+    return false; // second press within 2 s → exit
+  }
 
   void _openProduct(CatalogProduct value) => setState(() {
     product = value;
@@ -162,7 +220,6 @@ class _LocalSpotShellState extends State<LocalSpotShell> {
         ),
         OverlayView.location => LocationPage(
           onBack: () => setState(() => overlay = OverlayView.none),
-          onStore: _openStore,
         ),
         OverlayView.report => ReportPage(
           target: reportTarget,
@@ -208,61 +265,72 @@ class _LocalSpotShellState extends State<LocalSpotShell> {
     final destinations = _destinations(app.role);
     if (tab >= destinations.length) tab = 0;
 
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final wide = constraints.maxWidth > 700;
-        return Scaffold(
-          body: SizedBox.expand(
-            child: Align(
-              alignment: Alignment.topCenter,
-              child: SizedBox(
-                width: wide ? 520 : constraints.maxWidth,
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: ivory,
-                    boxShadow:
-                        wide
-                            ? [
-                              BoxShadow(
-                                color: Colors.black.withValues(alpha: .08),
-                                blurRadius: 30,
-                              ),
-                            ]
-                            : null,
-                  ),
-                  child: Material(
-                    color: ivory,
-                    child: SafeArea(bottom: !showNav, child: body),
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        final consumed = _handleBack();
+        if (!consumed) {
+          exit(0);
+        }
+      },
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final wide = constraints.maxWidth > 700;
+          return Scaffold(
+            body: SizedBox.expand(
+              child: Align(
+                alignment: Alignment.topCenter,
+                child: SizedBox(
+                  width: wide ? 520 : constraints.maxWidth,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: ivory,
+                      boxShadow:
+                          wide
+                              ? [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: .08),
+                                  blurRadius: 30,
+                                ),
+                              ]
+                              : null,
+                    ),
+                    child: Material(
+                      color: ivory,
+                      child: SafeArea(bottom: !showNav, child: body),
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
-          bottomNavigationBar:
-              showNav
-                  ? SizedBox(
-                    height: 72,
-                    child: Center(
-                      child: Container(
-                        width: wide ? 520 : constraints.maxWidth,
-                        decoration: const BoxDecoration(
-                          color: paper,
-                          border: Border(top: BorderSide(color: line)),
-                        ),
-                        child: NavigationBar(
-                          height: 72,
-                          backgroundColor: paper,
-                          indicatorColor: const Color(0xFFDCE6D7),
-                          selectedIndex: tab,
-                          onDestinationSelected: (i) => setState(() => tab = i),
-                          destinations: destinations,
+            bottomNavigationBar:
+                showNav
+                    ? SizedBox(
+                      height: 72,
+                      child: Center(
+                        child: Container(
+                          width: wide ? 520 : constraints.maxWidth,
+                          decoration: const BoxDecoration(
+                            color: paper,
+                            border: Border(top: BorderSide(color: line)),
+                          ),
+                          child: NavigationBar(
+                            height: 72,
+                            backgroundColor: paper,
+                            indicatorColor: const Color(0xFFDCE6D7),
+                            selectedIndex: tab,
+                            onDestinationSelected:
+                                (i) => setState(() => tab = i),
+                            destinations: destinations,
+                          ),
                         ),
                       ),
-                    ),
-                  )
-                  : null,
-        );
-      },
+                    )
+                    : null,
+          );
+        },
+      ),
     );
   }
 

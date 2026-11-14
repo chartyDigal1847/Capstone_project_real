@@ -1,0 +1,67 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userDoc() {
+      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isAdmin() {
+      return signedIn() && userDoc().role == 'admin';
+    }
+
+    function validImage(maxBytes) {
+      return request.resource.size > 0 &&
+        request.resource.size <= maxBytes &&
+        request.resource.contentType.matches('image/(jpeg|png|webp)');
+    }
+
+    match /products/quarantine/{uid}/{allPaths=**} {
+      // UID-scoped product uploads are private quarantine objects, not catalog media.
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow write: if signedIn() && request.auth.uid == uid &&
+        (request.resource == null || validImage(8 * 1024 * 1024));
+    }
+
+    match /products/public/{uid}/{allPaths=**} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /tours/originals/{uid}/{allPaths=**} {
+      // UID-scoped quarantine avoids exposing originals and supports Firestore's opaque store IDs.
+      allow read: if (signedIn() && request.auth.uid == uid) || isAdmin();
+      allow write: if ((signedIn() && request.auth.uid == uid) || isAdmin()) &&
+        (request.resource == null || validImage(50 * 1024 * 1024));
+    }
+
+    match /stores/quarantine/{uid}/{allPaths=**} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow write: if signedIn() && request.auth.uid == uid &&
+        (request.resource == null || validImage(8 * 1024 * 1024));
+    }
+
+    match /stores/processed/{uid}/{allPaths=**} {
+      allow read: if (signedIn() && request.auth.uid == uid) || isAdmin();
+      allow write: if false;
+    }
+
+    match /stores/public/{storeId}/{allPaths=**} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /tours/public/{storeId}/{allPaths=**} {
+      // Public derivatives are readable without an account and written by trusted processing only.
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

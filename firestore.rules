@@ -1,0 +1,201 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: Firebase Auth UID
+    // Fields:
+    //   - numericId: number (required, immutable)
+    //   - name: string (1-80)
+    //   - email: string (email)
+    //   - role: string customer|owner|staff|admin
+    //   - ownedStoreIds: list<number> (<=20)
+    //   - memberStoreIds: list<number> (<=20)
+    //   - storeGrants: list<map> (<=20)
+    //
+    // Collection: stores
+    // Document ID: auto id (also stored as docId)
+    // Fields: numericId, ownerId, ownerUid, name, type, status, lat, lng,
+    //   geohash, barangay, city, address, landmark, schedule, is_mobile, image,
+    //   verification_note, location_mode, location_updated_at
+    //
+    // Collection: products, listings, promotions, tours, storeMembers,
+    //   favorites, reports, feedback, vendorSessions, stockMovements, auditLogs
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function userPath() {
+      return /databases/$(database)/documents/users/$(request.auth.uid);
+    }
+
+    function currentUser() {
+      return get(userPath()).data;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && exists(userPath()) && currentUser().role == 'admin';
+    }
+
+    function validEmail(value) {
+      return value is string && value.size() <= 120 && value.matches('^[^@]+@[^@]+\\.[^@]+$');
+    }
+
+    function validString(value, minLen, maxLen) {
+      return value is string && value.size() >= minLen && value.size() <= maxLen;
+    }
+
+    function validRole(value) {
+      return value in ['customer', 'owner', 'staff', 'admin'];
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasOnly([
+          'numericId', 'name', 'email', 'role', 'ownedStoreIds', 'memberStoreIds', 'storeGrants'
+        ]) &&
+        data.numericId is number &&
+        validString(data.name, 1, 80) &&
+        validEmail(data.email) &&
+        validRole(data.role) &&
+        data.ownedStoreIds is list && data.ownedStoreIds.size() <= 20 &&
+        data.memberStoreIds is list && data.memberStoreIds.size() <= 20 &&
+        data.storeGrants is list && data.storeGrants.size() <= 20;
+    }
+
+    function ownsStoreNumeric(storeNumericId) {
+      return isAuthenticated() &&
+        exists(userPath()) &&
+        currentUser().ownedStoreIds.hasAny([storeNumericId]);
+    }
+
+    match /users/{userId} {
+      allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+      // Customer profiles are initialized by the Auth trigger.
+      allow create: if false;
+      allow update: if isAuthenticated() && isValidUser(request.resource.data) &&
+        request.resource.data.numericId == resource.data.numericId &&
+        request.resource.data.email == resource.data.email &&
+        (
+          (request.auth.uid == userId &&
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name']) &&
+            request.resource.data.role == resource.data.role &&
+            request.resource.data.ownedStoreIds == resource.data.ownedStoreIds &&
+            request.resource.data.memberStoreIds == resource.data.memberStoreIds &&
+            request.resource.data.storeGrants == resource.data.storeGrants) ||
+          isAdmin()
+        );
+      allow delete: if isAdmin();
+    }
+
+    match /stores/{storeId} {
+      // Public catalog reads are approved only; owners/admins can inspect applications.
+      allow read: if resource.data.status == 'approved' ||
+        (isAuthenticated() && resource.data.ownerUid == request.auth.uid) ||
+        isAdmin();
+      // Applications, edits, review and deletion use validated Functions.
+      allow create, update, delete: if false;
+    }
+
+    match /products/{id} {
+      // Products are publicly readable.
+      allow read: if true;
+      // Product catalog changes are batched with listings by Cloud Functions.
+      allow create, update, delete: if false;
+    }
+
+    match /listings/{id} {
+      // Public read — needed for catalog queries.
+      allow read: if true;
+      // Listing mutations and stock history are handled by Cloud Functions.
+      allow create, update, delete: if false;
+    }
+
+    match /promotions/{id} {
+      // Public catalog reads are approved only; owners/admins can inspect moderation state.
+      allow read: if resource.data.status == 'approved' ||
+        (isAuthenticated() && resource.data.ownerUid == request.auth.uid) ||
+        isAdmin();
+      // Submission and moderation are authorized in Cloud Functions.
+      allow create, update, delete: if false;
+    }
+
+    match /tours/{id} {
+      // Public catalog reads only published tours; owners may query their own drafts.
+      allow read: if resource.data.status == 'published' ||
+        (isAuthenticated() && resource.data.ownerUid == request.auth.uid) ||
+        isAdmin();
+      // Draft structure is mutated by a validated callable; privacy/review fields are server-owned.
+      allow create, update, delete: if false;
+    }
+
+    match /storeMembers/{id} {
+      allow read: if isAuthenticated() &&
+        (resource.data.userUid == request.auth.uid || ownsStoreNumeric(resource.data.storeId) || isAdmin());
+      allow create, update, delete: if false;
+    }
+
+    match /favorites/{id} {
+      allow read, delete: if isAuthenticated() && resource.data.uid == request.auth.uid;
+      allow create: if isAuthenticated() &&
+        request.resource.data.uid == request.auth.uid &&
+        request.resource.data.keys().hasOnly(['uid', 'favoritable_type', 'favoritable_id']) &&
+        request.resource.data.favoritable_type in ['store', 'product'] &&
+        request.resource.data.favoritable_id is int &&
+        request.resource.data.favoritable_id > 0;
+    }
+
+    match /reports/{id} {
+      allow read: if isAdmin();
+      // Submission is rate-limited and attributed by a callable function.
+      allow create, update, delete: if false;
+    }
+
+    match /feedback/{id} {
+      allow read: if isAdmin() || (isAuthenticated() && resource.data.uid == request.auth.uid);
+      // Submission is rate-limited and attributed by a callable function.
+      allow create: if false;
+      allow update, delete: if false;
+    }
+
+    match /vendorSessions/{id} {
+      // Public collection listing goes through an App Check callable so expiry
+      // is evaluated at server time. Direct document reads expose only active
+      // coordinates or the caller's own session.
+      allow get: if isAdmin() ||
+        (isAuthenticated() && resource.data.startedByUid == request.auth.uid) ||
+        (resource.data.ended_at == null &&
+          resource.data.expiresAt is timestamp &&
+          resource.data.expiresAt > request.time);
+      allow list: if isAdmin();
+      // Session lifecycle and authorization are enforced by Cloud Functions.
+      allow create, update, delete: if false;
+    }
+
+    match /stockMovements/{id} {
+      // Inventory history is fetched through a callable that checks store grants.
+      allow read: if false;
+      allow create, update, delete: if false;
+    }
+
+    match /auditLogs/{id} {
+      allow read: if isAdmin();
+      allow create, update, delete: if false;
+    }
+
+    match /mediaAssets/{id} {
+      allow read: if isAuthenticated() && resource.data.uid == request.auth.uid;
+      allow create, update, delete: if false;
+    }
+
+    match /systemMetadata/searchPrefixIndex {
+      // This switch only enables indexed product reads after the backfill is complete.
+      allow read: if true;
+      allow write: if false;
+    }
+  }
+}

@@ -1,16 +1,17 @@
 import 'dart:convert';
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../api.dart';
 import '../map_view.dart';
 import '../models.dart';
 import '../state.dart';
 import '../theme.dart';
 import '../widgets.dart';
 
-class ProductDetailPage extends StatelessWidget {
+class ProductDetailPage extends StatefulWidget {
   const ProductDetailPage({
     super.key,
     required this.product,
@@ -22,16 +23,90 @@ class ProductDetailPage extends StatelessWidget {
   final ValueChanged<Store> onStore;
 
   @override
+  State<ProductDetailPage> createState() => _ProductDetailPageState();
+}
+
+class _ProductDetailPageState extends State<ProductDetailPage> {
+  List<SearchHit>? _remoteHits;
+  bool _loading = false;
+  AppState? _app;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _app = AppScope.of(context);
+    if (_remoteHits == null && !_loading) _loadRemote();
+  }
+
+  @override
+  void dispose() {
+    _app?.cancelSearch();
+    super.dispose();
+  }
+
+  Future<void> _loadRemote() async {
+    final app = AppScope.of(context);
+    if (!app.apiOnline) return;
+    setState(() => _loading = true);
+    try {
+      final envelope = await app.catalogRepo.searchListings({
+        'q': widget.product.name,
+        'lat': app.searchLat.toString(),
+        'lng': app.searchLng.toString(),
+        'radius_km': app.radiusKm.toString(),
+      });
+      if (!mounted) return;
+      final rows = envelope['data'];
+      if (rows is List) {
+        final hits = <SearchHit>[];
+        for (final row in rows) {
+          try {
+            final r = Map<String, dynamic>.from(row as Map);
+            final p = productFromJson(
+              Map<String, dynamic>.from(r['product'] as Map),
+            );
+            // Only show results for this exact product.
+            if (p.id != widget.product.id &&
+                p.name.toLowerCase() != widget.product.name.toLowerCase()) {
+              continue;
+            }
+            hits.add(
+              SearchHit(
+                listing: listingFromJson(
+                  Map<String, dynamic>.from(r['listing'] as Map),
+                ),
+                store: storeFromJson(
+                  Map<String, dynamic>.from(r['store'] as Map),
+                ),
+                product: p,
+                distanceKm: (r['distance_km'] as num?)?.toDouble() ?? 0,
+                matchType: SearchMatchType.exact,
+              ),
+            );
+          } catch (_) {}
+        }
+        setState(() {
+          _remoteHits = hits;
+          _loading = false;
+        });
+        return;
+      }
+    } catch (_) {}
+    if (mounted) setState(() => _loading = false);
+  }
+
+  @override
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
-    final hits = app.listingsForProduct(product.id);
-    final saved = app.favoriteProductIds.contains(product.id);
+    final localHits = app.listingsForProduct(widget.product.id);
+    final hits = _remoteHits ?? localHits;
+    final saved = app.favoriteProductIds.contains(widget.product.id);
     return ListView(
       children: [
         Stack(
           children: [
             NetworkPhoto(
-              product.image,
+              widget.product.image,
               height: 240,
               width: double.infinity,
               radius: 0,
@@ -40,7 +115,7 @@ class ProductDetailPage extends StatelessWidget {
               top: 12,
               left: 8,
               child: IconButton.filledTonal(
-                onPressed: onBack,
+                onPressed: widget.onBack,
                 icon: const Icon(Icons.arrow_back),
               ),
             ),
@@ -48,7 +123,7 @@ class ProductDetailPage extends StatelessWidget {
               top: 12,
               right: 8,
               child: IconButton.filledTonal(
-                onPressed: () => app.toggleFavoriteProduct(product.id),
+                onPressed: () => app.toggleFavoriteProduct(widget.product.id),
                 icon: Icon(saved ? Icons.favorite : Icons.favorite_border),
               ),
             ),
@@ -63,25 +138,28 @@ class ProductDetailPage extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Eyebrow(product.category.toUpperCase()),
+                    Eyebrow(widget.product.category.toUpperCase()),
                     const SizedBox(height: 6),
                     Text(
-                      product.name,
+                      widget.product.name,
                       style: const TextStyle(
                         fontFamily: 'Georgia',
                         fontSize: 28,
                         height: 1.1,
                       ),
                     ),
-                    if (product.brand.isNotEmpty)
-                      Text(product.brand, style: const TextStyle(color: taupe)),
+                    if (widget.product.brand.isNotEmpty)
+                      Text(
+                        widget.product.brand,
+                        style: const TextStyle(color: taupe),
+                      ),
                     Text(
-                      product.packageSize,
+                      widget.product.packageSize,
                       style: const TextStyle(fontSize: 13),
                     ),
-                    if (product.attributes.isNotEmpty) ...[
+                    if (widget.product.attributes.isNotEmpty) ...[
                       const SizedBox(height: 8),
-                      for (final entry in product.attributes.entries)
+                      for (final entry in widget.product.attributes.entries)
                         Text(
                           '${entry.key}: ${entry.value}',
                           style: const TextStyle(fontSize: 12, color: taupe),
@@ -89,7 +167,7 @@ class ProductDetailPage extends StatelessWidget {
                     ],
                     const SizedBox(height: 10),
                     Text(
-                      'Also searched as: ${product.aliases.join(', ')}',
+                      'Also searched as: ${widget.product.aliases.join(', ')}',
                       style: const TextStyle(
                         color: taupe,
                         fontSize: 11,
@@ -100,12 +178,30 @@ class ProductDetailPage extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 18),
-              const Text(
-                'Participating sellers',
-                style: TextStyle(fontFamily: 'Georgia', fontSize: 22),
+              Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      'Participating sellers',
+                      style: TextStyle(fontFamily: 'Georgia', fontSize: 22),
+                    ),
+                  ),
+                  if (_loading)
+                    const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  if (!_loading && app.apiOnline)
+                    IconButton(
+                      icon: const Icon(Icons.refresh, size: 20),
+                      tooltip: 'Refresh sellers',
+                      onPressed: _loadRemote,
+                    ),
+                ],
               ),
               const SizedBox(height: 8),
-              if (hits.isEmpty)
+              if (hits.isEmpty && !_loading)
                 const EmptyNote(
                   'No approved nearby store has listed this product yet.',
                   icon: Icons.storefront_outlined,
@@ -115,24 +211,47 @@ class ProductDetailPage extends StatelessWidget {
                   (hit) => Padding(
                     padding: const EdgeInsets.only(bottom: 10),
                     child: SoftCard(
-                      onTap: () => onStore(hit.store),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                      onTap: () => widget.onStore(hit.store),
+                      child: Row(
                         children: [
-                          Text(
-                            hit.store.name,
-                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          NetworkPhoto(
+                            hit.store.image,
+                            width: 60,
+                            height: 60,
+                            radius: 10,
                           ),
-                          Text(
-                            '${hit.store.type.label} · ${hit.distanceKm.toStringAsFixed(1)} km',
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  hit.store.name,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                Text(
+                                  '${hit.store.type.label} · ${hit.distanceKm.toStringAsFixed(1)} km',
+                                  style: const TextStyle(
+                                    color: taupe,
+                                    fontSize: 11,
+                                  ),
+                                ),
+                                Text(
+                                  '${peso(hit.listing.price)} / ${hit.listing.unit} · ${availabilityLabel(hit.listing.availability)}',
+                                ),
+                                Text(
+                                  freshness(hit.listing.lastConfirmed),
+                                  style: const TextStyle(
+                                    color: taupe,
+                                    fontSize: 11,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
-                          Text(
-                            '${peso(hit.listing.price)} / ${hit.listing.unit} · ${availabilityLabel(hit.listing.availability)}',
-                          ),
-                          Text(
-                            freshness(hit.listing.lastConfirmed),
-                            style: const TextStyle(color: taupe, fontSize: 11),
-                          ),
+                          const Icon(Icons.chevron_right, color: taupe),
                         ],
                       ),
                     ),
@@ -240,12 +359,11 @@ class StoreDetailPage extends StatelessWidget {
               const SizedBox(height: 14),
               LocalMapView(
                 stores: [store],
-                centerLat: app.deviceLat ?? store.lat,
-                centerLng: app.deviceLng ?? store.lng,
-                userLat: app.deviceLat,
-                userLng: app.deviceLng,
+                centerLat: store.lat,
+                centerLng: store.lng,
+                userLat: app.deviceLat ?? app.searchLat,
+                userLng: app.deviceLng ?? app.searchLng,
                 selectedId: store.id,
-                onLocateUser: () => app.requestForegroundLocation(),
                 height: 160,
               ),
               const SizedBox(height: 12),
@@ -272,6 +390,84 @@ class StoreDetailPage extends StatelessWidget {
                 child: const Text('Report a problem with this listing'),
               ),
               const SizedBox(height: 10),
+              // ── Active promotions ──────────────────────────────────
+              Builder(
+                builder: (context) {
+                  final now = DateTime.now();
+                  final promos =
+                      app.promotions
+                          .where(
+                            (p) =>
+                                p.storeId == store.id &&
+                                p.status == PromotionStatus.approved &&
+                                !now.isBefore(p.startsAt) &&
+                                !now.isAfter(p.endsAt),
+                          )
+                          .toList();
+                  if (promos.isEmpty) return const SizedBox.shrink();
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Promotions',
+                        style: TextStyle(fontFamily: 'Georgia', fontSize: 22),
+                      ),
+                      const SizedBox(height: 8),
+                      ...promos.map(
+                        (p) => Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: SoftCard(
+                            color: sand,
+                            child: Row(
+                              children: [
+                                const Icon(
+                                  Icons.campaign_outlined,
+                                  color: leafDark,
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          Expanded(
+                                            child: Text(
+                                              p.title,
+                                              style: const TextStyle(
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                            ),
+                                          ),
+                                          if (p.sponsored)
+                                            const StatusChip(
+                                              'Sponsored',
+                                              color: champagne,
+                                            ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        p.offer,
+                                        style: const TextStyle(
+                                          fontSize: 12,
+                                          color: charcoal,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                    ],
+                  );
+                },
+              ),
               const Text(
                 'Sold here',
                 style: TextStyle(fontFamily: 'Georgia', fontSize: 22),
@@ -497,7 +693,6 @@ class _RoutePreviewPageState extends State<RoutePreviewPage> {
   var loading = true;
   var navigating = false;
   var _holdingLocation = false;
-  var _loadGeneration = 0;
   AppState? _app;
 
   @override
@@ -508,18 +703,8 @@ class _RoutePreviewPageState extends State<RoutePreviewPage> {
     _holdingLocation = true;
     _app!.retainForegroundLocation();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _load(requestLocation: true);
+      if (mounted) _load();
     });
-  }
-
-  @override
-  void didUpdateWidget(covariant RoutePreviewPage oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.store.id != widget.store.id ||
-        oldWidget.store.lat != widget.store.lat ||
-        oldWidget.store.lng != widget.store.lng) {
-      _load();
-    }
   }
 
   @override
@@ -528,30 +713,22 @@ class _RoutePreviewPageState extends State<RoutePreviewPage> {
     super.dispose();
   }
 
-  Future<void> _load({bool requestLocation = false}) async {
+  Future<void> _load() async {
     final app = AppScope.of(context);
-    final generation = ++_loadGeneration;
-    setState(() {
-      loading = true;
-      error = null;
-      preview = null;
-    });
     try {
-      if (requestLocation) await app.requestForegroundLocation();
-      if (!mounted || generation != _loadGeneration) return;
       final result = await app.previewRoute(
         destLat: widget.store.lat,
         destLng: widget.store.lng,
       );
-      if (!mounted || generation != _loadGeneration) return;
+      if (!mounted) return;
       setState(() {
         preview = result;
         loading = false;
       });
-    } catch (routeError) {
-      if (!mounted || generation != _loadGeneration) return;
+    } catch (_) {
+      if (!mounted) return;
       setState(() {
-        error = routeError.toString();
+        error = 'Could not build a route preview.';
         loading = false;
       });
     }
@@ -577,12 +754,11 @@ class _RoutePreviewPageState extends State<RoutePreviewPage> {
                 navigating
                     ? (app.deviceLng ?? app.searchLng)
                     : widget.store.lng,
-            userLat: app.deviceLat,
-            userLng: app.deviceLng,
+            userLat: app.deviceLat ?? app.searchLat,
+            userLng: app.deviceLng ?? app.searchLng,
             selectedId: widget.store.id,
             route: route,
             followUser: navigating,
-            onLocateUser: () => _load(requestLocation: true),
             height: 280,
           ),
         ),
@@ -592,17 +768,7 @@ class _RoutePreviewPageState extends State<RoutePreviewPage> {
           child: SoftCard(
             child:
                 loading
-                    ? const Row(
-                      children: [
-                        SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
-                        SizedBox(width: 10),
-                        Text('Calculating Mapbox road route…'),
-                      ],
-                    )
+                    ? const Text('Drawing the route on the LocalSpot map…')
                     : Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -615,24 +781,15 @@ class _RoutePreviewPageState extends State<RoutePreviewPage> {
                         ),
                         if (preview != null) ...[
                           Text(
-                            '${preview!.distanceKm.toStringAsFixed(1)} km · ${preview!.durationMinutes ?? '—'} min',
+                            '${preview!.distanceKm.toStringAsFixed(1)} km${preview!.durationMinutes == null ? '' : ' · ${preview!.durationMinutes} min'}',
                           ),
                           Text(
-                            'Start: ${app.deviceLat != null ? 'Current GPS location' : '${app.searchAreaLabel} (approximate)'}',
-                          ),
-                          Text(
-                            'Destination: ${_storeDestination(widget.store)}',
-                          ),
-                          Text(
-                            'Road route via ${preview!.provider}',
+                            preview!.fallback
+                                ? 'Straight-line distance and preview only. This is not a road route or turn-by-turn guidance.'
+                                : 'Route from the configured provider · ${preview!.provider}',
                             style: const TextStyle(color: taupe, fontSize: 11),
                           ),
                         ],
-                        if (app.deviceLat == null)
-                          Text(
-                            app.locationNote,
-                            style: const TextStyle(color: taupe, fontSize: 11),
-                          ),
                         if (error != null)
                           Text(error!, style: const TextStyle(color: clay)),
                         const SizedBox(height: 8),
@@ -660,7 +817,6 @@ class _RoutePreviewPageState extends State<RoutePreviewPage> {
               app.setFollowMyLocation(true);
               if (!mounted) return;
               setState(() => navigating = true);
-              await _load();
             },
           ),
         ),
@@ -678,19 +834,9 @@ class _RoutePreviewPageState extends State<RoutePreviewPage> {
   }
 }
 
-String _storeDestination(Store store) {
-  final parts = [
-    store.address,
-    store.barangay,
-    store.city,
-  ].where((part) => part.trim().isNotEmpty);
-  return parts.isEmpty ? store.name : parts.join(', ');
-}
-
 class LocationPage extends StatelessWidget {
-  const LocationPage({super.key, required this.onBack, required this.onStore});
+  const LocationPage({super.key, required this.onBack});
   final VoidCallback onBack;
-  final ValueChanged<Store> onStore;
 
   @override
   Widget build(BuildContext context) {
@@ -715,11 +861,12 @@ class LocationPage extends StatelessWidget {
             centerLng: app.searchLng,
             userLat: app.deviceLat,
             userLng: app.deviceLng,
-            onSelect: onStore,
             onPick:
-                (lat, lng) =>
-                    app.setManualCenter(lat, lng, 'Pinned area · Quezon City'),
-            onLocateUser: () => app.requestForegroundLocation(),
+                (lat, lng) => app.setManualCenter(
+                  lat,
+                  lng,
+                  'Pinned area (${lat.toStringAsFixed(4)}, ${lng.toStringAsFixed(4)})',
+                ),
             height: 280,
           ),
         ),
@@ -758,6 +905,13 @@ class ReportPage extends StatefulWidget {
 
 class _ReportPageState extends State<ReportPage> {
   final reason = TextEditingController();
+  bool submitting = false;
+
+  @override
+  void dispose() {
+    reason.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -773,15 +927,46 @@ class _ReportPageState extends State<ReportPage> {
           ),
         ),
         const SizedBox(height: 12),
-        SoftCard(child: LabeledField('What is wrong?', reason, maxLines: 4)),
+        SoftCard(
+          child: LabeledField(
+            'What is wrong?',
+            reason,
+            maxLines: 4,
+            maxLength: 400,
+          ),
+        ),
         const SizedBox(height: 16),
         PrimaryButton(
-          'Submit report',
-          onPressed: () {
-            if (reason.text.trim().isEmpty) return;
-            app.addReport(widget.target, reason.text.trim());
-            widget.onBack();
-          },
+          submitting ? 'Submitting report…' : 'Submit report',
+          onPressed:
+              submitting
+                  ? null
+                  : () async {
+                    if (reason.text.trim().isEmpty) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                            'Describe the issue before submitting.',
+                          ),
+                        ),
+                      );
+                      return;
+                    }
+                    setState(() => submitting = true);
+                    final error = await app.addReport(
+                      widget.target,
+                      reason.text.trim(),
+                    );
+                    if (!context.mounted) return;
+                    setState(() => submitting = false);
+                    if (error != null) {
+                      ScaffoldMessenger.of(
+                        context,
+                      ).showSnackBar(SnackBar(content: Text(error)));
+                      return;
+                    }
+                    widget.onBack();
+                  },
         ),
       ],
     );

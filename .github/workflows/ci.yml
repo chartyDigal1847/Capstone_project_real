@@ -1,42 +1,52 @@
-name: CI
+name: LocalSpot CI
 
 on:
   push:
   pull_request:
 
-jobs:
-  backend:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
-    steps:
-      - uses: actions/checkout@v4
-      - uses: shivammathur/setup-php@v2
-        with:
-          php-version: '8.2'
-          extensions: mbstring, sqlite, pdo_sqlite
-          coverage: none
-      - run: composer install --no-interaction --prefer-dist
-      - run: cp .env.example .env
-      - run: php artisan key:generate
-      - run: php artisan test
+permissions:
+  contents: read
 
-  mobile:
+concurrency:
+  group: localspot-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  flutter:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          cache: true
       - run: flutter pub get
+      - run: dart format --output=none --set-exit-if-changed lib test
       - run: flutter analyze
       - run: flutter test
 
-  production-image:
+  firebase-emulators:
     runs-on: ubuntu-latest
-    needs: [backend, mobile]
+    timeout-minutes: 45
+    env:
+      GCLOUD_PROJECT: demo-localspot
     steps:
-      - uses: actions/checkout@v4
-      - run: docker build -f backend/docker/production/Dockerfile -t localspot-api:${{ github.sha }} backend
-      - run: docker image inspect localspot-api:${{ github.sha }} --format '{{.Id}} {{.Size}}'
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            functions/package-lock.json
+            scripts/package-lock.json
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: npm ci --prefix functions
+      - run: npm ci --prefix scripts
+      - run: npm --prefix functions run build
+      - run: npm install --global firebase-tools@15.36.0
+      - name: Run Auth, Firestore, Storage, and Functions emulator smoke checks
+        run: firebase emulators:exec --project demo-localspot --only auth,firestore,storage,functions "npm --prefix scripts run smoke:ci"

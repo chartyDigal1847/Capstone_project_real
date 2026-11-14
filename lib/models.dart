@@ -65,7 +65,9 @@ List<String> categoriesMatchingFilter(String? filter) {
 
 bool productMatchesCategoryFilter(String productCategory, String? filter) {
   if (filter == null || filter.isEmpty) return true;
-  return categoriesMatchingFilter(filter).any((category) => category.toLowerCase() == productCategory.toLowerCase());
+  return categoriesMatchingFilter(
+    filter,
+  ).any((category) => category.toLowerCase() == productCategory.toLowerCase());
 }
 
 String categoryFilterLabel(String? filter) {
@@ -81,7 +83,14 @@ String categoryFilterLabel(String? filter) {
 }
 
 const categoryFamilies = <String, List<String>>{
-  'food': ['Produce', 'Groceries', 'Staples', 'Bakery', 'Street food', 'Drinks'],
+  'food': [
+    'Produce',
+    'Groceries',
+    'Staples',
+    'Bakery',
+    'Street food',
+    'Drinks',
+  ],
   'tech': ['Electronics', 'Computers', 'Phones', 'Appliances'],
   'hardware': ['Hardware', 'Tools', 'Plumbing', 'Electrical'],
   'clothing': ['Clothing'],
@@ -108,29 +117,39 @@ const categorySynonyms = <String, String>{
 };
 
 List<String> expandedCategories(String query) {
-  final cleaned = query
-      .toLowerCase()
-      .replaceAll(RegExp(r'\b(near me|nearby|around here)\b'), ' ')
-      .replaceAll(RegExp(r'\s+'), ' ')
-      .trim();
+  final cleaned =
+      query
+          .toLowerCase()
+          .replaceAll(RegExp(r'\b(near me|nearby|around here)\b'), ' ')
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim();
   if (cleaned.isEmpty) return const [];
   for (final token in cleaned.split(' ')) {
-    final family = categorySynonyms[token] ?? (categoryFamilies.containsKey(token) ? token : null);
+    final family =
+        categorySynonyms[token] ??
+        (categoryFamilies.containsKey(token) ? token : null);
     if (family != null) return categoryFamilies[family] ?? const [];
   }
   return const [];
 }
 
-enum SearchMatchType { exact, category, similar, identifier, semantic }
+enum SearchMatchType {
+  exact,
+  category,
+  attribute,
+  similar,
+  identifier,
+  semantic,
+}
 
 enum SearchSort { relevance, distance, price, freshness }
 
 String searchSortLabel(SearchSort sort) => switch (sort) {
-      SearchSort.relevance => 'Relevance',
-      SearchSort.distance => 'Distance',
-      SearchSort.price => 'Price',
-      SearchSort.freshness => 'Freshness',
-    };
+  SearchSort.relevance => 'Relevance',
+  SearchSort.distance => 'Distance',
+  SearchSort.price => 'Price',
+  SearchSort.freshness => 'Freshness',
+};
 
 List<(String key, String label)> categoryAttributeFields(String category) {
   final value = category.toLowerCase();
@@ -138,27 +157,45 @@ List<(String key, String label)> categoryAttributeFields(String category) {
     return const [('size', 'Size'), ('material', 'Material')];
   }
   if (value.contains('electron') || value == 'phones' || value == 'computers') {
-    return const [('model', 'Model'), ('capacity', 'Capacity / storage'), ('compatibility', 'Compatibility (if known)')];
+    return const [
+      ('model', 'Model'),
+      ('capacity', 'Capacity / storage'),
+      ('compatibility', 'Compatibility (if known)'),
+    ];
   }
-  if (value.contains('hardware') || value == 'tools' || value == 'plumbing' || value == 'electrical') {
-    return const [('dimensions', 'Dimensions'), ('material', 'Material'), ('voltage', 'Voltage (if any)')];
+  if (value.contains('hardware') ||
+      value == 'tools' ||
+      value == 'plumbing' ||
+      value == 'electrical') {
+    return const [
+      ('dimensions', 'Dimensions'),
+      ('material', 'Material'),
+      ('voltage', 'Voltage (if any)'),
+    ];
   }
   if (value.contains('auto')) {
     return const [('fitment', 'Make / model / year')];
   }
-  if (value.contains('produce') || value.contains('food') || value.contains('bakery') || value.contains('drink')) {
-    return const [('variety', 'Variety'), ('unit_hint', 'Typical selling unit')];
+  if (value.contains('produce') ||
+      value.contains('food') ||
+      value.contains('bakery') ||
+      value.contains('drink')) {
+    return const [
+      ('variety', 'Variety'),
+      ('unit_hint', 'Typical selling unit'),
+    ];
   }
   return const [('details', 'Extra details (optional)')];
 }
 
 String matchTypeLabel(SearchMatchType type) => switch (type) {
-      SearchMatchType.exact => 'Exact',
-      SearchMatchType.category => 'Category',
-      SearchMatchType.similar => 'Visually similar',
-      SearchMatchType.identifier => 'Identifier',
-      SearchMatchType.semantic => 'Similar need',
-    };
+  SearchMatchType.exact => 'Exact',
+  SearchMatchType.category => 'Category',
+  SearchMatchType.attribute => 'Attribute',
+  SearchMatchType.similar => 'Visually similar',
+  SearchMatchType.identifier => 'Identifier',
+  SearchMatchType.semantic => 'Similar need',
+};
 
 enum PrivacyStatus { pending, processing, needsReview, ready, failed }
 
@@ -221,7 +258,11 @@ class VendorSession {
 }
 
 class StoreGrant {
-  StoreGrant({this.inventory = true, this.promotions = false, this.location = false});
+  StoreGrant({
+    this.inventory = true,
+    this.promotions = false,
+    this.location = false,
+  });
 
   bool inventory;
   bool promotions;
@@ -361,7 +402,12 @@ class Promotion {
 }
 
 class BlurRegion {
-  const BlurRegion({required this.x, required this.y, required this.w, required this.h});
+  const BlurRegion({
+    required this.x,
+    required this.y,
+    required this.w,
+    required this.h,
+  });
   final double x;
   final double y;
   final double w;
@@ -378,6 +424,7 @@ class TourNode {
     this.ownerReviewed = false,
     this.manualBlur = false,
     this.originalRetained = false,
+    this.originalStoragePath,
     this.blurRegions = const [],
   });
 
@@ -389,9 +436,13 @@ class TourNode {
   bool ownerReviewed;
   bool manualBlur;
   bool originalRetained;
+  String? originalStoragePath;
   List<BlurRegion> blurRegions;
 
-  bool get canPublish => privacyStatus == PrivacyStatus.ready && ownerReviewed && image.trim().isNotEmpty;
+  bool get canPublish =>
+      privacyStatus == PrivacyStatus.ready &&
+      ownerReviewed &&
+      image.trim().isNotEmpty;
 }
 
 class StoreTour {
@@ -492,19 +543,19 @@ extension FirstOrNullX<T> on Iterable<T> {
 
 extension StoreTypeLabel on StoreType {
   String get label => switch (this) {
-        StoreType.sariSari => 'Sari-sari store',
-        StoreType.fruitVegetable => 'Fruit & vegetable vendor',
-        StoreType.marketStall => 'Public-market stall',
-        StoreType.streetVendor => 'Street / mobile vendor',
-        StoreType.convenience => 'Convenience store',
-        StoreType.supermarket => 'Supermarket',
-        StoreType.generalMerchandise => 'General merchandise',
-        StoreType.hardware => 'Hardware / construction',
-        StoreType.electronics => 'Electronics / technology',
-        StoreType.appliance => 'Appliances',
-        StoreType.clothing => 'Clothing & footwear',
-        StoreType.bookstore => 'Bookstore',
-        StoreType.autoParts => 'Auto / motorcycle parts',
-        StoreType.other => 'Other local seller',
-      };
+    StoreType.sariSari => 'Sari-sari store',
+    StoreType.fruitVegetable => 'Fruit & vegetable vendor',
+    StoreType.marketStall => 'Public-market stall',
+    StoreType.streetVendor => 'Street / mobile vendor',
+    StoreType.convenience => 'Convenience store',
+    StoreType.supermarket => 'Supermarket',
+    StoreType.generalMerchandise => 'General merchandise',
+    StoreType.hardware => 'Hardware / construction',
+    StoreType.electronics => 'Electronics / technology',
+    StoreType.appliance => 'Appliances',
+    StoreType.clothing => 'Clothing & footwear',
+    StoreType.bookstore => 'Bookstore',
+    StoreType.autoParts => 'Auto / motorcycle parts',
+    StoreType.other => 'Other local seller',
+  };
 }
