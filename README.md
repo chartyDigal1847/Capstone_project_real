@@ -7,21 +7,31 @@ Philippine local store and product locator. Vendors publish listings; customers 
 ## Layout
 
 - Flutter app at the repository root (`lib/`)
-- Laravel API in `backend/` (Laravel Sail / Docker for MySQL)
-
-The mobile app talks only to `/api/v1`. Database credentials stay on the server.
+- Firebase Authentication, Firestore, Storage, and Cloud Functions
+- Firebase rules and indexes at the repository root
 
 ## Local development
 
-1. Start Docker Desktop.
-2. From `backend/`: copy `.env.example` to `.env`, then `./vendor/bin/sail up -d`, `sail artisan migrate --seed`.
-3. API: `http://127.0.0.1:8000/api/v1` (Android emulator: `http://10.0.2.2:8000/api/v1`).
-4. From the repo root: `flutter pub get`, then run on Android with your **public** Mapbox token:
+1. Install Flutter and Firebase CLI, then run `flutter pub get`.
+2. Select the Firebase project with `firebase use capstone-project-561a2`.
+3. Run the Firebase emulators for local development, or deploy the rules and
+   functions for a shared environment.
+4. Run the app with a restricted **public** Mapbox token:
    `flutter run --dart-define=PUBLIC_MAPBOX_ACCESS_TOKEN=pk.REPLACE_WITH_PUBLIC_TOKEN`
-5. Demo password for seeded accounts: `demo`.
+
+For repeatable builds, copy `config/public.json.example` to
+`config/local.json`, replace the placeholder with your own restricted `pk.`
+token, and run the **Flutter with Mapbox** configuration in
+`.vscode/launch.json`. You can also run:
+`flutter run --dart-define-from-file=config/local.json`.
+
+`config/local.json` stays ignored because GitHub secret scanning may classify
+Mapbox tokens as credentials, even when they are public `pk.` client tokens.
+Never put a private `sk.` token or service-account credential in the repository.
 
 The app renders Mapbox Streets and requests driving routes from the Mapbox Directions API.
-Create a public token (`pk.`) with the read scopes required for Maps and Directions, and keep it out of source control.
+Create a public token (`pk.`) with the read scopes required for Maps and Directions. Restrict it
+by platform, bundle ID/package name, allowed URLs, and usage limits in the Mapbox dashboard.
 Never use a secret token (`sk.`) in the mobile app. The SDK's Mapbox logo and clickable attribution
 remain visible, including the telemetry opt-out. Check [Mapbox pricing and terms](https://www.mapbox.com/pricing/)
 before production use: the Flutter Maps SDK is measured in monthly active users, while Directions is
@@ -29,11 +39,8 @@ measured in API requests. Free-tier amounts, prices, and rate limits depend on t
 [Maps SDK pricing guide](https://docs.mapbox.com/flutter/maps/guides/pricing/) and
 [Directions API pricing and limits](https://docs.mapbox.com/api/navigation/directions/).
 
-Customer GPS is requested only while using the app. Store/provider coordinates come from the existing
-Laravel catalog; Firebase is not configured in this project. With no Mapbox token, the app shows a
-configuration notice and does not draw a fake road route.
-
-Health check: `GET /api/v1/health` and `GET /up`.
+Customer GPS is requested only while using the app. Store/provider coordinates come from Firestore.
+With no Mapbox token, the app shows a configuration notice and does not draw a fake road route.
 
 ## Tests
 
@@ -46,4 +53,8 @@ CI runs both suites and builds the production API image.
 
 ## Production
 
-Use `backend/docker/production/Dockerfile` and `backend/compose.production.yaml`. Put secrets in the host environment, not in git. Terminate HTTPS at a reverse proxy. Do not publish MySQL. See [docs/OPERATIONS.md](docs/OPERATIONS.md) for backup, restore, release, and rollback.
+Deploy Cloud Functions and Firebase rules with the Firebase CLI. Keep service-account
+credentials and server secrets outside the repository. Firebase web/mobile API keys may
+be public client configuration, but access must be enforced by Authentication, App Check,
+Firestore/Storage rules, and callable-function authorization. See [docs/OPERATIONS.md](docs/OPERATIONS.md)
+for release and rollback guidance.

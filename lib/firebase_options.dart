@@ -6,8 +6,17 @@ import 'package:flutter/foundation.dart'
     show defaultTargetPlatform, kIsWeb, TargetPlatform;
 
 class DefaultFirebaseOptions {
-  /// true = Firebase is configured and the app will connect to Firestore.
-  static const bool configured = true;
+  /// Whether this build has a complete Firebase configuration for its target.
+  ///
+  /// Firebase client keys are safe to ship in a public app when the Firebase
+  /// project is protected by Authentication, App Check, and security rules.
+  /// Do not put service-account credentials in this file.
+  static bool get configured {
+    final options = currentPlatform;
+    return options.apiKey != 'REPLACE_ME' &&
+        options.appId != 'REPLACE_ME' &&
+        options.projectId.isNotEmpty;
+  }
 
   static FirebaseOptions get currentPlatform {
     if (kIsWeb) return web;
