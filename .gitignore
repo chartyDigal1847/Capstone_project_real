@@ -65,3 +65,6 @@ functions/lib/
 
 # Local development secrets
 config/local.json
+
+# Generated Kotlin files
+android/.kotlin/
