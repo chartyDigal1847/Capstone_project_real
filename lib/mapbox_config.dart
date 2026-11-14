@@ -4,7 +4,9 @@ const _legacyMapboxToken = String.fromEnvironment('ACCESS_TOKEN');
 // Keep accepting the old define name so an existing run configuration does
 // not silently disable Mapbox after the safer, explicit name was introduced.
 final mapboxAccessToken =
-    (_publicMapboxToken.trim().isNotEmpty ? _publicMapboxToken : _legacyMapboxToken)
+    (_publicMapboxToken.trim().isNotEmpty
+            ? _publicMapboxToken
+            : _legacyMapboxToken)
         .trim();
 
 bool get hasMapboxPublicToken =>
