@@ -62,3 +62,6 @@ scripts/serviceAccountKey.json
 scripts/node_modules/
 functions/node_modules/
 functions/lib/
+
+# Local development secrets
+config/local.json
