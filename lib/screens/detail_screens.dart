@@ -375,8 +375,9 @@ class _TourViewerPageState extends State<TourViewerPage> {
                     },
                     onHorizontalDragEnd: (details) {
                       if (details.primaryVelocity == null ||
-                          node.connections.isEmpty)
+                          node.connections.isEmpty) {
                         return;
+                      }
                       if (details.primaryVelocity!.abs() < 900) return;
                       setState(() {
                         pan = 0;
@@ -823,8 +824,9 @@ class _CameraSearchPageState extends State<CameraSearchPage> {
   List<RecognitionSuggestion> get _visibleSuggestions {
     final current = result;
     if (current == null) return const [];
-    if (selectedObject == null || current.objects.length <= 1)
+    if (selectedObject == null || current.objects.length <= 1) {
       return current.suggestions;
+    }
     return [
       for (final object in current.objects)
         if (object.label == selectedObject) ...object.suggestions,
