@@ -363,7 +363,7 @@ class _MapboxCanvasState extends State<_MapboxCanvas> {
       _styleError = null;
     });
     try {
-      await map.style.setStyleURI(
+      await map.loadStyleURI(
         satellite
             ? 'mapbox://styles/mapbox/satellite-streets-v12'
             : MapboxStyles.MAPBOX_STREETS,
