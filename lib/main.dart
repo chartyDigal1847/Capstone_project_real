@@ -46,6 +46,11 @@ class _LocalSpotRootState extends State<LocalSpotRoot> {
       child: MaterialApp(
         debugShowCheckedModeBanner: false,
         title: 'LocalSpot',
+        builder: (context, child) {
+          return MaterialUiCompatibilityBridge(
+            child: child ?? const SizedBox.shrink(),
+          );
+        },
         theme: localSpotTheme(),
         home: const LocalSpotShell(),
       ),
