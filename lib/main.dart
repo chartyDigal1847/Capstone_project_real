@@ -17,6 +17,7 @@ void main() {
   WidgetsFlutterBinding.ensureInitialized();
   if (hasMapboxPublicToken) {
     MapboxOptions.setAccessToken(mapboxAccessToken);
+    debugPrint('Mapbox public token loaded from --dart-define');
   }
   runApp(const LocalSpotRoot(enableDemoData: false));
 }
@@ -46,11 +47,6 @@ class _LocalSpotRootState extends State<LocalSpotRoot> {
       child: MaterialApp(
         debugShowCheckedModeBanner: false,
         title: 'LocalSpot',
-        builder: (context, child) {
-          return MaterialUiCompatibilityBridge(
-            child: child ?? const SizedBox.shrink(),
-          );
-        },
         theme: localSpotTheme(),
         home: const LocalSpotShell(),
       ),
@@ -225,6 +221,7 @@ class _LocalSpotShellState extends State<LocalSpotShell> {
         ),
         OverlayView.location => LocationPage(
           onBack: () => setState(() => overlay = OverlayView.none),
+          onStore: _openStore,
         ),
         OverlayView.report => ReportPage(
           target: reportTarget,

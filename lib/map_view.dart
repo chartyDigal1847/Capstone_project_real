@@ -677,7 +677,7 @@ class _SchematicMapView extends StatelessWidget {
                 right: 10,
                 bottom: 10,
                 child: Text(
-                  'in-app map preview · schematic fallback, not street directions',
+                  'in-app map preview · enable Mapbox for street maps',
                   style: TextStyle(color: Colors.white, fontSize: 10),
                 ),
               ),
@@ -703,7 +703,7 @@ class _SchematicMapView extends StatelessWidget {
                     child: Padding(
                       padding: EdgeInsets.all(10),
                       child: Text(
-                        'Mapbox is not configured. Run with a public token using --dart-define=PUBLIC_MAPBOX_ACCESS_TOKEN=pk.…',
+                        'Mapbox is not configured. Run with --dart-define=PUBLIC_MAPBOX_ACCESS_TOKEN=YOUR_TOKEN.',
                         style: TextStyle(color: clay, fontSize: 12),
                       ),
                     ),

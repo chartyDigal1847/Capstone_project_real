@@ -10,13 +10,15 @@ import 'firebase/gateway.dart';
 import 'firebase/product_ai.dart';
 import 'models.dart';
 import 'repositories.dart';
+import 'services/directions_service.dart';
 
 const defaultCenterLat = 14.6195;
 const defaultCenterLng = 121.0568;
 const radiiKm = [1.0, 3.0, 5.0, 10.0];
 
 class AppState extends ChangeNotifier {
-  AppState({bool seedDemoData = true}) {
+  AppState({bool seedDemoData = true, DirectionsService? directionsService})
+    : directions = directionsService ?? DirectionsService() {
     usingSeededCatalog = seedDemoData;
     if (seedDemoData) _seed();
   }
@@ -24,6 +26,7 @@ class AppState extends ChangeNotifier {
   final api = LocalSpotGateway();
   late final authRepo = AuthRepository(api);
   late final catalogRepo = CatalogRepository(api);
+  final DirectionsService directions;
 
   // [apiOnline] is true after Firebase initializes. Production builds never
   // seed demo data; test/demo roots opt in explicitly.
@@ -742,48 +745,14 @@ class AppState extends ChangeNotifier {
   }) async {
     final originLat = deviceLat ?? searchLat;
     final originLng = deviceLng ?? searchLng;
-    if (apiOnline) {
-      try {
-        final data =
-            await api.post('/routes/preview', {
-                  'origin_lat': originLat,
-                  'origin_lng': originLng,
-                  'destination_lat': destLat,
-                  'destination_lng': destLng,
-                })
-                as Map;
-        lastRoute = routePreviewFromJson(Map<String, dynamic>.from(data));
-        notifyListeners();
-        return lastRoute!;
-      } catch (_) {}
-    }
-    lastRoute = _localRoute(originLat, originLng, destLat, destLng);
+    lastRoute = await directions.getDrivingRoute(
+      originLat: originLat,
+      originLng: originLng,
+      destinationLat: destLat,
+      destinationLng: destLng,
+    );
     notifyListeners();
     return lastRoute!;
-  }
-
-  RoutePreview _localRoute(
-    double originLat,
-    double originLng,
-    double destLat,
-    double destLng,
-  ) {
-    const steps = 16;
-    final points = <GeoPoint>[
-      for (var i = 0; i <= steps; i++)
-        GeoPoint(
-          originLat + (destLat - originLat) * (i / steps),
-          originLng + (destLng - originLng) * (i / steps),
-        ),
-    ];
-    final km = distanceKm(originLat, originLng, destLat, destLng);
-    return RoutePreview(
-      coordinates: points,
-      distanceKm: km,
-      durationMinutes: null,
-      provider: 'localspot',
-      fallback: true,
-    );
   }
 
   VendorSession? sessionFor(Store store) {

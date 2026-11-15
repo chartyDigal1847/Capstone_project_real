@@ -7,6 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../api.dart';
 import '../map_view.dart';
 import '../models.dart';
+import '../services/directions_service.dart';
 import '../state.dart';
 import '../theme.dart';
 import '../widgets.dart';
@@ -725,6 +726,12 @@ class _RoutePreviewPageState extends State<RoutePreviewPage> {
         preview = result;
         loading = false;
       });
+    } on DirectionsException catch (routeError) {
+      if (!mounted) return;
+      setState(() {
+        error = routeError.message;
+        loading = false;
+      });
     } catch (_) {
       if (!mounted) return;
       setState(() {
@@ -784,9 +791,7 @@ class _RoutePreviewPageState extends State<RoutePreviewPage> {
                             '${preview!.distanceKm.toStringAsFixed(1)} km${preview!.durationMinutes == null ? '' : ' · ${preview!.durationMinutes} min'}',
                           ),
                           Text(
-                            preview!.fallback
-                                ? 'Straight-line distance and preview only. This is not a road route or turn-by-turn guidance.'
-                                : 'Route from the configured provider · ${preview!.provider}',
+                            'Road route from ${preview!.provider}. Turn-by-turn voice guidance is not included.',
                             style: const TextStyle(color: taupe, fontSize: 11),
                           ),
                         ],
@@ -835,8 +840,9 @@ class _RoutePreviewPageState extends State<RoutePreviewPage> {
 }
 
 class LocationPage extends StatelessWidget {
-  const LocationPage({super.key, required this.onBack});
+  const LocationPage({super.key, required this.onBack, required this.onStore});
   final VoidCallback onBack;
+  final ValueChanged<Store> onStore;
 
   @override
   Widget build(BuildContext context) {
@@ -861,6 +867,7 @@ class LocationPage extends StatelessWidget {
             centerLng: app.searchLng,
             userLat: app.deviceLat,
             userLng: app.deviceLng,
+            onSelect: onStore,
             onPick:
                 (lat, lng) => app.setManualCenter(
                   lat,

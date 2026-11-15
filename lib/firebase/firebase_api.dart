@@ -1298,11 +1298,6 @@ class LocalSpotFirebaseApi {
       return _recognitionSuggest(data);
     }
 
-    // ── Route preview (straight-line fallback) ────────────────────────────
-    if (path == '/routes/preview') {
-      return _routePreview(data);
-    }
-
     // ── Visual / image search ─────────────────────────────────────────────
     if (path == '/search/by-image') {
       final suggestions = await _recognitionSuggest(data, allowAi: false);
@@ -1523,38 +1518,6 @@ class LocalSpotFirebaseApi {
     final overlap = hintTokens.intersection(productTokens).length;
     if (overlap > 0) return 6 + (hintTokens.length - overlap);
     return 100;
-  }
-
-  Map<String, dynamic> _routePreview(Map<String, dynamic> data) {
-    final originLat = (data['origin_lat'] as num?)?.toDouble() ?? 0.0;
-    final originLng = (data['origin_lng'] as num?)?.toDouble() ?? 0.0;
-    final destLat = (data['destination_lat'] as num?)?.toDouble() ?? 0.0;
-    final destLng = (data['destination_lng'] as num?)?.toDouble() ?? 0.0;
-    const steps = 16;
-    final coordinates = <List<double>>[
-      for (var i = 0; i <= steps; i++)
-        [
-          originLat + (destLat - originLat) * (i / steps),
-          originLng + (destLng - originLng) * (i / steps),
-        ],
-    ];
-    double radians(double degrees) => degrees * pi / 180;
-    final dLat = radians(destLat - originLat);
-    final dLng = radians(destLng - originLng);
-    final a = (sin(dLat / 2) * sin(dLat / 2) +
-            cos(radians(originLat)) *
-                cos(radians(destLat)) *
-                sin(dLng / 2) *
-                sin(dLng / 2))
-        .clamp(0.0, 1.0);
-    final km = 6371.0 * 2 * atan2(sqrt(a), sqrt(1 - a));
-    return {
-      'coordinates': coordinates,
-      'distance_km': km,
-      'duration_minutes': null,
-      'provider': 'localspot-firebase',
-      'fallback': true,
-    };
   }
 
   Future<dynamic> patch(String path, [Map<String, dynamic>? body]) async {

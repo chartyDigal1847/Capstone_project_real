@@ -38,7 +38,7 @@ class DirectionsService {
     }
     if (!_accessToken.startsWith('pk.') || _accessToken.startsWith('sk.')) {
       throw const DirectionsException(
-        'Add a public Mapbox token with --dart-define=PUBLIC_MAPBOX_ACCESS_TOKEN=pk.… to load road directions.',
+        'Add a public Mapbox token with --dart-define=PUBLIC_MAPBOX_ACCESS_TOKEN=YOUR_TOKEN to load road directions.',
       );
     }
 

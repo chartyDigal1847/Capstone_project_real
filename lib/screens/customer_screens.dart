@@ -684,7 +684,7 @@ class _MapPageState extends State<MapPage> {
                 userLat: app.deviceLat ?? app.searchLat,
                 userLng: app.deviceLng ?? app.searchLng,
                 selectedId: selected?.id,
-                onSelect: (store) => setState(() => selected = store),
+                onSelect: widget.onStore,
                 followUser: app.followMyLocation,
                 onUserPan: () {
                   if (app.followMyLocation) app.setFollowMyLocation(false);

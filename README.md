@@ -17,13 +17,11 @@ Philippine local store and product locator. Vendors publish listings; customers 
 3. Run the Firebase emulators for local development, or deploy the rules and
    functions for a shared environment.
 4. Run the app with a restricted **public** Mapbox token:
-   `flutter run --dart-define=PUBLIC_MAPBOX_ACCESS_TOKEN=pk.REPLACE_WITH_PUBLIC_TOKEN`
+   `flutter run --dart-define=PUBLIC_MAPBOX_ACCESS_TOKEN=YOUR_NEW_TOKEN`
 
-For repeatable builds, copy `config/public.json.example` to
-`config/local.json`, replace the placeholder with your own restricted `pk.`
-token, and run the **Flutter with Mapbox** configuration in
-`.vscode/launch.json`. You can also run:
-`flutter run --dart-define-from-file=config/local.json`.
+Do not put the real token in Dart source or a committed file. The token is
+passed only at launch/build time through the `PUBLIC_MAPBOX_ACCESS_TOKEN`
+define. Use a newly issued, restricted public token for local development.
 
 `config/local.json` stays ignored because GitHub secret scanning may classify
 Mapbox tokens as credentials, even when they are public `pk.` client tokens.

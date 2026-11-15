@@ -5,6 +5,7 @@ import 'package:localspot/main.dart';
 import 'package:localspot/models.dart';
 import 'package:localspot/screens/customer_screens.dart';
 import 'package:localspot/screens/detail_screens.dart';
+import 'package:localspot/services/directions_service.dart';
 import 'package:localspot/state.dart';
 import 'package:localspot/widgets.dart';
 
@@ -422,33 +423,23 @@ void main() {
     },
   );
 
-  test(
-    'route preview and vendor live session stay on-device without an API',
-    () async {
-      final app = AppState();
-      final store = app.stores.firstWhere((item) => item.isMobile);
-      app.currentUser = app.users.firstWhere(
-        (user) => user.id == store.ownerId,
-      );
-      final route = await app.previewRoute(
-        destLat: store.lat,
-        destLng: store.lng,
-      );
-      expect(route.coordinates, isNotEmpty);
-      expect(route.fallback, isTrue);
-      expect(route.distanceKm, greaterThan(0));
-      expect(route.distanceKm, lessThan(5));
-      expect(route.durationMinutes, isNull);
+  test('route preview requires a Mapbox road route', () async {
+    final app = AppState();
+    final store = app.stores.firstWhere((item) => item.isMobile);
+    app.currentUser = app.users.firstWhere((user) => user.id == store.ownerId);
+    await expectLater(
+      app.previewRoute(destLat: store.lat, destLng: store.lng),
+      throwsA(isA<DirectionsException>()),
+    );
 
-      await app.startVendorSession(store, lat: 14.6201, lng: 121.0572);
-      expect(app.sessionFor(store)?.isActive, isTrue);
-      expect(store.locationMode, LocationMode.live);
-      app.applyDevicePositionForTest(14.6225, 121.0595);
-      expect(store.lat, closeTo(14.6225, 0.0001));
-      await app.stopVendorSession(store);
-      expect(store.locationMode, LocationMode.regular);
-    },
-  );
+    await app.startVendorSession(store, lat: 14.6201, lng: 121.0572);
+    expect(app.sessionFor(store)?.isActive, isTrue);
+    expect(store.locationMode, LocationMode.live);
+    app.applyDevicePositionForTest(14.6225, 121.0595);
+    expect(store.lat, closeTo(14.6225, 0.0001));
+    await app.stopVendorSession(store);
+    expect(store.locationMode, LocationMode.regular);
+  });
 
   test('only the owner can start a live vendor location session', () async {
     final app = AppState();
