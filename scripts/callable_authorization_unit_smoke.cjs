@@ -8,18 +8,21 @@ if (!projectId.startsWith("demo-")) {
 }
 process.env.FIRESTORE_EMULATOR_HOST ||= "127.0.0.1:8080";
 process.env.FIREBASE_AUTH_EMULATOR_HOST ||= "127.0.0.1:9099";
-process.env.STORAGE_EMULATOR_HOST ||= "127.0.0.1:9199";
-process.env.FIREBASE_STORAGE_EMULATOR_HOST ||= "127.0.0.1:9199";
-process.env.FIREBASE_CONFIG = JSON.stringify({ projectId, storageBucket: `${projectId}.appspot.com` });
 process.env.GCLOUD_PROJECT = projectId;
 const requireFunctions = createRequire(path.resolve(__dirname, "../functions/package.json"));
 const { initializeApp } = requireFunctions("firebase-admin/app");
 const { getAuth } = requireFunctions("firebase-admin/auth");
 const { getFirestore, Timestamp } = requireFunctions("firebase-admin/firestore");
-const { getStorage } = requireFunctions("firebase-admin/storage");
-initializeApp({ projectId, storageBucket: `${projectId}.appspot.com` });
+initializeApp({ projectId });
 const auth = getAuth();
 const db = getFirestore();
+const r2Gateway = require("../functions/lib/r2_gateway.js");
+const r2Objects = new Map();
+r2Gateway.r2Head = async (key) => {
+  const object = r2Objects.get(key);
+  return object ? { key, size: object.length, contentType: "image/jpeg" } : null;
+};
+r2Gateway.r2Delete = async (key) => ({ existed: r2Objects.delete(key) });
 const functions = require("../functions/lib");
 let temporaryAuthUid;
 const {
@@ -365,17 +368,13 @@ async function main() {
   }), "failed-precondition");
 
   const staffUid = staffAuth.uid;
-  const storage = getStorage().bucket();
   const linkedProductPath = `products/public/${staffUid}/linked.jpg`;
   const unlinkedProductPath = `products/quarantine/${staffUid}/unlinked.jpg`;
   const linkedStorePath = `stores/processed/${staffUid}/store.jpg`;
   const tourOriginalPath = `tours/originals/${staffUid}/tour-1/original.jpg`;
   const orphanPanoramaPath = `tours/originals/${staffUid}/tour-2/rejected.jpg`;
   for (const path of [linkedProductPath, unlinkedProductPath, linkedStorePath, tourOriginalPath, orphanPanoramaPath]) {
-    await storage.file(path).save(Buffer.from("smoke image bytes"), {
-      resumable: false,
-      metadata: { contentType: "image/jpeg" },
-    });
+    r2Objects.set(path, Buffer.from("smoke image bytes"));
   }
   await db.collection("users").doc(staffUid).update({ memberStoreIds: [storeId] });
   for (let offset = 0; offset < 120; offset += 100) {
@@ -427,17 +426,21 @@ async function main() {
     assert.equal(remains.empty, true, `Account deletion left ${collection} data behind`);
   }
   assert.equal((await db.collection("mediaAssets").doc(`callable-linked-product-${staffUid}`).get()).data()?.uid, null);
-  assert.equal((await db.collection("mediaAssets").doc(`callable-unlinked-product-${staffUid}`).get()).exists, false);
-  assert.equal((await db.collection("mediaAssets").doc(`callable-linked-store-${staffUid}`).get()).exists, false);
+  const removedProductMedia = await db.collection("mediaAssets").doc(`callable-unlinked-product-${staffUid}`).get();
+  assert.equal(removedProductMedia.data()?.status, "deleted");
+  assert.equal(removedProductMedia.data()?.uid, null);
+  const removedStoreMedia = await db.collection("mediaAssets").doc(`callable-linked-store-${staffUid}`).get();
+  assert.equal(removedStoreMedia.data()?.status, "deleted");
+  assert.equal(removedStoreMedia.data()?.uid, null);
   const deletedUserSession = await db.collection("vendorSessions").doc(`callable-delete-${staffUid}`).get();
   assert.equal(deletedUserSession.data()?.lat, null);
   assert.equal(deletedUserSession.data()?.lng, null);
   assert.equal(deletedUserSession.data()?.startedByUid, null);
   assert.equal(typeof deletedUserSession.data()?.ended_at, "string");
   assert.equal((await db.collection("auditLogs").doc(`callable-delete-${staffUid}`).get()).exists, true);
-  assert.equal((await storage.file(linkedProductPath).exists())[0], true);
+  assert.equal(r2Objects.has(linkedProductPath), true);
   for (const path of [unlinkedProductPath, linkedStorePath, tourOriginalPath, orphanPanoramaPath]) {
-    assert.equal((await storage.file(path).exists())[0], false, `Account deletion retained ${path}`);
+    assert.equal(r2Objects.has(path), false, `Account deletion retained ${path}`);
   }
   await assert.rejects(auth.getUser(staffUid), (error) => error.code === "auth/user-not-found");
   temporaryAuthUid = undefined;

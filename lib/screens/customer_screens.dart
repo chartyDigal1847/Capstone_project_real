@@ -907,6 +907,8 @@ class ProfilePage extends StatelessWidget {
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
     final user = app.currentUser!;
+    final profileName = user.name.trim();
+    final profileInitial = profileName.isEmpty ? '?' : profileName.substring(0, 1).toUpperCase();
     return ListView(
       padding: const EdgeInsets.only(bottom: 28),
       children: [
@@ -920,7 +922,7 @@ class ProfilePage extends StatelessWidget {
                   radius: 26,
                   backgroundColor: leafDark,
                   child: Text(
-                    user.name.substring(0, 1),
+                    profileInitial,
                     style: const TextStyle(
                       color: paper,
                       fontFamily: 'Georgia',
@@ -934,7 +936,7 @@ class ProfilePage extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        user.name,
+                        profileName.isEmpty ? 'LocalSpot user' : profileName,
                         style: const TextStyle(
                           fontWeight: FontWeight.w700,
                           fontSize: 17,

@@ -1,10 +1,10 @@
 import { Timestamp } from "firebase-admin/firestore";
-import { getStorage } from "firebase-admin/storage";
 import { HttpsError, onCall } from "firebase-functions/v2/https";
 import { db, objectData } from "./admin";
 import { enforceCallableAppCheck } from "./callable_options";
+import { r2Head, R2_GATEWAY_PRIVATE_JWK } from "./r2_gateway";
 
-const CALLABLE_OPTIONS = { region: "asia-southeast1", enforceAppCheck: enforceCallableAppCheck };
+const CALLABLE_OPTIONS = { region: "asia-southeast1", enforceAppCheck: enforceCallableAppCheck, secrets: [R2_GATEWAY_PRIVATE_JWK] };
 
 function requireUid(request: { auth?: { uid: string } | null }): string {
   const uid = request.auth?.uid;
@@ -103,6 +103,7 @@ export const manageStoreTour = onCall(CALLABLE_OPTIONS, async (request) => {
   const userRef = db.collection("users").doc(uid);
   let newNodeTitle: string | undefined;
   let newNodePath: string | undefined;
+  let newNodeMediaRef: FirebaseFirestore.DocumentReference | undefined;
   if (action === "addNode") {
     if (typeof data.title !== "string" || !data.title.trim() || data.title.trim().length > 80) {
       throw new HttpsError("invalid-argument", "Viewpoint title must be between 1 and 80 characters.");
@@ -111,15 +112,14 @@ export const manageStoreTour = onCall(CALLABLE_OPTIONS, async (request) => {
         !new RegExp(`^tours/originals/${uid}/${tourId}/[A-Za-z0-9_-]+$`).test(data.originalPath)) {
       throw new HttpsError("invalid-argument", "A private original uploaded to this tour is required.");
     }
-    const original = getStorage().bucket().file(data.originalPath);
-    const [exists] = await original.exists();
-    if (!exists) throw new HttpsError("failed-precondition", "The panorama upload could not be found. Upload it again.");
-    const [metadata] = await original.getMetadata();
-    const size = Number(metadata.size ?? 0);
-    if (size <= 0 || size > 50 * 1024 * 1024 ||
-        !["image/jpeg", "image/png", "image/webp"].includes(metadata.contentType ?? "")) {
+    const original = await r2Head(data.originalPath);
+    if (!original) throw new HttpsError("failed-precondition", "The panorama upload could not be found. Upload it again.");
+    if (original.size <= 0 || original.size > 50 * 1024 * 1024 ||
+        !["image/jpeg", "image/png", "image/webp"].includes(original.contentType)) {
       throw new HttpsError("failed-precondition", "The uploaded panorama failed size or type validation.");
     }
+    const originalAssetId = data.originalPath.split("/").at(-1)!;
+    newNodeMediaRef = db.collection("mediaAssets").doc(`${uid}_${originalAssetId}`);
     newNodeTitle = data.title.trim();
     newNodePath = data.originalPath;
   }
@@ -128,10 +128,11 @@ export const manageStoreTour = onCall(CALLABLE_OPTIONS, async (request) => {
   }
   let result: FirebaseFirestore.DocumentData | undefined;
   await db.runTransaction(async (transaction) => {
-    const [snapshot, storeSnapshot, userSnapshot] = await Promise.all([
+    const [snapshot, storeSnapshot, userSnapshot, panoramaMedia] = await Promise.all([
       transaction.get(tourRef),
       transaction.get(storeRef),
       transaction.get(userRef),
+      ...(newNodeMediaRef ? [transaction.get(newNodeMediaRef)] : []),
     ]);
     const tour = snapshot.data();
     const store = storeSnapshot.data();
@@ -151,6 +152,22 @@ export const manageStoreTour = onCall(CALLABLE_OPTIONS, async (request) => {
       throw new HttpsError("permission-denied", "Only the tour owner or an administrator can edit this draft.");
     }
     const nodes = safeNodes(tour.nodes ?? []);
+    if (newNodeMediaRef) {
+      const media = panoramaMedia;
+      const mediaData = media?.data();
+      const alreadyLinkedNode = nodes.find((node) => node.original_path === newNodePath);
+      if (alreadyLinkedNode && media?.exists && mediaData?.uid === uid && mediaData.mediaType === "panorama" &&
+          mediaData.status === "awaiting-privacy-processing" && mediaData.originalPath === newNodePath && mediaData.linkedTourId === tourId) {
+        result = { ...tour, nodes };
+        return;
+      }
+      if (!media?.exists || mediaData?.uid !== uid || mediaData.mediaType !== "panorama" ||
+          mediaData.status !== "awaiting-privacy-processing" || mediaData.originalPath !== newNodePath ||
+          mediaData.linkedTourId != null) {
+        throw new HttpsError("failed-precondition", "The panorama is not available for this tour.");
+      }
+      transaction.update(newNodeMediaRef, { linkedTourId: tourId, linkedAt: Timestamp.now() });
+    }
 
     if (action === "addNode") {
       if (nodes.length >= 40) throw new HttpsError("failed-precondition", "A tour can contain at most 40 viewpoints.");

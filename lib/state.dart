@@ -6,6 +6,7 @@ import 'package:geolocator/geolocator.dart';
 
 import 'api.dart';
 import 'firebase/bootstrap.dart';
+import 'firebase/build_mode.dart';
 import 'firebase/gateway.dart';
 import 'firebase/product_ai.dart';
 import 'models.dart';
@@ -15,6 +16,8 @@ import 'services/directions_service.dart';
 const defaultCenterLat = 14.6195;
 const defaultCenterLng = 121.0568;
 const radiiKm = [1.0, 3.0, 5.0, 10.0];
+
+enum AuthProfileStatus { signedOut, loading, loaded, unavailable, failed }
 
 class AppState extends ChangeNotifier {
   AppState({bool seedDemoData = true, DirectionsService? directionsService})
@@ -32,6 +35,9 @@ class AppState extends ChangeNotifier {
   // seed demo data; test/demo roots opt in explicitly.
   bool apiOnline = false;
   bool usingSeededCatalog = true;
+  AuthProfileStatus authProfileStatus = AuthProfileStatus.signedOut;
+  String? authProfileError;
+  int _authProfileGeneration = 0;
   String? catalogLoadError;
   bool writeBusy = false;
   ApiException? lastApiError;
@@ -120,7 +126,9 @@ class AppState extends ChangeNotifier {
   int _nextReport = 10;
   int _nextFeedback = 10;
 
-  bool get signedIn => currentUser != null;
+  bool get signedIn => currentUser != null || (apiOnline && api.token != null);
+  bool get profileVerified =>
+      currentUser != null && authProfileStatus == AuthProfileStatus.loaded;
   AppRole get role => currentUser?.role ?? AppRole.customer;
 
   List<Store> managedStores() {
@@ -163,9 +171,11 @@ class AppState extends ChangeNotifier {
         // Restore session from Firebase Auth persisted state if available.
         if (api.token != null) {
           try {
+            authProfileStatus = AuthProfileStatus.loading;
+            authProfileError = null;
             await _hydrateSession();
-          } catch (_) {
-            // Auth token may have expired; clear and fall through to guest mode.
+          } catch (error) {
+            _recordProfileFailure(error);
             currentUser = null;
           }
         }
@@ -202,13 +212,32 @@ class AppState extends ChangeNotifier {
     auditLogs.clear();
     vendorSessions.clear();
     currentUser = null;
+    authProfileStatus = AuthProfileStatus.signedOut;
+    authProfileError = null;
     remoteSearchHits = null;
     usingSeededCatalog = false;
   }
 
   Future<void> _hydrateSession() async {
+    final generation = ++_authProfileGeneration;
+    final expectedUid = api.token;
+    if (expectedUid == null) {
+      _clearAuthenticatedProfile();
+      return;
+    }
+    authProfileStatus = AuthProfileStatus.loading;
+    authProfileError = null;
+    currentUser = null;
+    notifyListeners();
     final me = await authRepo.me();
-    currentUser = userFromJson(Map<String, dynamic>.from(me['user'] as Map));
+    if (generation != _authProfileGeneration || api.token != expectedUid) {
+      return;
+    }
+    final profile = userFromJson(Map<String, dynamic>.from(me['user'] as Map));
+    if (api.token != expectedUid) return;
+    currentUser = profile;
+    authProfileStatus = AuthProfileStatus.loaded;
+    authProfileError = null;
     for (final row in (me['stores'] as List? ?? [])) {
       final store = storeFromJson(Map<String, dynamic>.from(row as Map));
       stores.removeWhere((item) => item.id == store.id);
@@ -240,6 +269,84 @@ class AppState extends ChangeNotifier {
     if (role == AppRole.admin) {
       unawaited(loadAudit());
     }
+    notifyListeners();
+  }
+
+  void _recordProfileFailure(Object error) {
+    currentUser = null;
+    authProfileStatus =
+        error is ApiException && error.status == 404
+            ? AuthProfileStatus.unavailable
+            : AuthProfileStatus.failed;
+    authProfileError =
+        error is ApiException
+            ? error.message
+            : 'Your account profile could not be verified. Check your connection and retry.';
+    debugPrint(
+      '[profile-state] status=${authProfileStatus.name} '
+      'errorType=${error.runtimeType}',
+    );
+    notifyListeners();
+  }
+
+  void _clearAuthenticatedProfile() {
+    _authProfileGeneration++;
+    currentUser = null;
+    authProfileStatus = AuthProfileStatus.signedOut;
+    authProfileError = null;
+    users.clear();
+    favoriteStoreIds.clear();
+    favoriteProductIds.clear();
+    notifyListeners();
+  }
+
+  Future<void> retryProfileLoad() async {
+    if (!apiOnline || api.token == null) {
+      _clearAuthenticatedProfile();
+      return;
+    }
+    try {
+      await _hydrateSession();
+    } catch (error) {
+      _recordProfileFailure(error);
+    }
+  }
+
+  void _hydrateSupplementalProfileData(int generation) {
+    unawaited(() async {
+      final profile = currentUser;
+      if (profile == null || generation != _authProfileGeneration) return;
+      if (profile.role == AppRole.owner) {
+        for (final store in managedStores()) {
+          if (generation != _authProfileGeneration) return;
+          await loadStoreStaff(store.id);
+        }
+      }
+      try {
+        final favs = await api.get('/favorites');
+        if (generation != _authProfileGeneration || favs is! List) return;
+        favoriteStoreIds.clear();
+        favoriteProductIds.clear();
+        for (final row in favs) {
+          final map = Map<String, dynamic>.from(row as Map);
+          final id =
+              map['favoritable_id'] as int? ?? map['favoritableId'] as int?;
+          final type = map['favoritable_type'] as String? ?? '';
+          if (id == null) continue;
+          if (type == 'store') favoriteStoreIds.add(id);
+          if (type == 'product') favoriteProductIds.add(id);
+        }
+      } catch (error) {
+        debugPrint(
+          '[profile-state] supplemental favorites unavailable: $error',
+        );
+      }
+      if (profile.role == AppRole.admin &&
+          generation == _authProfileGeneration) {
+        unawaited(loadAudit());
+      }
+      if (generation == _authProfileGeneration) notifyListeners();
+    }());
   }
 
   Future<void> loadAudit() async {
@@ -448,6 +555,11 @@ class AppState extends ChangeNotifier {
   }) async {
     lastApiError = null;
     if (apiOnline) {
+      final generation = ++_authProfileGeneration;
+      currentUser = null;
+      authProfileStatus = AuthProfileStatus.loading;
+      authProfileError = null;
+      notifyListeners();
       try {
         final data = await authRepo.register(
           name: name,
@@ -456,17 +568,30 @@ class AppState extends ChangeNotifier {
           role: role,
         );
         // Firebase Auth manages the session — token is the UID.
-        currentUser = userFromJson(
+        final profile = userFromJson(
           Map<String, dynamic>.from(data['user'] as Map),
         );
-        // Hydrate catalog/favorites in the background; don't block the UI.
-        unawaited(_hydrateSession().catchError((_) {}));
+        if (generation != _authProfileGeneration || api.token == null) {
+          return ApiException('Sign-in changed while the profile was loading.');
+        }
+        currentUser = profile;
+        authProfileStatus = AuthProfileStatus.loaded;
+        authProfileError = null;
+        _hydrateSupplementalProfileData(generation);
         notifyListeners();
         return null;
       } on ApiException catch (error) {
+        if (generation == _authProfileGeneration) _recordProfileFailure(error);
         lastApiError = error;
         notifyListeners();
         return error;
+      } catch (error) {
+        final mapped = ApiException(
+          'Your account profile could not be verified. Check your connection and retry.',
+        );
+        if (generation == _authProfileGeneration) _recordProfileFailure(error);
+        lastApiError = mapped;
+        return mapped;
       }
     }
     // Offline / demo mode.
@@ -479,44 +604,42 @@ class AppState extends ChangeNotifier {
     );
     users.add(user);
     currentUser = user;
+    authProfileStatus = AuthProfileStatus.loaded;
+    authProfileError = null;
     notifyListeners();
     return null;
   }
 
   Future<String?> login(String email, String password) async {
     if (apiOnline) {
+      final generation = ++_authProfileGeneration;
+      currentUser = null;
+      authProfileStatus = AuthProfileStatus.loading;
+      authProfileError = null;
+      favoriteStoreIds.clear();
+      favoriteProductIds.clear();
+      notifyListeners();
       try {
         final data = await authRepo.login(email: email, password: password);
-        currentUser = userFromJson(
+        final profile = userFromJson(
           Map<String, dynamic>.from(data['user'] as Map),
         );
-        // Hydrate in background so the UI navigates immediately.
-        unawaited(() async {
-          try {
-            await _hydrateSession();
-            if (currentUser?.role == AppRole.admin) {
-              final reportData = await api.get('/admin/reports') as List;
-              reports
-                ..clear()
-                ..addAll(
-                  reportData.map(
-                    (e) => ReportItem(
-                      id: e['id'] as int,
-                      userId: e['user_id'] as int,
-                      target: e['target'] as String,
-                      reason: e['reason'] as String,
-                      resolved: e['resolved'] == true,
-                    ),
-                  ),
-                );
-              notifyListeners();
-            }
-          } catch (_) {}
-        }());
+        if (generation != _authProfileGeneration || api.token == null) {
+          return 'Sign-in changed while the profile was loading. Please retry.';
+        }
+        currentUser = profile;
+        authProfileStatus = AuthProfileStatus.loaded;
+        authProfileError = null;
+        _hydrateSupplementalProfileData(generation);
         notifyListeners();
         return null;
       } on ApiException catch (error) {
+        if (generation == _authProfileGeneration) _recordProfileFailure(error);
         return error.message;
+      } catch (error) {
+        if (generation == _authProfileGeneration) _recordProfileFailure(error);
+        return authProfileError ??
+            'Your account profile could not be verified. Check your connection and retry.';
       }
     }
     // Offline / demo mode.
@@ -525,16 +648,32 @@ class AppState extends ChangeNotifier {
     );
     if (match.isEmpty) return 'Email or password is incorrect.';
     currentUser = match.first;
+    authProfileStatus = AuthProfileStatus.loaded;
+    authProfileError = null;
     notifyListeners();
     return null;
   }
 
   void logout() {
     // Firebase sign-out is handled inside the gateway's delete('/auth/logout').
-    if (apiOnline) {
-      unawaited(api.delete('/auth/logout'));
-    }
+    final hadFirebaseSession = apiOnline && api.token != null;
+    _authProfileGeneration++;
     currentUser = null;
+    authProfileStatus =
+        hadFirebaseSession
+            ? AuthProfileStatus.loading
+            : AuthProfileStatus.signedOut;
+    authProfileError = null;
+    favoriteStoreIds.clear();
+    favoriteProductIds.clear();
+    if (apiOnline) {
+      unawaited(
+        api.delete('/auth/logout').whenComplete(() {
+          authProfileStatus = AuthProfileStatus.signedOut;
+          notifyListeners();
+        }),
+      );
+    }
     followMyLocation = false;
     unawaited(stopLocationUpdates());
     notifyListeners();
@@ -965,6 +1104,11 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> interpretSearchIntent(String query) async {
+    if (localSpotPreviewRelease) {
+      aiSearchNote = 'Cloud AI is disabled in the free preview.';
+      notifyListeners();
+      return;
+    }
     final phrase = query.trim();
     if (phrase.isEmpty) return;
     lastSearchQuery = phrase;
@@ -1838,36 +1982,38 @@ class AppState extends ChangeNotifier {
     return null;
   }
 
-  String? publishTour(StoreTour tour) {
+  Future<String?> publishTour(StoreTour tour) async {
     if (tour.nodes.length < 2) {
       return 'Connect at least two viewpoints before publishing.';
     }
-    if (tour.nodes.any(
-      (node) =>
-          !node.canPublish ||
-          node.image.contains('#') ||
-          node.image.contains('tours/originals'),
-    )) {
+    if (!apiOnline &&
+        tour.nodes.any(
+          (node) =>
+              !node.canPublish ||
+              node.image.contains('#') ||
+              node.image.contains('tours/originals'),
+        )) {
       return 'Every viewpoint needs privacy processing and owner review before publishing.';
     }
     if (apiOnline && api.token != null) {
-      return 'Publishing is unavailable until the sanitized media pipeline is configured.';
+      if (!localPanoramaE2EEnabled) {
+        return 'Online publication is disabled until production R2 reconciliation and deployment readiness are approved.';
+      }
+      _beginWrite();
+      try {
+        await api.post('/tours/${tour.id}/publish');
+        await refreshCatalog();
+        return null;
+      } catch (error) {
+        return 'Tour publication failed: $error';
+      } finally {
+        _endWrite();
+      }
     }
     _beginWrite();
     tour.status = TourStatus.published;
     notifyListeners();
-    if (apiOnline && api.token != null) {
-      unawaited(() async {
-        try {
-          await api.post('/tours/${tour.id}/publish');
-          await refreshCatalog();
-        } finally {
-          _endWrite();
-        }
-      }());
-    } else {
-      _endWrite();
-    }
+    _endWrite();
     return null;
   }
 

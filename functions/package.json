@@ -8,7 +8,9 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test:sanitizer": "npm run build && node ../scripts/media_sanitizer_smoke.cjs"
+    "test:sanitizer": "npm run build && node ../scripts/media_sanitizer_smoke.cjs",
+    "test:panorama-review": "npm run build && node ../scripts/panorama_review_smoke.cjs",
+    "test:panorama-derivative": "npm run build && node ../scripts/panorama_derivative_smoke.cjs"
   },
   "dependencies": {
     "firebase-admin": "^14.5.1",

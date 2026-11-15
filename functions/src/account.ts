@@ -1,11 +1,12 @@
 import { getAuth } from "firebase-admin/auth";
 import { FieldPath, Timestamp } from "firebase-admin/firestore";
-import { getStorage } from "firebase-admin/storage";
 import { HttpsError, onCall } from "firebase-functions/v2/https";
 import { db } from "./admin";
 import { enforceCallableAppCheck } from "./callable_options";
+import { deleteStoredObject } from "./media_quota";
+import { R2_GATEWAY_PRIVATE_JWK } from "./r2_gateway";
 
-const CALLABLE_OPTIONS = { region: "asia-southeast1", enforceAppCheck: enforceCallableAppCheck };
+const CALLABLE_OPTIONS = { region: "asia-southeast1", enforceAppCheck: enforceCallableAppCheck, secrets: [R2_GATEWAY_PRIVATE_JWK] };
 const RECENT_AUTH_MS = 5 * 60 * 1000;
 
 async function deleteMatching(collection: string, field: string, uid: string): Promise<void> {
@@ -22,9 +23,8 @@ async function cleanProductMedia(uid: string): Promise<void> {
   while (true) {
     const matches = await db.collection("mediaAssets").where("uid", "==", uid).limit(300).get();
     if (matches.empty) return;
-    const bucket = getStorage().bucket();
     const batch = db.batch();
-    const files: Promise<unknown>[] = [];
+    const files = new Set<string>();
     for (const doc of matches.docs) {
       const data = doc.data();
       if (data.status === "ready" && data.linkedProductId != null) {
@@ -38,21 +38,34 @@ async function cleanProductMedia(uid: string): Promise<void> {
           `stores/processed/${uid}/`,
           `tours/originals/${uid}/`,
         ];
-        for (const path of [data.quarantinePath, data.publicPath, data.privatePath, data.originalPath]) {
+        for (const path of [data.quarantinePath, data.publicPath, data.privatePath, data.originalPath, data.pendingOutputPath, data.pendingPublicPath, data.objectKey]) {
           if (typeof path === "string" && ownedPrefixes.some((prefix) => path.startsWith(prefix))) {
-            files.push(bucket.file(path).delete({ ignoreNotFound: true }));
+            files.add(path);
           }
         }
-        batch.delete(doc.ref);
+        batch.update(doc.ref, { status: "deleting", cleanupStartedAt: Timestamp.now() });
       }
     }
-    await Promise.all(files);
+    await Promise.all([...files].map(async (key) => {
+      await deleteStoredObject(key, "system:account-cleanup", "account-deletion");
+    }));
+    for (const doc of matches.docs) {
+      if (doc.data().status !== "ready" || doc.data().linkedProductId == null) {
+        batch.update(doc.ref, {
+          status: "deleted",
+          accountingState: "deleted",
+          deletedAt: Timestamp.now(),
+          uid: null,
+          uploaderDeletedAt: Timestamp.now(),
+          updatedAt: Timestamp.now(),
+        });
+      }
+    }
     await batch.commit();
   }
 }
 
 async function deleteOwnedTours(uid: string): Promise<void> {
-  const bucket = getStorage().bucket();
   const pageSize = 100;
   let cursor: FirebaseFirestore.QueryDocumentSnapshot | undefined;
   while (true) {
@@ -64,14 +77,14 @@ async function deleteOwnedTours(uid: string): Promise<void> {
     const tours = await query.get();
     if (tours.empty) return;
 
-    const privateFiles: Promise<unknown>[] = [];
+    const privateFiles = new Set<string>();
     for (const tour of tours.docs) {
       const nodes = tour.data().nodes;
       if (Array.isArray(nodes)) {
         for (const node of nodes) {
           const path = (node as { original_path?: unknown }).original_path;
           if (typeof path === "string" && path.startsWith(`tours/originals/${uid}/`)) {
-            privateFiles.push(bucket.file(path).delete({ ignoreNotFound: true }));
+            privateFiles.add(path);
           }
         }
       }
@@ -79,7 +92,9 @@ async function deleteOwnedTours(uid: string): Promise<void> {
     const batch = db.batch();
     for (const tour of tours.docs) batch.delete(tour.ref);
     cursor = tours.docs[tours.docs.length - 1];
-    await Promise.all(privateFiles);
+    await Promise.all([...privateFiles].map(async (key) => {
+      await deleteStoredObject(key, "system:account-cleanup", "account-tour-deletion");
+    }));
     await batch.commit();
     if (tours.size < pageSize) return;
   }

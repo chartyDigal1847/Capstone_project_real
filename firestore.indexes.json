@@ -72,6 +72,22 @@
         { "fieldPath": "updatedAt", "order": "ASCENDING" }
       ]
     },
+      {
+        "collectionGroup": "mediaAssets",
+        "queryScope": "COLLECTION",
+        "fields": [
+          { "fieldPath": "status", "order": "ASCENDING" },
+          { "fieldPath": "mediaType", "order": "ASCENDING" }
+        ]
+      },
+      {
+        "collectionGroup": "mediaAssets",
+        "queryScope": "COLLECTION",
+        "fields": [
+          { "fieldPath": "mediaType", "order": "ASCENDING" },
+          { "fieldPath": "accountingState", "order": "ASCENDING" }
+        ]
+      },
     {
       "collectionGroup": "tours",
       "queryScope": "COLLECTION",

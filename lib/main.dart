@@ -37,7 +37,10 @@ class _LocalSpotRootState extends State<LocalSpotRoot> {
   void initState() {
     super.initState();
     state = AppState(seedDemoData: widget.enableDemoData);
-    state.bootstrap();
+    // Demo/widget-test roots are intentionally offline and must never initialize
+    // a Firebase project. The production app entry point passes false and
+    // requires explicit emulator configuration in debug builds.
+    if (!widget.enableDemoData) state.bootstrap();
   }
 
   @override
@@ -48,6 +51,12 @@ class _LocalSpotRootState extends State<LocalSpotRoot> {
         debugShowCheckedModeBanner: false,
         title: 'LocalSpot',
         theme: localSpotTheme(),
+        // Temporary bridge for the legacy Material subtree in the panorama
+        // prototype while that package is being migrated to material_ui.
+        builder: (context, child) {
+          // ignore: deprecated_member_use
+          return MaterialUiCompatibilityBridge(child: child!);
+        },
         home: const LocalSpotShell(),
       ),
     );
@@ -184,6 +193,21 @@ class _LocalSpotShellState extends State<LocalSpotShell> {
               }),
         ),
       };
+    } else if (!app.profileVerified) {
+      showNav = false;
+      body = _AccountProfileGate(
+        status: app.authProfileStatus,
+        message: app.authProfileError,
+        onRetry: app.retryProfileLoad,
+        onSignOut: () {
+          app.logout();
+          setState(() {
+            authView = AuthView.welcome;
+            tab = 0;
+            overlay = OverlayView.none;
+          });
+        },
+      );
     } else {
       showNav = overlay == OverlayView.none;
       body = switch (overlay) {
@@ -492,5 +516,58 @@ class _LocalSpotShellState extends State<LocalSpotShell> {
         label: 'Profile',
       ),
     ];
+  }
+}
+
+class _AccountProfileGate extends StatelessWidget {
+  const _AccountProfileGate({
+    required this.status,
+    required this.message,
+    required this.onRetry,
+    required this.onSignOut,
+  });
+
+  final AuthProfileStatus status;
+  final String? message;
+  final Future<void> Function() onRetry;
+  final VoidCallback onSignOut;
+
+  @override
+  Widget build(BuildContext context) {
+    final loading = status == AuthProfileStatus.loading;
+    final unavailable = status == AuthProfileStatus.unavailable;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (loading) const CircularProgressIndicator(),
+            if (loading) const SizedBox(height: 16),
+            Text(
+              loading
+                  ? 'Verifying your account profile…'
+                  : unavailable
+                  ? 'Account profile unavailable'
+                  : 'Could not verify account profile',
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            if (message != null) ...[
+              const SizedBox(height: 10),
+              Text(message!, textAlign: TextAlign.center),
+            ],
+            if (!loading) ...[
+              const SizedBox(height: 18),
+              FilledButton.tonal(
+                onPressed: onRetry,
+                child: const Text('Retry'),
+              ),
+              TextButton(onPressed: onSignOut, child: const Text('Sign out')),
+            ],
+          ],
+        ),
+      ),
+    );
   }
 }

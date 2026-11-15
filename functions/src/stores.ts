@@ -1,13 +1,14 @@
 import { getAuth } from "firebase-admin/auth";
-import { randomUUID } from "node:crypto";
-import { getStorage } from "firebase-admin/storage";
-import { Timestamp } from "firebase-admin/firestore";
+import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { HttpsError, onCall, type CallableRequest } from "firebase-functions/v2/https";
 import { db, objectData } from "./admin";
 import { encodeGeohash } from "./geo";
 import { enforceCallableAppCheck } from "./callable_options";
+import { completeStorageReservation, deleteStoredObject, reserveStorageBytes } from "./media_quota";
+import { r2Head, r2PublicMediaUrl, r2Put, r2Read, r2PublishStoreImage, R2_GATEWAY_PRIVATE_JWK } from "./r2_gateway";
 
 const CALLABLE_OPTIONS = { region: "asia-southeast1", enforceAppCheck: enforceCallableAppCheck };
+const R2_CALLABLE_OPTIONS = { ...CALLABLE_OPTIONS, secrets: [R2_GATEWAY_PRIVATE_JWK] };
 const STORE_APPLICATION_WINDOW_MS = 24 * 60 * 60 * 1000;
 const MAX_STORE_APPLICATIONS_PER_WINDOW = 3;
 const STORE_TYPES = new Set([
@@ -221,33 +222,87 @@ async function handleStoreReview(request: CallableRequest<Record<string, unknown
   const storeRef = matches.docs[0].ref;
   const initialStore = matches.docs[0].data();
   let imageMediaRef: FirebaseFirestore.DocumentReference | undefined;
+  let imageMediaData: FirebaseFirestore.DocumentData | undefined;
   let publicImagePath: string | undefined;
   let publicImageUrl: string | undefined;
+  let sourcePrivatePath: string | undefined;
+  let rejectedImageKeys: string[] = [];
+  let outputReservationId: string | undefined;
   if (nextStatus === "approved") {
     const imageMedia = await db.collection("mediaAssets").where("linkedStoreId", "==", storeId).limit(1).get();
     if (!imageMedia.empty) {
       imageMediaRef = imageMedia.docs[0].ref;
-      const imageMediaData = imageMedia.docs[0].data();
+      imageMediaData = imageMedia.docs[0].data();
       if (imageMediaData.uid !== initialStore.ownerUid || imageMediaData.mediaType !== "store" ||
-          imageMediaData.status !== "ready" || typeof imageMediaData.privatePath !== "string") {
+          !["ready", "approval-pending"].includes(String(imageMediaData.status)) ||
+          (typeof imageMediaData.privatePath !== "string" && typeof imageMediaData.publicPath !== "string")) {
         throw new HttpsError("failed-precondition", "The store photo is not ready for publication.");
       }
-      if (typeof initialStore.image !== "string" || initialStore.image.length === 0) {
-        const bucket = getStorage().bucket();
-        const [imageBytes] = await bucket.file(imageMediaData.privatePath).download();
-        const extension = imageMediaData.privatePath.split(".").at(-1) ?? "jpg";
-        publicImagePath = `stores/public/${storeId}/${imageMediaData.assetId}.${extension}`;
-        const token = randomUUID();
-        await bucket.file(publicImagePath).save(imageBytes, {
-          resumable: false,
-          metadata: {
-            contentType: imageMediaData.contentType,
-            cacheControl: "public,max-age=86400",
-            metadata: { firebaseStorageDownloadTokens: token, metadataStripped: "true" },
-          },
-        });
-        publicImageUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(publicImagePath)}?alt=media&token=${token}`;
+      sourcePrivatePath = typeof imageMediaData.privatePath === "string" ? imageMediaData.privatePath : undefined;
+      const extension = String(imageMediaData.extension ?? sourcePrivatePath?.split(".").at(-1) ?? "jpg");
+      publicImagePath = typeof imageMediaData.publicPath === "string"
+        ? imageMediaData.publicPath
+        : `stores/public/${storeId}/${imageMediaData.assetId}.${extension}`;
+      publicImageUrl = r2PublicMediaUrl(publicImagePath);
+
+      if (typeof imageMediaData.publicPath !== "string") {
+        if (!sourcePrivatePath) throw new HttpsError("failed-precondition", "The private store image is unavailable.");
+        const source = await r2Head(sourcePrivatePath);
+        if (!source || source.size !== Number(imageMediaData.size) || source.contentType !== imageMediaData.contentType) {
+          throw new HttpsError("failed-precondition", "The private store image could not be verified in R2.");
+        }
+        const imageBytes = await r2Read(sourcePrivatePath);
+        if (imageBytes.length !== source.size) throw new HttpsError("data-loss", "The private store image size changed during approval.");
+
+        outputReservationId = `publish_${storeId}_${imageMediaData.assetId}`;
+        const outputReservationRef = db.collection("uploadReservations").doc(outputReservationId);
+        const outputReservation = await outputReservationRef.get();
+        if (!outputReservation.exists) {
+          await reserveStorageBytes({
+            reservationId: outputReservationId,
+            uid: String(imageMediaData.uid),
+            assetId: String(imageMediaData.assetId),
+            mediaType: "store",
+            objectKey: publicImagePath,
+            reservedBytes: imageBytes.length,
+            purpose: "published",
+          }, Timestamp.fromMillis(Date.now() + 10 * 60 * 1000));
+        } else if (outputReservation.data()?.objectKey !== publicImagePath ||
+            Number(outputReservation.data()?.reservedBytes) !== imageBytes.length) {
+          throw new HttpsError("data-loss", "The store publication reservation does not match the image.");
+        }
+        const existingPublic = await r2Head(publicImagePath);
+        if (!existingPublic) {
+          if (outputReservation.exists && outputReservation.data()?.status === "completed") {
+            throw new HttpsError("data-loss", "The prepared public store image is missing from R2.");
+          }
+          await r2Put(publicImagePath, imageBytes, source.contentType, imageBytes.length, {
+            reservationId: outputReservationId,
+            uid: String(imageMediaData.uid),
+            mediaType: "store",
+            publicApproved: false,
+          });
+        }
+        const verifiedPublic = await r2Head(publicImagePath);
+        if (!verifiedPublic || verifiedPublic.size !== imageBytes.length || verifiedPublic.contentType !== source.contentType) {
+          throw new HttpsError("data-loss", "The public store image could not be verified.");
+        }
+        await completeStorageReservation(outputReservationId, verifiedPublic.size);
+        await imageMediaRef.set({
+          status: "approval-pending",
+          pendingPublicPath: publicImagePath,
+          pendingPublicReservationId: outputReservationId,
+          updatedAt: Timestamp.now(),
+        }, { merge: true });
       }
+    }
+  } else if (nextStatus === "rejected") {
+    const imageMedia = await db.collection("mediaAssets").where("linkedStoreId", "==", storeId).limit(1).get();
+    if (!imageMedia.empty) {
+      imageMediaRef = imageMedia.docs[0].ref;
+      imageMediaData = imageMedia.docs[0].data();
+      rejectedImageKeys = [imageMediaData.objectKey, imageMediaData.pendingPublicPath]
+        .filter((key): key is string => typeof key === "string");
     }
   }
 
@@ -273,7 +328,8 @@ async function handleStoreReview(request: CallableRequest<Record<string, unknown
     const ownedStoreIds = (ownerSnap.data()?.ownedStoreIds as number[] | undefined) ?? [];
     if (imageMediaRef && publicImagePath) {
       const imageMedia = await transaction.get(imageMediaRef);
-      if (imageMedia.data()?.linkedStoreId !== storeId || imageMedia.data()?.status !== "ready") {
+      if (imageMedia.data()?.linkedStoreId !== storeId ||
+          !["ready", "approval-pending"].includes(String(imageMedia.data()?.status))) {
         throw new HttpsError("failed-precondition", "The store photo changed during review.");
       }
     }
@@ -283,7 +339,23 @@ async function handleStoreReview(request: CallableRequest<Record<string, unknown
       ...(publicImageUrl ? { image: publicImageUrl } : {}),
     });
     if (imageMediaRef && publicImagePath) {
-      transaction.update(imageMediaRef, { publicPath: publicImagePath, publishedAt: Timestamp.now().toDate().toISOString() });
+      transaction.update(imageMediaRef, {
+        status: "ready",
+        publicPath: publicImagePath,
+        downloadUrl: publicImageUrl,
+        objectKey: publicImagePath,
+        pendingPublicPath: FieldValue.delete(),
+        pendingPublicReservationId: FieldValue.delete(),
+        publishedAt: Timestamp.now().toDate().toISOString(),
+      });
+    } else if (imageMediaRef && nextStatus === "rejected") {
+      transaction.update(imageMediaRef, {
+        linkedStoreId: FieldValue.delete(),
+        status: "cleanup-pending",
+        cleanupRequestedAt: Timestamp.now(),
+        cleanupReason: "store-application-rejected",
+        updatedAt: Timestamp.now(),
+      });
     }
     if (nextStatus === "approved") {
       transaction.update(ownerRef, {
@@ -301,16 +373,27 @@ async function handleStoreReview(request: CallableRequest<Record<string, unknown
     return nextStatus;
     });
   } catch (error) {
-    if (publicImagePath) await getStorage().bucket().file(publicImagePath).delete({ ignoreNotFound: true }).catch(() => undefined);
     throw error;
+  }
+
+  if (nextStatus === "approved" && publicImagePath) {
+    await r2PublishStoreImage(publicImagePath);
+    if (sourcePrivatePath && imageMediaRef) {
+      await deleteStoredObject(sourcePrivatePath, adminUid, "store-image-published");
+      await imageMediaRef.update({ privatePath: FieldValue.delete(), sourceDeletedAt: Timestamp.now(), updatedAt: Timestamp.now() });
+    }
+  }
+  if (nextStatus === "rejected" && rejectedImageKeys.length > 0) {
+    await Promise.all(rejectedImageKeys.map((key) => deleteStoredObject(key, adminUid, "store-application-rejected")));
+    if (imageMediaRef) await imageMediaRef.set({ status: "deleted", accountingState: "deleted", deletedAt: Timestamp.now(), updatedAt: Timestamp.now() }, { merge: true });
   }
 
   return { id: storeId, status: resultStatus };
 }
 
-export const reviewStoreApplication = onCall(CALLABLE_OPTIONS, (request) => handleStoreReview(request));
+export const reviewStoreApplication = onCall(R2_CALLABLE_OPTIONS, (request) => handleStoreReview(request));
 
-export const approveStoreApplication = onCall(CALLABLE_OPTIONS, async (request) => {
+export const approveStoreApplication = onCall(R2_CALLABLE_OPTIONS, async (request) => {
   return handleStoreReview(request, "approved");
 });
 

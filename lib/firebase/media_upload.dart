@@ -1,9 +1,12 @@
+import 'dart:io';
 import 'dart:math';
 
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_storage/firebase_storage.dart';
+import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
+
+import 'build_mode.dart';
 
 class UploadedMedia {
   const UploadedMedia({required this.assetId, this.downloadUrl});
@@ -14,6 +17,10 @@ class UploadedMedia {
 
 class MediaUpload {
   MediaUpload._();
+
+  static final _functions = FirebaseFunctions.instanceFor(
+    region: 'asia-southeast1',
+  );
 
   static String createAssetId() {
     final suffix = Random.secure()
@@ -28,13 +35,14 @@ class MediaUpload {
     required String kind,
     void Function(double value)? onProgress,
   }) async {
+    if (localSpotPreviewRelease) {
+      throw StateError('Media uploads are disabled in the free preview.');
+    }
     if (kind != 'product' && kind != 'store') {
       throw ArgumentError.value(kind, 'kind');
     }
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null) {
-      throw StateError('Sign in before uploading a product photo.');
-    }
+    if (user == null) throw StateError('Sign in before uploading a photo.');
     final bytes = await image.readAsBytes();
     if (bytes.isEmpty || bytes.length > 8 * 1024 * 1024) {
       throw StateError('Choose an image smaller than 8 MiB.');
@@ -43,38 +51,27 @@ class MediaUpload {
     if (format == null) throw StateError('Use a JPEG, PNG, or WebP image.');
 
     final assetId = createAssetId();
-    final root = kind == 'store' ? 'stores' : 'products';
-    final path = '$root/quarantine/${user.uid}/$assetId';
-    final task = FirebaseStorage.instance
-        .ref(path)
-        .putData(bytes, SettableMetadata(contentType: format.$1));
-    await for (final snapshot in task.snapshotEvents) {
-      if (snapshot.totalBytes > 0) {
-        onProgress?.call(snapshot.bytesTransferred / snapshot.totalBytes);
-      }
-    }
-
-    final media = FirebaseFirestore.instance
-        .collection('mediaAssets')
-        .doc('${user.uid}_$assetId');
-    final result = await media
-        .snapshots()
-        .firstWhere((snapshot) {
-          final status = snapshot.data()?['status'];
-          return status == 'ready' || status == 'failed';
-        })
-        .timeout(const Duration(seconds: 90));
-    final data = result.data()!;
-    if (data['status'] != 'ready' ||
-        data['mediaType'] != kind ||
-        (kind == 'product' && data['downloadUrl'] is! String)) {
+    final reservation = await _reserve({
+      'mediaType': kind,
+      'assetId': assetId,
+      'contentType': format.$1,
+      'expectedBytes': bytes.length,
+    });
+    await _upload(reservation, bytes, format.$1, onProgress);
+    final finalized = await _functions
+        .httpsCallable('finalizeMediaUpload')
+        .call({'reservationId': reservation['reservationId']});
+    final result = Map<String, dynamic>.from(finalized.data as Map);
+    if (result['status'] != 'ready' ||
+        result['assetId'] != assetId ||
+        (kind == 'product' && result['downloadUrl'] is! String)) {
       throw StateError(
         'The photo could not be processed. Choose another image or try again.',
       );
     }
     return UploadedMedia(
       assetId: assetId,
-      downloadUrl: data['downloadUrl'] as String?,
+      downloadUrl: result['downloadUrl'] as String?,
     );
   }
 
@@ -84,25 +81,228 @@ class MediaUpload {
     required String assetId,
     void Function(double value)? onProgress,
   }) async {
+    if (localSpotPreviewRelease) {
+      throw StateError('Panorama uploads are disabled in the free preview.');
+    }
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) throw StateError('Sign in before uploading a panorama.');
-    final bytes = await image.readAsBytes();
-    if (bytes.isEmpty || bytes.length > 50 * 1024 * 1024) {
+    final fileBytes = await image.length();
+    if (fileBytes <= 0 || fileBytes > 50 * 1024 * 1024) {
       throw StateError('Choose a panorama smaller than 50 MiB.');
     }
-    final format = _format(bytes);
-    if (format == null) throw StateError('Use a JPEG, PNG, or WebP panorama.');
+    final signature = await image
+        .openRead(0, 3)
+        .fold<List<int>>(<int>[], (out, chunk) => out..addAll(chunk));
+    if (signature.length < 3 ||
+        signature[0] != 0xff ||
+        signature[1] != 0xd8 ||
+        signature[2] != 0xff) {
+      throw StateError(
+        'Panorama privacy processing currently supports JPEG images only.',
+      );
+    }
 
-    final path = 'tours/originals/${user.uid}/$tourId/$assetId';
-    final task = FirebaseStorage.instance
-        .ref(path)
-        .putData(bytes, SettableMetadata(contentType: format.$1));
-    await for (final snapshot in task.snapshotEvents) {
-      if (snapshot.totalBytes > 0) {
-        onProgress?.call(snapshot.bytesTransferred / snapshot.totalBytes);
+    final reservation = await _reserve({
+      'mediaType': 'panorama',
+      'assetId': assetId,
+      'tourId': tourId,
+      'contentType': 'image/jpeg',
+      'expectedBytes': fileBytes,
+    });
+    await _uploadStream(
+      reservation,
+      image.openRead(),
+      fileBytes,
+      'image/jpeg',
+      onProgress,
+    );
+    final finalized = await _functions
+        .httpsCallable('finalizeMediaUpload')
+        .call({'reservationId': reservation['reservationId']});
+    final result = Map<String, dynamic>.from(finalized.data as Map);
+    if (result['status'] != 'awaiting-privacy-processing' ||
+        result['assetId'] != assetId ||
+        result['originalPath'] is! String) {
+      throw StateError(
+        'The panorama could not be verified. Try uploading it again.',
+      );
+    }
+    return result['originalPath'] as String;
+  }
+
+  static Future<Map<String, dynamic>> uploadPanoramaDerivative(
+    File derivative, {
+    required int tourId,
+    required int nodeId,
+    required String assetId,
+    required String derivativeSha256,
+    required String processingVersion,
+    void Function(double value)? onProgress,
+  }) async {
+    if (localSpotPreviewRelease) {
+      throw StateError('Panorama uploads are disabled in the free preview.');
+    }
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      throw StateError('Sign in before uploading a panorama derivative.');
+    }
+    if (!RegExp(r'^[a-f0-9]{64}$').hasMatch(derivativeSha256)) {
+      throw StateError('The processed derivative digest is invalid.');
+    }
+    final fileBytes = await derivative.length();
+    if (fileBytes <= 0 || fileBytes > 50 * 1024 * 1024) {
+      throw StateError(
+        'The processed derivative must be no larger than 50 MiB.',
+      );
+    }
+    final head = await derivative
+        .openRead(0, 3)
+        .fold<List<int>>(<int>[], (out, chunk) => out..addAll(chunk));
+    if (head.length < 3 ||
+        head[0] != 0xff ||
+        head[1] != 0xd8 ||
+        head[2] != 0xff) {
+      throw StateError('The processed derivative is not a JPEG image.');
+    }
+    final reserved = await _functions
+        .httpsCallable('reservePanoramaDerivativeUpload')
+        .call({
+          'tourId': tourId,
+          'nodeId': nodeId,
+          'assetId': assetId,
+          'contentType': 'image/jpeg',
+          'expectedBytes': fileBytes,
+          'derivativeSha256': derivativeSha256,
+          'processingVersion': processingVersion,
+        });
+    final reservation = Map<String, dynamic>.from(reserved.data as Map);
+    for (final key in [
+      'reservationId',
+      'uploadUrl',
+      'uploadToken',
+      'objectKey',
+    ]) {
+      if (reservation[key] is! String) {
+        throw StateError('The derivative reservation response is invalid.');
       }
     }
-    return path;
+    await _uploadStream(
+      reservation,
+      derivative.openRead(),
+      fileBytes,
+      'image/jpeg',
+      onProgress,
+    );
+    final finalized = await _functions
+        .httpsCallable('finalizePanoramaDerivativeUpload')
+        .call({'reservationId': reservation['reservationId']});
+    final result = Map<String, dynamic>.from(finalized.data as Map);
+    if (result['status'] != 'verified' ||
+        result['objectKey'] != reservation['objectKey'] ||
+        result['sha256'] != derivativeSha256 ||
+        result['contentType'] != 'image/jpeg' ||
+        result['accountingState'] != 'counted') {
+      throw StateError(
+        'The backend did not verify and account for the derivative.',
+      );
+    }
+    return result;
+  }
+
+  static Future<Map<String, dynamic>> _reserve(Map<String, Object> data) async {
+    try {
+      final response = await _functions
+          .httpsCallable('reserveMediaUpload')
+          .call(data);
+      final result = Map<String, dynamic>.from(response.data as Map);
+      for (final key in ['reservationId', 'uploadUrl', 'uploadToken']) {
+        if (result[key] is! String) {
+          throw StateError('The upload reservation response is invalid.');
+        }
+      }
+      return result;
+    } on FirebaseFunctionsException catch (error) {
+      if (error.message?.contains('STORAGE_LIMIT_REACHED') == true ||
+          error.code == 'resource-exhausted') {
+        throw StateError(
+          'Storage is full or temporarily unavailable. Delete unused media or contact an administrator.',
+        );
+      }
+      rethrow;
+    }
+  }
+
+  static Future<void> _upload(
+    Map<String, dynamic> reservation,
+    List<int> bytes,
+    String contentType,
+    void Function(double value)? onProgress,
+  ) async {
+    await _uploadStream(
+      reservation,
+      Stream<List<int>>.fromIterable(_chunks(bytes)),
+      bytes.length,
+      contentType,
+      onProgress,
+    );
+  }
+
+  static Iterable<List<int>> _chunks(List<int> bytes) sync* {
+    const chunkSize = 256 * 1024;
+    for (var offset = 0; offset < bytes.length; offset += chunkSize) {
+      final end = min(offset + chunkSize, bytes.length);
+      yield bytes.sublist(offset, end);
+    }
+  }
+
+  static Future<void> _uploadStream(
+    Map<String, dynamic> reservation,
+    Stream<List<int>> source,
+    int contentLength,
+    String contentType,
+    void Function(double value)? onProgress,
+  ) async {
+    final uri = Uri.parse(reservation['uploadUrl'] as String);
+    final idToken = await FirebaseAuth.instance.currentUser?.getIdToken();
+    if (idToken == null || idToken.isEmpty) {
+      throw StateError('Your sign-in expired. Sign in again before uploading.');
+    }
+    final request =
+        http.StreamedRequest('PUT', uri)
+          ..contentLength = contentLength
+          ..headers['Content-Type'] = contentType
+          ..headers['Authorization'] = 'Bearer $idToken'
+          ..headers['X-Upload-Authorization'] =
+              'Bearer ${reservation['uploadToken']}';
+    final client = http.Client();
+    try {
+      final responseFuture = client.send(request);
+      var sent = 0;
+      await for (final chunk in source) {
+        sent += chunk.length;
+        if (sent > contentLength) {
+          throw StateError('The file changed while it was being uploaded.');
+        }
+        request.sink.add(chunk);
+        onProgress?.call(sent / contentLength);
+      }
+      if (sent != contentLength) {
+        throw StateError('The file changed while it was being uploaded.');
+      }
+      await request.sink.close();
+      final response = await responseFuture.timeout(const Duration(minutes: 3));
+      final responseBody = await response.stream.bytesToString();
+      if (response.statusCode != 201) {
+        if (response.statusCode == 413) {
+          throw StateError('The upload exceeded its reserved size.');
+        }
+        throw StateError(
+          'The image upload failed (${response.statusCode}). $responseBody',
+        );
+      }
+    } finally {
+      client.close();
+    }
   }
 
   static (String, String)? _format(List<int> bytes) {

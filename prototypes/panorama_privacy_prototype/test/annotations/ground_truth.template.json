@@ -1,0 +1,25 @@
+{
+  "fixture": {
+    "file": "REPLACE_WITH_FIXTURE_FILENAME",
+    "sha256": "REPLACE_WITH_SOURCE_SHA256",
+    "width": 0,
+    "height": 0
+  },
+  "annotation": {
+    "annotator_id": "ANONYMIZED_ID",
+    "annotated_at": "YYYY-MM-DD",
+    "tool": "OFFLINE_TOOL_AND_VERSION",
+    "consensus": false
+  },
+  "instances": [
+    {
+      "id": "person-001",
+      "class": "person",
+      "box": {"x": 0.0, "y": 0.0, "width": 0.0, "height": 0.0},
+      "wraps_seam": false,
+      "strata": ["small", "distant", "occluded", "crowded", "seam", "north_pole", "south_pole"],
+      "visibility": "full",
+      "certainty": "certain"
+    }
+  ]
+}

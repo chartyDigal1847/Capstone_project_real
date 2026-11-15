@@ -1,7 +1,16 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- The INTERNET permission is required for development. Specifically,
-         the Flutter tool needs it to communicate with the running application
-         to allow setting breakpoints, to provide hot reload, etc.
-    -->
-    <uses-permission android:name="android.permission.INTERNET"/>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <application
+        android:usesCleartextTraffic="true">
+        <!--
+          The google-services plugin's merged manifest adds FirebaseInitProvider,
+          which creates the production default FirebaseApp before Flutter can
+          select the demo-localspot emulator project. Debug Firebase is instead
+          initialized explicitly from Dart after emulator options are applied.
+          This override is debug-source-set only; release initialization is unchanged.
+        -->
+        <provider
+            android:name="com.google.firebase.provider.FirebaseInitProvider"
+            tools:node="remove" />
+    </application>
 </manifest>

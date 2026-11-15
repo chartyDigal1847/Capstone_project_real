@@ -1,16 +1,31 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:panorama_privacy_prototype/main.dart' as panorama_privacy;
+import 'package:panorama_privacy_prototype/review_flow.dart' as panorama_review;
+import 'package:panorama_privacy_prototype/review_model.dart'
+    as panorama_review_model;
 
 import '../firebase/media_upload.dart';
+import '../firebase/bootstrap.dart';
+import '../firebase/build_mode.dart';
 import '../map_view.dart';
 import '../models.dart';
 import '../state.dart';
 import '../theme.dart';
 import '../widgets.dart';
+
+class _FirebaseOwnerContext
+    implements panorama_review_model.AuthenticatedOwnerContext {
+  const _FirebaseOwnerContext(this.authenticatedUid);
+  @override
+  final String authenticatedUid;
+}
 
 class OwnerDashboard extends StatelessWidget {
   const OwnerDashboard({
@@ -1586,11 +1601,17 @@ class _TourEditorPageState extends State<TourEditorPage> {
   XFile? selectedPanorama;
   String? panoramaAssetId;
   String? uploadedOriginalPath;
+  panorama_review.PanoramaPrivacyReceipt? privacyReceipt;
+  Map<String, dynamic>? verifiedPanoramaDerivative;
+  int? pendingPanoramaNodeId;
   bool recoveringPanorama = false;
   bool uploadingPanorama = false;
   double panoramaProgress = 0;
   var publishing = false;
   var creatingTour = false;
+  static const _panoramaR2CutoverReady = false;
+  bool get _panoramaUploadReady =>
+      _panoramaR2CutoverReady || localPanoramaE2EEnabled;
 
   static const samples = [
     (
@@ -1618,10 +1639,37 @@ class _TourEditorPageState extends State<TourEditorPage> {
     try {
       final file = await ImagePicker().pickImage(source: ImageSource.gallery);
       if (file == null || !mounted) return;
+      final name = file.name.toLowerCase();
+      if (!(name.endsWith('.jpg') || name.endsWith('.jpeg'))) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Panorama privacy processing currently supports JPEG files only.',
+            ),
+          ),
+        );
+        return;
+      }
+      final signature = await file
+          .openRead(0, 3)
+          .fold<List<int>>(<int>[], (bytes, chunk) => bytes..addAll(chunk));
+      if (!mounted) return;
+      if (signature.length < 3 ||
+          signature[0] != 0xff ||
+          signature[1] != 0xd8 ||
+          signature[2] != 0xff) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('The selected file is not a valid JPEG image.'),
+          ),
+        );
+        return;
+      }
       setState(() {
         selectedPanorama = file;
         panoramaAssetId = MediaUpload.createAssetId();
         uploadedOriginalPath = null;
+        privacyReceipt = null;
         panoramaProgress = 0;
         image.text = file.name;
       });
@@ -1634,6 +1682,149 @@ class _TourEditorPageState extends State<TourEditorPage> {
           ),
         ),
       );
+    }
+  }
+
+  Future<void> _processAndReviewPanorama() async {
+    final file = selectedPanorama;
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (file == null || uid == null) return;
+    final receipt = await Navigator.of(
+      context,
+    ).push<panorama_review.PanoramaPrivacyReceipt>(
+      MaterialPageRoute(
+        builder:
+            (_) => panorama_privacy.PrototypeScreen(
+              initialPath: file.path,
+              initialName: file.name,
+              integratedMode: true,
+              ownerContext: _FirebaseOwnerContext(uid),
+            ),
+      ),
+    );
+    if (!mounted || receipt == null) return;
+    setState(() => privacyReceipt = receipt);
+    verifiedPanoramaDerivative = null;
+    pendingPanoramaNodeId = null;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Local processing and owner attestation recorded. Secure upload remains disabled until initial R2 reconciliation is completed.',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _uploadAndAddOnlinePanorama(StoreTour tour) async {
+    final receipt = privacyReceipt;
+    final selected = selectedPanorama;
+    final assetId = panoramaAssetId;
+    if (!_panoramaUploadReady ||
+        receipt == null ||
+        selected == null ||
+        assetId == null) {
+      return;
+    }
+    final app = AppScope.of(context);
+    setState(() {
+      uploadingPanorama = true;
+      panoramaProgress = 0;
+    });
+    try {
+      var originalPath = uploadedOriginalPath;
+      if (originalPath == null) {
+        originalPath = await MediaUpload.uploadPanorama(
+          selected,
+          tourId: tour.id,
+          assetId: assetId,
+          onProgress: (value) {
+            if (mounted) setState(() => panoramaProgress = value * .35);
+          },
+        );
+        if (!mounted) return;
+        setState(() => uploadedOriginalPath = originalPath);
+      }
+      var nodeId = pendingPanoramaNodeId;
+      if (nodeId == null) {
+        final existing =
+            tour.nodes
+                .where((node) => node.originalStoragePath == originalPath)
+                .firstOrNull;
+        if (existing != null) {
+          nodeId = existing.id;
+        } else {
+          final label =
+              title.text.trim().isEmpty
+                  ? 'Viewpoint ${tour.nodes.length + 1}'
+                  : title.text.trim();
+          final error = await app.addTourNode(
+            tour,
+            label,
+            '',
+            originalStoragePath: originalPath,
+          );
+          if (error != null) throw StateError(error);
+          final refreshed = app.draftOrPublishedTour(tour.storeId) ?? tour;
+          nodeId =
+              refreshed.nodes
+                  .firstWhere(
+                    (node) => node.originalStoragePath == originalPath,
+                  )
+                  .id;
+        }
+        pendingPanoramaNodeId = nodeId;
+      }
+
+      var derivative = verifiedPanoramaDerivative;
+      if (derivative == null ||
+          derivative['sha256'] != receipt.derivativeSha256) {
+        derivative = await MediaUpload.uploadPanoramaDerivative(
+          File(receipt.derivativePath),
+          tourId: tour.id,
+          nodeId: nodeId,
+          assetId: assetId,
+          derivativeSha256: receipt.derivativeSha256,
+          processingVersion: receipt.processingVersion,
+          onProgress: (value) {
+            if (mounted) setState(() => panoramaProgress = .35 + value * .5);
+          },
+        );
+        verifiedPanoramaDerivative = derivative;
+      }
+      await app.api.post('/tours/${tour.id}/nodes/$nodeId/review', {
+        'derivative_sha256': receipt.derivativeSha256,
+        'processing_version': receipt.processingVersion,
+        'inspected_directions': receipt.inspectedDirections.toList()..sort(),
+        'acknowledged_miss_risk': receipt.acknowledgedMissRisk,
+        'acknowledged_manual_inspection': receipt.acknowledgedManualInspection,
+      });
+      if (!mounted) return;
+      setState(() {
+        selectedPanorama = null;
+        panoramaAssetId = null;
+        uploadedOriginalPath = null;
+        privacyReceipt = null;
+        verifiedPanoramaDerivative = null;
+        pendingPanoramaNodeId = null;
+        panoramaProgress = 0;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Derivative independently verified, quota finalized, and owner attestation recorded.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(error.toString().replaceFirst('Bad state: ', '')),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => uploadingPanorama = false);
     }
   }
 
@@ -1698,6 +1889,68 @@ class _TourEditorPageState extends State<TourEditorPage> {
       );
     } finally {
       if (mounted) setState(() => recoveringPanorama = false);
+    }
+  }
+
+  Future<void> _showPrivatePanorama(
+    StoreTour tour,
+    int nodeId,
+    String variant,
+  ) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+    try {
+      final access =
+          await AppScope.of(context).api.get(
+                '/tours/${tour.id}/nodes/$nodeId/private-media',
+                {'variant': variant},
+              )
+              as Map;
+      final url = access['url'];
+      final gatewayToken = access['token'];
+      final firebaseToken = await user.getIdToken();
+      if (!mounted ||
+          url is! String ||
+          gatewayToken is! String ||
+          firebaseToken == null ||
+          url.isEmpty ||
+          gatewayToken.isEmpty) {
+        throw StateError('Private media access was not granted.');
+      }
+      await showDialog<void>(
+        context: context,
+        builder:
+            (dialogContext) => AlertDialog(
+              title: Text(
+                variant == 'original'
+                    ? 'Private original'
+                    : 'Verified derivative',
+              ),
+              content: SizedBox(
+                width: 560,
+                child: NetworkPhoto(
+                  url,
+                  height: 320,
+                  radius: 8,
+                  headers: {
+                    'Authorization': 'Bearer $firebaseToken',
+                    'X-Gateway-Authorization': 'Bearer $gatewayToken',
+                  },
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('Close'),
+                ),
+              ],
+            ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Private media unavailable: $error')),
+      );
     }
   }
 
@@ -1865,6 +2118,26 @@ class _TourEditorPageState extends State<TourEditorPage> {
                             connectFrom?.id == n.id ? 'From here' : 'Connect',
                           ),
                         ),
+                        if (app.apiOnline && n.originalStoragePath != null) ...[
+                          TextButton(
+                            onPressed:
+                                () => _showPrivatePanorama(
+                                  tour,
+                                  n.id,
+                                  'original',
+                                ),
+                            child: const Text('View private original'),
+                          ),
+                          TextButton(
+                            onPressed:
+                                () => _showPrivatePanorama(
+                                  tour,
+                                  n.id,
+                                  'derivative',
+                                ),
+                            child: const Text('View private derivative'),
+                          ),
+                        ],
                       ],
                     ),
                   ],
@@ -1917,7 +2190,7 @@ class _TourEditorPageState extends State<TourEditorPage> {
                   const Padding(
                     padding: EdgeInsets.only(top: 6),
                     child: Text(
-                      'Online tours require a selected JPEG, PNG, or WebP file under 50 MiB. Uploads stay private until the panorama privacy pipeline is available.',
+                      'Select a JPEG panorama, run on-device privacy processing, and complete all 48 owner-review directions. Upload and publication stay disabled until secure backend verification and R2 reconciliation are ready.',
                       style: TextStyle(color: taupe, fontSize: 11),
                     ),
                   ),
@@ -1959,6 +2232,27 @@ class _TourEditorPageState extends State<TourEditorPage> {
                         : 'Choose another file',
                   ),
                 ),
+                if (selectedPanorama != null) ...[
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    onPressed:
+                        uploadingPanorama ? null : _processAndReviewPanorama,
+                    icon: const Icon(Icons.shield_outlined),
+                    label: Text(
+                      privacyReceipt == null
+                          ? 'Process and review 360° panorama'
+                          : 'Reprocess and review panorama',
+                    ),
+                  ),
+                  if (privacyReceipt != null)
+                    const Padding(
+                      padding: EdgeInsets.only(top: 6),
+                      child: Text(
+                        'On-device review recorded for the current derivative. This local receipt is not backend verification and does not authorize publication.',
+                        style: TextStyle(color: taupe, fontSize: 11),
+                      ),
+                    ),
+                ],
                 if (uploadingPanorama) ...[
                   const SizedBox(height: 10),
                   LinearProgressIndicator(
@@ -1966,7 +2260,7 @@ class _TourEditorPageState extends State<TourEditorPage> {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'Uploading private original ${(panoramaProgress * 100).round()}%',
+                    'Secure panorama upload ${(panoramaProgress * 100).round()}%',
                     style: const TextStyle(color: taupe, fontSize: 11),
                   ),
                 ],
@@ -1997,7 +2291,14 @@ class _TourEditorPageState extends State<TourEditorPage> {
           const SizedBox(height: 8),
           OutlinedButton(
             onPressed:
-                app.writeBusy || uploadingPanorama
+                app.apiOnline
+                    ? (_panoramaUploadReady &&
+                            !uploadingPanorama &&
+                            !app.writeBusy &&
+                            privacyReceipt != null
+                        ? () => _uploadAndAddOnlinePanorama(tour)
+                        : null)
+                    : app.writeBusy || uploadingPanorama
                     ? null
                     : () async {
                       final label =
@@ -2080,20 +2381,29 @@ class _TourEditorPageState extends State<TourEditorPage> {
                       });
                     },
             child: Text(
-              uploadingPanorama
+              app.apiOnline
+                  ? privacyReceipt == null
+                      ? 'Complete on-device processing and 360° review first'
+                      : localPanoramaE2EEnabled
+                      ? 'Upload & add panorama to local R2 simulation'
+                      : 'Upload & add panorama (disabled until R2 reconciliation)'
+                  : uploadingPanorama
                   ? 'Uploading panorama…'
-                  : 'Upload and add viewpoint',
+                  : 'Add demo viewpoint',
             ),
           ),
           const SizedBox(height: 8),
           PrimaryButton(
             'Publish tour',
             onPressed:
-                tour.nodes.length < 2 || publishing || app.writeBusy
+                (app.apiOnline && !localPanoramaE2EEnabled) ||
+                        tour.nodes.length < 2 ||
+                        publishing ||
+                        app.writeBusy
                     ? null
-                    : () {
+                    : () async {
                       setState(() => publishing = true);
-                      final error = app.publishTour(tour);
+                      final error = await app.publishTour(tour);
                       setState(() => publishing = false);
                       if (error != null && context.mounted) {
                         ScaffoldMessenger.of(
@@ -2106,7 +2416,9 @@ class _TourEditorPageState extends State<TourEditorPage> {
             padding: EdgeInsets.only(top: 12),
             child: InfoBanner(
               app.apiOnline
-                  ? 'Original panoramas upload to private storage. Server-side privacy processing, sanitized previews and publication are not available yet, so online tours stay unpublished.'
+                  ? localPanoramaE2EEnabled
+                      ? 'Local test only: panoramas use the Firebase emulators and Wrangler local R2 simulation. Nothing is uploaded to production.'
+                      : 'Original panoramas upload to private storage. Online upload/publication stay disabled until production R2 reconciliation and deployment readiness are approved.'
                   : 'Demo originals stay private. Demo processing is only a UI preview; do not publish failed viewpoints. Production publication requires a server-sanitized derivative and owner review.',
               icon: Icons.privacy_tip_outlined,
             ),
@@ -2477,6 +2789,7 @@ class AdminPage extends StatefulWidget {
 
 class _AdminPageState extends State<AdminPage> {
   var _loaded = false;
+  Future<Map<String, dynamic>>? _storageQuota;
 
   @override
   void didChangeDependencies() {
@@ -2484,6 +2797,58 @@ class _AdminPageState extends State<AdminPage> {
     if (_loaded) return;
     _loaded = true;
     AppScope.of(context).loadAudit();
+    _refreshStorageQuota();
+  }
+
+  void _refreshStorageQuota() {
+    if (localSpotPreviewRelease) return;
+    setState(() {
+      _storageQuota = FirebaseFunctions.instanceFor(region: 'asia-southeast1')
+          .httpsCallable('getStorageQuota')
+          .call()
+          .then((result) => Map<String, dynamic>.from(result.data as Map));
+    });
+  }
+
+  String _storageSize(num value) {
+    final bytes = value.toDouble();
+    return '${(bytes / 1000000).toStringAsFixed(1)} MB · ${(bytes / 1000000000).toStringAsFixed(3)} GB';
+  }
+
+  Future<void> _runStorageReconciliation() async {
+    if (localSpotPreviewRelease) return;
+    try {
+      await FirebaseFunctions.instanceFor(
+        region: 'asia-southeast1',
+      ).httpsCallable('requestStorageReconciliation').call();
+      _refreshStorageQuota();
+    } on FirebaseFunctionsException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            error.message ?? 'Storage reconciliation could not run.',
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _deleteStorageOrphan(String key) async {
+    if (localSpotPreviewRelease) return;
+    try {
+      await FirebaseFunctions.instanceFor(
+        region: 'asia-southeast1',
+      ).httpsCallable('deleteStorageOrphan').call({'key': key});
+      await _runStorageReconciliation();
+    } on FirebaseFunctionsException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(error.message ?? 'The orphan could not be removed.'),
+        ),
+      );
+    }
   }
 
   @override
@@ -2501,6 +2866,152 @@ class _AdminPageState extends State<AdminPage> {
           child: InfoBanner(
             'Approve stores and sponsored offers before they appear to customers in the Cubao pilot.',
             icon: Icons.admin_panel_settings_outlined,
+          ),
+        ),
+        const SectionHeading('R2 storage'),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+          child: FutureBuilder<Map<String, dynamic>>(
+            future: _storageQuota,
+            builder: (context, snapshot) {
+              if (localSpotPreviewRelease) {
+                return const SoftCard(
+                  child: Text(
+                    'R2 quota, reconciliation, and object deletion require the unavailable Cloud Functions backend. These actions are disabled in the free preview.',
+                  ),
+                );
+              }
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const SoftCard(child: LinearProgressIndicator());
+              }
+              if (snapshot.hasError || !snapshot.hasData) {
+                return SoftCard(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Storage usage is unavailable.'),
+                      TextButton(
+                        onPressed: _refreshStorageQuota,
+                        child: const Text('Retry'),
+                      ),
+                    ],
+                  ),
+                );
+              }
+              final data = snapshot.data!;
+              final used = data['usedBytes'] as num? ?? 0;
+              final reserved = data['reservedBytes'] as num? ?? 0;
+              final limit = data['limitBytes'] as num? ?? 9000000000;
+              final percent =
+                  (data['usagePercent'] as num? ?? 0).toDouble().clamp(0, 100) /
+                  100;
+              final latest = data['latestReport'] as Map?;
+              final orphanSamples =
+                  (latest?['orphanedObjectSamples'] as List? ?? const [])
+                      .whereType<String>();
+              final latestAt = data['lastReconciledAt'] as String? ?? 'Never';
+              final activity =
+                  (data['recentActivity'] as List? ?? const []).cast<Map>();
+              return SoftCard(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Expanded(
+                          child: Text(
+                            'Bucket quota',
+                            style: TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                        Text(
+                          '${(data['usagePercent'] as num? ?? 0).toStringAsFixed(1)}%',
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    LinearProgressIndicator(value: percent),
+                    const SizedBox(height: 10),
+                    Text('Used: ${_storageSize(used)}'),
+                    Text('Reserved: ${_storageSize(reserved)}'),
+                    Text(
+                      'Remaining: ${_storageSize(data['remainingBytes'] as num? ?? 0)}',
+                    ),
+                    Text('Limit: ${_storageSize(limit)}'),
+                    Text(
+                      'Images: ${data['storedImages'] ?? 0} · Panoramas: ${data['storedPanoramas'] ?? 0}',
+                    ),
+                    Text(
+                      'Pending uploads: ${data['pendingUploads'] ?? 0} · Failed: ${data['failedUploads'] ?? 0}',
+                    ),
+                    Text(
+                      'Orphans: ${data['orphanedObjects'] ?? 0} · Missing: ${data['missingObjects'] ?? 0}',
+                    ),
+                    Text(
+                      'Uploads ${data['uploadEnabled'] == true ? 'enabled' : 'paused'} · Last check: $latestAt',
+                    ),
+                    if (latest != null)
+                      Text(
+                        'Latest reconciliation: ${latest['status'] ?? 'unknown'}',
+                      ),
+                    if (orphanSamples.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      const Text(
+                        'Orphaned objects need review',
+                        style: TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      ...orphanSamples
+                          .take(5)
+                          .map(
+                            (key) => Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    key,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(fontSize: 11),
+                                  ),
+                                ),
+                                TextButton(
+                                  onPressed: () => _deleteStorageOrphan(key),
+                                  child: const Text('Delete'),
+                                ),
+                              ],
+                            ),
+                          ),
+                    ],
+                    if (activity.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      const Text(
+                        'Recent activity',
+                        style: TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      ...activity
+                          .take(5)
+                          .map(
+                            (entry) => Text(
+                              '${entry['action'] ?? 'storage event'} · ${entry['createdAt'] ?? ''}',
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                          ),
+                    ],
+                    Wrap(
+                      children: [
+                        TextButton(
+                          onPressed: _refreshStorageQuota,
+                          child: const Text('Refresh'),
+                        ),
+                        TextButton(
+                          onPressed: _runStorageReconciliation,
+                          child: const Text('Reconcile now'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              );
+            },
           ),
         ),
         if (app.auditLogs.isNotEmpty) ...[

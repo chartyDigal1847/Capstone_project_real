@@ -5,27 +5,23 @@ const { createRequire } = require("node:module");
 
 const projectId = process.env.GCLOUD_PROJECT || "demo-localspot";
 process.env.FIRESTORE_EMULATOR_HOST ||= "127.0.0.1:8080";
-process.env.FIREBASE_STORAGE_EMULATOR_HOST ||= "127.0.0.1:9199";
-process.env.FIREBASE_CONFIG = JSON.stringify({
-  projectId,
-  storageBucket: `${projectId}.appspot.com`,
-});
 const requireFunctions = createRequire(path.resolve(__dirname, "../functions/package.json"));
 const { initializeApp } = requireFunctions("firebase-admin/app");
 const { getFirestore, Timestamp } = requireFunctions("firebase-admin/firestore");
-const { getStorage } = requireFunctions("firebase-admin/storage");
-
-const app = initializeApp({ projectId, storageBucket: `${projectId}.appspot.com` });
+const app = initializeApp({ projectId });
 const db = getFirestore(app);
-const bucket = getStorage(app).bucket();
+const r2Gateway = require("../functions/lib/r2_gateway.js");
+const r2Objects = new Map();
+r2Gateway.r2Head = async (key) => {
+  const object = r2Objects.get(key);
+  return object ? { key, size: object.length, contentType: "image/jpeg" } : null;
+};
+r2Gateway.r2Delete = async (key) => ({ existed: r2Objects.delete(key) });
 const cleanupExpiredMediaAssets = require("../functions/lib").cleanupExpiredMediaAssets;
 
 async function seedAsset({ id, status, updatedAt, mediaType = "product", linkedProductId = null, path: objectPath, pathField = "publicPath" }) {
   if (objectPath) {
-    await bucket.file(objectPath).save(Buffer.from("smoke-media"), {
-      resumable: false,
-      metadata: { contentType: "image/png" },
-    });
+    r2Objects.set(objectPath, Buffer.from("smoke-media"));
   }
   await db.collection("mediaAssets").doc(id).set({
     uid: "cleanup-smoke-user",
@@ -64,22 +60,22 @@ async function main() {
 
     await cleanupExpiredMediaAssets.run({ scheduleTime: new Date().toISOString() });
 
-    assert.equal((await db.collection("mediaAssets").doc(staleId).get()).exists, false, "Old unlinked media record is removed");
-    assert.equal((await bucket.file(stalePath).exists())[0], false, "Old unlinked media object is removed");
+    assert.equal((await db.collection("mediaAssets").doc(staleId).get()).data()?.status, "deleted", "Old unlinked media is marked deleted");
+    assert.equal(r2Objects.has(stalePath), false, "Old unlinked media object is removed");
     assert.equal((await db.collection("mediaAssets").doc(linkedId).get()).exists, true, "Linked catalog media is preserved");
-    assert.equal((await bucket.file(linkedPath).exists())[0], true, "Linked catalog image is preserved");
+    assert.equal(r2Objects.has(linkedPath), true, "Linked catalog image is preserved");
     assert.equal((await db.collection("mediaAssets").doc(freshId).get()).exists, true, "Recent upload is preserved");
-    assert.equal((await bucket.file(freshPath).exists())[0], true, "Recent media object is preserved");
-    assert.equal((await db.collection("mediaAssets").doc(failedId).get()).exists, false, "Old failed media record is removed");
-    assert.equal((await bucket.file(failedQuarantinePath).exists())[0], false, "Failed quarantine object is removed");
-    assert.equal((await db.collection("mediaAssets").doc(failedPanoramaId).get()).exists, false, "Old failed panorama record is removed");
-    assert.equal((await bucket.file(failedPanoramaPath).exists())[0], false, "Failed private panorama original is removed");
+    assert.equal(r2Objects.has(freshPath), true, "Recent media object is preserved");
+    assert.equal((await db.collection("mediaAssets").doc(failedId).get()).data()?.status, "deleted", "Old failed media is marked deleted");
+    assert.equal(r2Objects.has(failedQuarantinePath), false, "Failed quarantine object is removed");
+    assert.equal((await db.collection("mediaAssets").doc(failedPanoramaId).get()).data()?.status, "deleted", "Old failed panorama is marked deleted");
+    assert.equal(r2Objects.has(failedPanoramaPath), false, "Failed private panorama original is removed");
     console.log("Media cleanup smoke checks passed (stale failed originals removed; linked and recent media preserved)");
   } finally {
     const batch = db.batch();
     for (const id of assets) batch.delete(db.collection("mediaAssets").doc(id));
     await batch.commit();
-    await Promise.all(paths.map((objectPath) => bucket.file(objectPath).delete({ ignoreNotFound: true })));
+    for (const objectPath of paths) r2Objects.delete(objectPath);
     await db.terminate();
     await app.delete();
   }

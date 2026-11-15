@@ -11,9 +11,24 @@ export { archiveStoreListing, createStoreListing, listStoreListingMovements, upd
 export { createStorePromotion, reviewStorePromotion } from "./promotions";
 export { listActiveVendorLocations, startVendorLocationSession, stopVendorLocationSession, updateVendorLocationSession } from "./vendor_locations";
 export { deleteUserAccount } from "./account";
-export { processUploadedMedia, validatePanoramaUpload } from "./media_uploads";
+export {
+  reserveMediaUpload,
+  finalizeMediaUpload,
+  reservePanoramaDerivativeUpload,
+  finalizePanoramaDerivativeUpload,
+  deleteMediaAsset,
+  getPrivateMediaAccess,
+  cleanupAbandonedMediaReservations,
+} from "./media_uploads";
 export { manageStoreTour } from "./tours";
+export {
+  recordTourPanoramaReview,
+  getPublishedTourPanoramaAccess,
+  getPanoramaPrivateMediaAccess,
+  publishStoreTour,
+} from "./panorama_privacy";
 export { cleanupExpiredMediaAssets } from "./cleanup";
+export { reconcileCloudflareR2Storage, requestStorageReconciliation, getStorageQuota, deleteStorageOrphan } from "./r2_reconciliation";
 export { submitUserFeedback, submitUserReport } from "./user_submissions";
 
 import { Timestamp } from "firebase-admin/firestore";

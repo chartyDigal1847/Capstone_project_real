@@ -61,12 +61,21 @@ T _enum<T extends Enum>(List<T> values, String raw, T fallback) {
 }
 
 UserAccount userFromJson(Map<String, dynamic> json) {
+  final rawRole = json['role'];
+  if (rawRole is! String) {
+    throw const FormatException('User profile role is missing or invalid.');
+  }
+  final normalizedRole = rawRole.trim().toLowerCase();
+  final role = AppRole.values.where((value) => value.name == normalizedRole);
+  if (role.isEmpty) {
+    throw const FormatException('User profile role is unsupported.');
+  }
   return UserAccount(
     id: asInt(json['id']),
     name: json['name'] as String,
     email: json['email'] as String,
     password: '',
-    role: _enum(AppRole.values, json['role'] as String, AppRole.customer),
+    role: role.first,
     ownedStoreIds: [...?(json['owned_store_ids'] as List?)?.map(asInt)],
     memberStoreIds: [...?(json['member_store_ids'] as List?)?.map(asInt)],
     storeGrants: {

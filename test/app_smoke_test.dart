@@ -389,11 +389,11 @@ void main() {
       );
       expect(tour.nodes.first.image, isEmpty);
       expect(tour.nodes.first.originalRetained, isTrue);
-      expect(app.publishTour(tour), isNotNull);
+      expect(await app.publishTour(tour), isNotNull);
       await app.processTourNode(tour, tour.nodes.first, fail: true);
       expect(tour.nodes.first.privacyStatus, PrivacyStatus.failed);
       expect(tour.nodes.first.image, isEmpty);
-      expect(app.publishTour(tour), isNotNull);
+      expect(await app.publishTour(tour), isNotNull);
       for (final node in tour.nodes) {
         await app.processTourNode(tour, node);
       }
@@ -405,7 +405,7 @@ void main() {
       for (final node in tour.nodes) {
         expect(app.reviewTourNode(tour, node), isNull);
       }
-      expect(app.publishTour(tour), isNull);
+      expect(await app.publishTour(tour), isNull);
       expect(tour.status, TourStatus.published);
     },
   );

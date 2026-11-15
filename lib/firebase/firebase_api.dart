@@ -5,8 +5,10 @@ import 'package:cloud_functions/cloud_functions.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/foundation.dart';
 
 import '../api.dart';
+import 'build_mode.dart';
 import 'geo.dart';
 import 'product_ai.dart';
 import 'search_cursor.dart';
@@ -36,6 +38,12 @@ class LocalSpotFirebaseApi {
   }
 
   Future<dynamic> _call(String name, Map<String, dynamic> data) async {
+    if (localSpotPreviewRelease) {
+      throw ApiException(
+        'This operation needs the Cloud Functions backend, which is disabled in the free preview.',
+        status: 409,
+      );
+    }
     final result = await _functions
         .httpsCallable(name)
         .call<Map<String, dynamic>>(data);
@@ -79,8 +87,50 @@ class LocalSpotFirebaseApi {
   }
 
   Future<Map<String, dynamic>> _userPayload(User user) async {
-    final snap = await _db.collection('users').doc(user.uid).get();
-    final data = snap.data() ?? {};
+    final projectId = _db.app.options.projectId;
+    final authUidMatches = _auth.currentUser?.uid == user.uid;
+    final profileRef = _db.collection('users').doc(user.uid);
+    debugPrint(
+      '[profile-load] project=$projectId path=users/{authUid} '
+      'authUidMatches=$authUidMatches source=server',
+    );
+    DocumentSnapshot<Map<String, dynamic>> snap;
+    try {
+      snap = await profileRef.get(const GetOptions(source: Source.server));
+    } on FirebaseException catch (error) {
+      debugPrint(
+        '[profile-load] result=request-failed project=$projectId '
+        'code=${error.code} authUidMatches=$authUidMatches',
+      );
+      throw ApiException(
+        'Your account profile could not be verified (${error.code}). Check your connection and retry.',
+      );
+    }
+    if (!snap.exists) {
+      debugPrint('[profile-load] result=missing project=$projectId');
+      throw ApiException(
+        'Your account profile could not be found. Retry profile loading or contact support.',
+        status: 404,
+      );
+    }
+    final data = snap.data() ?? <String, dynamic>{};
+    final rawRole = data['role'];
+    if (rawRole is! String ||
+        !const {
+          'customer',
+          'owner',
+          'staff',
+          'admin',
+        }.contains(rawRole.trim().toLowerCase())) {
+      debugPrint('[profile-load] result=missing-role project=$projectId');
+      throw ApiException(
+        'Your account profile has no valid role. Retry profile loading or contact support.',
+      );
+    }
+    debugPrint(
+      '[profile-load] result=loaded project=$projectId '
+      'role=${rawRole.trim().toLowerCase()} fromCache=${snap.metadata.isFromCache}',
+    );
     final members =
         await _db
             .collection('storeMembers')
@@ -90,7 +140,7 @@ class LocalSpotFirebaseApi {
       'id': (data['numericId'] as num?)?.toInt() ?? _userNumericId(user.uid),
       'name': data['name'] ?? user.displayName ?? '',
       'email': data['email'] ?? user.email ?? '',
-      'role': data['role'] ?? 'customer',
+      'role': rawRole.trim().toLowerCase(),
       'owned_store_ids': [...?(data['ownedStoreIds'] as List?)],
       'member_store_ids': [
         for (final doc in members.docs) doc.data()['storeId'],
@@ -589,7 +639,26 @@ class LocalSpotFirebaseApi {
       // Authenticated users get more data (e.g. private tour drafts).
       return catalog();
     }
+    final publishedPanorama = RegExp(
+      r'^/tours/(\d+)/nodes/(\d+)/public-media$',
+    ).firstMatch(path);
+    if (publishedPanorama != null) {
+      return _call('getPublishedTourPanoramaAccess', {
+        'tourId': int.parse(publishedPanorama.group(1)!),
+        'nodeId': int.parse(publishedPanorama.group(2)!),
+      });
+    }
     await _requireUser();
+    final privatePanorama = RegExp(
+      r'^/tours/(\d+)/nodes/(\d+)/private-media$',
+    ).firstMatch(path);
+    if (privatePanorama != null) {
+      return _call('getPanoramaPrivateMediaAccess', {
+        'tourId': int.parse(privatePanorama.group(1)!),
+        'nodeId': int.parse(privatePanorama.group(2)!),
+        'variant': query?['variant'] ?? 'original',
+      });
+    }
     final staffList = RegExp(r'^/stores/(\d+)/staff$').firstMatch(path);
     if (staffList != null) {
       return _call('listStoreMemberships', {
@@ -1144,8 +1213,24 @@ class LocalSpotFirebaseApi {
 
   Future<dynamic> post(String path, [Map<String, dynamic>? body]) async {
     final data = body ?? const <String, dynamic>{};
-    if (path == '/auth/register') return _register(data);
     if (path == '/auth/login') return _login(data);
+    if (path == '/auth/register') {
+      if (localSpotPreviewRelease) {
+        throw ApiException(
+          'New account registration is disabled in the read-only free preview.',
+          status: 409,
+        );
+      }
+      return _register(data);
+    }
+    if (localSpotPreviewRelease &&
+        path != '/product-recognition/suggest' &&
+        path != '/search/by-image') {
+      throw ApiException(
+        'Writes and backend operations are disabled in the read-only free preview.',
+        status: 409,
+      );
+    }
     await _requireUser();
     final uid = _auth.currentUser!.uid;
 
@@ -1275,6 +1360,28 @@ class LocalSpotFirebaseApi {
       });
     }
 
+    final panoramaReview = RegExp(
+      r'^/tours/(\d+)/nodes/(\d+)/review$',
+    ).firstMatch(path);
+    if (panoramaReview != null) {
+      return _call('recordTourPanoramaReview', {
+        'tourId': int.parse(panoramaReview.group(1)!),
+        'nodeId': int.parse(panoramaReview.group(2)!),
+        'derivativeSha256': data['derivative_sha256'],
+        'processingVersion': data['processing_version'],
+        'inspectedDirections': data['inspected_directions'],
+        'acknowledgedMissRisk': data['acknowledged_miss_risk'],
+        'acknowledgedManualInspection': data['acknowledged_manual_inspection'],
+      });
+    }
+
+    final tourPublish = RegExp(r'^/tours/(\d+)/publish$').firstMatch(path);
+    if (tourPublish != null) {
+      return _call('publishStoreTour', {
+        'tourId': int.parse(tourPublish.group(1)!),
+      });
+    }
+
     if (RegExp(
           r'^/tours/\d+/nodes/\d+/(process|review|manual-blurs)$',
         ).hasMatch(path) ||
@@ -1287,6 +1394,9 @@ class LocalSpotFirebaseApi {
 
     // ── Product recognition (catalog keyword/alias ranking) ───────────────
     if (path == '/product-recognition/suggest') {
+      if (localSpotPreviewRelease) {
+        return _recognitionSuggest(data, allowAi: false);
+      }
       if (data['image'] is String &&
           (data['image'] as String).isNotEmpty &&
           !await _canUseOwnerProductAi()) {
@@ -1521,6 +1631,12 @@ class LocalSpotFirebaseApi {
   }
 
   Future<dynamic> patch(String path, [Map<String, dynamic>? body]) async {
+    if (localSpotPreviewRelease) {
+      throw ApiException(
+        'Account, store, catalog, and moderation changes are disabled in the free preview.',
+        status: 409,
+      );
+    }
     await _requireUser();
     final data = body ?? const <String, dynamic>{};
 
@@ -1606,6 +1722,12 @@ class LocalSpotFirebaseApi {
     if (path == '/auth/logout') {
       await _auth.signOut();
       return {'ok': true};
+    }
+    if (localSpotPreviewRelease) {
+      throw ApiException(
+        'Deletion and backend operations are disabled in the read-only free preview.',
+        status: 409,
+      );
     }
     await _requireUser();
     if (path == '/auth/account') {

@@ -44,6 +44,10 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+android/key.properties
+android/**/*.jks
+android/**/*.keystore
+android/**/*.p12
 
 # Widget Preview related
 .widget_preview/
@@ -62,9 +66,19 @@ scripts/serviceAccountKey.json
 scripts/node_modules/
 functions/node_modules/
 functions/lib/
+functions/.env.*
+functions/.secret.local
 
 # Local development secrets
 config/local.json
+
+# Cloudflare Worker local dependencies, runtime cache, and secrets
+cloudflare/worker/node_modules/
+cloudflare/worker/.wrangler/
+.wrangler/
+cloudflare/worker/.dev.vars
+cloudflare/worker/.env
+cloudflare/worker/.local-secrets/
 
 # Generated Kotlin files
 android/.kotlin/

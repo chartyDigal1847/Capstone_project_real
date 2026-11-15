@@ -1,0 +1,19 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "locentra-upload-gateway",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-15",
+  "workers_dev": true,
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "FIREBASE_PROJECT_ID": "capstone-project-561a2"
+  },
+  "r2_buckets": [
+    {
+      "binding": "MEDIA_BUCKET",
+      "bucket_name": "locentrastorage"
+    }
+  ]
+}

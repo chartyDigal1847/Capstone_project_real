@@ -550,10 +550,72 @@ class TourViewerPage extends StatefulWidget {
 class _TourViewerPageState extends State<TourViewerPage> {
   late int nodeId = widget.tour.nodes.first.id;
   double pan = 0;
+  String? _mediaUrl;
+  Map<String, String>? _mediaHeaders;
+  bool _loadingMedia = true;
+  bool _startedMediaLookup = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_startedMediaLookup) {
+      return;
+    }
+    _startedMediaLookup = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _loadCurrentMedia(nodeId);
+    });
+  }
+
+  Future<void> _loadCurrentMedia(int targetNodeId) async {
+    final node = widget.tour.nodes.firstWhere((item) => item.id == targetNodeId);
+    final app = AppScope.of(context);
+    if (!app.apiOnline) {
+      if (mounted) {
+        setState(() {
+          _mediaUrl = node.image;
+          _mediaHeaders = null;
+          _loadingMedia = false;
+        });
+      }
+      return;
+    }
+    setState(() {
+      _mediaUrl = null;
+      _mediaHeaders = null;
+      _loadingMedia = true;
+    });
+    try {
+      final result = await app.api.get('/tours/${widget.tour.id}/nodes/$targetNodeId/public-media') as Map;
+      if (!mounted || nodeId != targetNodeId) return;
+      final url = result['url'];
+      final token = result['token'];
+      if (url is! String || token is! String || url.isEmpty || token.isEmpty) {
+        throw StateError('Published panorama access was not granted.');
+      }
+      setState(() {
+        _mediaUrl = url;
+        _mediaHeaders = {'X-Gateway-Authorization': 'Bearer $token'};
+        _loadingMedia = false;
+      });
+    } catch (_) {
+      if (mounted && nodeId == targetNodeId) setState(() => _loadingMedia = false);
+    }
+  }
+
+  void _selectNode(int targetNodeId) {
+    setState(() {
+      pan = 0;
+      nodeId = targetNodeId;
+    });
+    _loadCurrentMedia(targetNodeId);
+  }
 
   @override
   Widget build(BuildContext context) {
+    final app = AppScope.of(context);
     final node = widget.tour.nodes.firstWhere((n) => n.id == nodeId);
+    final displayUrl = app.apiOnline ? (_mediaUrl ?? '') : node.image;
     return Column(
       children: [
         PageHeader(widget.tour.title, onBack: widget.onBack),
@@ -576,13 +638,11 @@ class _TourViewerPageState extends State<TourViewerPage> {
                         return;
                       }
                       if (details.primaryVelocity!.abs() < 900) return;
-                      setState(() {
-                        pan = 0;
-                        nodeId =
-                            details.primaryVelocity! < 0
-                                ? node.connections.first
-                                : node.connections.last;
-                      });
+                      _selectNode(
+                        details.primaryVelocity! < 0
+                            ? node.connections.first
+                            : node.connections.last,
+                      );
                     },
                     child: ClipRect(
                       child: Transform.translate(
@@ -594,7 +654,8 @@ class _TourViewerPageState extends State<TourViewerPage> {
                           maxHeight: constraints.maxHeight,
                           alignment: Alignment.center,
                           child: NetworkPhoto(
-                            node.image,
+                            displayUrl,
+                            headers: _mediaHeaders,
                             radius: 0,
                             height: constraints.maxHeight,
                             width: constraints.maxWidth * 1.7,
@@ -605,7 +666,9 @@ class _TourViewerPageState extends State<TourViewerPage> {
                   );
                 },
               ),
-              if (node.image.trim().isEmpty)
+              if (_loadingMedia)
+                const Center(child: CircularProgressIndicator())
+              else if (displayUrl.trim().isEmpty)
                 const Center(
                   child: Padding(
                     padding: EdgeInsets.all(24),
@@ -638,11 +701,7 @@ class _TourViewerPageState extends State<TourViewerPage> {
                         children: [
                           for (final id in node.connections)
                             OutlinedButton(
-                              onPressed:
-                                  () => setState(() {
-                                    pan = 0;
-                                    nodeId = id;
-                                  }),
+                              onPressed: () => _selectNode(id),
                               child: Text(
                                 widget.tour.nodes
                                     .firstWhere((n) => n.id == id)

@@ -139,8 +139,12 @@ function geohashRangeQuery(status, prefix) {
 }
 
 function resultDocumentIds(result) {
+  return resultDocuments(result).map((document) => document.name.split("/").at(-1));
+}
+
+function resultDocuments(result) {
   assert.equal(result.response.status, 200, `Geohash query failed: ${JSON.stringify(result.body)}`);
-  return (result.body || []).map((row) => row.document?.name?.split("/").at(-1)).filter(Boolean);
+  return (result.body || []).map((row) => row.document).filter(Boolean);
 }
 
 function fields(value) {
@@ -235,9 +239,23 @@ async function main() {
       },
     }), 200, "Indexed product-prefix query");
     const storeRange = await runStructuredQuery("stores", geohashRangeQuery("approved", geoPrefix));
-    assert.deepEqual(resultDocumentIds(storeRange), [geoStore], "Approved store geohash range should return only the seeded location");
+    const storeRangeDocs = resultDocuments(storeRange);
+    const storeRangeIds = storeRangeDocs.map((document) => document.name.split("/").at(-1));
+    assert.ok(storeRangeIds.includes(geoStore), "Approved store geohash range should include the seeded location");
+    assert.equal(storeRangeIds.includes(pendingStore), false, "Pending store must not appear in the approved geohash range");
+    assert.ok(storeRangeDocs.every((document) =>
+      document.fields.status?.stringValue === "approved" &&
+      document.fields.geohash?.stringValue >= geoPrefix &&
+      document.fields.geohash?.stringValue < `${geoPrefix}~`), "Every returned store must satisfy the status and geohash bounds");
     const listingRange = await runStructuredQuery("listings", geohashRangeQuery("active", geoPrefix));
-    assert.deepEqual(resultDocumentIds(listingRange), [geoListing], "Active listing geohash range should exclude archived listings");
+    const listingRangeDocs = resultDocuments(listingRange);
+    const listingRangeIds = listingRangeDocs.map((document) => document.name.split("/").at(-1));
+    assert.ok(listingRangeIds.includes(geoListing), "Active listing geohash range should include the seeded listing");
+    assert.equal(listingRangeIds.includes(inactiveGeoListing), false, "Archived listing must not appear in the active geohash range");
+    assert.ok(listingRangeDocs.every((document) =>
+      document.fields.status?.stringValue === "active" &&
+      document.fields.geohash?.stringValue >= geoPrefix &&
+      document.fields.geohash?.stringValue < `${geoPrefix}~`), "Every returned listing must satisfy the status and geohash bounds");
     expectStatus(await read(`vendorSessions/${activeSession}`), 200, "Public active vendor location");
     expectStatus(await read(`vendorSessions/${endedSession}`), 403, "Ended vendor location");
     expectStatus(await read(`vendorSessions/${expiredSession}`), 403, "Expired vendor location");

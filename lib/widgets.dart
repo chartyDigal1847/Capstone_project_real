@@ -1163,11 +1163,13 @@ class NetworkPhoto extends StatelessWidget {
     this.height,
     this.width,
     this.radius = 14,
+    this.headers,
   });
   final String? url;
   final double? height;
   final double? width;
   final double radius;
+  final Map<String, String>? headers;
   @override
   Widget build(BuildContext context) {
     final fallback = Container(
@@ -1195,6 +1197,7 @@ class NetworkPhoto extends StatelessWidget {
               )
               : Image.network(
                 source,
+                headers: headers,
                 height: height,
                 width: width,
                 fit: BoxFit.cover,

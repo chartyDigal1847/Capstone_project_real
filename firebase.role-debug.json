@@ -1,0 +1,11 @@
+{
+  "functions": { "source": "functions", "codebase": "default" },
+  "firestore": { "indexes": "firestore.indexes.json", "rules": "firestore.rules", "database": "(default)", "location": "asia-southeast1" },
+  "emulators": {
+    "functions": { "host": "0.0.0.0", "port": 5001 },
+    "auth": { "host": "0.0.0.0", "port": 9099 },
+    "firestore": { "host": "0.0.0.0", "port": 8080 },
+    "ui": { "enabled": false },
+    "singleProjectMode": true
+  }
+}
