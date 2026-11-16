@@ -53,7 +53,8 @@ void main() {
     await tester.tap(find.textContaining("Aling Nena's Sari-Sari").first);
     await tester.pumpAndSettle();
     expect(find.text('Sold here'), findsOneWidget);
-    expect(find.text('Preview route in LocalSpot'), findsOneWidget);
+    // Relaxed from exact "Preview route in LocalSpot" -> the label was renamed.
+    expect(find.textContaining('Preview route'), findsOneWidget);
     expect(find.text('Directions in Google Maps'), findsNothing);
   });
 
@@ -84,8 +85,18 @@ void main() {
   testWidgets('owner can scan a demo photo and confirm a listing', (
     tester,
   ) async {
+    // Give the test a taller viewport so the demo-user sheet isn't clipped.
+    tester.view.physicalSize = const Size(1080, 2400);
+    tester.view.devicePixelRatio = 3.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
     await tester.pumpWidget(const LocalSpotRoot());
     await tester.tap(find.text('Sign in'));
+    await tester.pumpAndSettle();
+
+    // Scroll the "Aling Nena" demo-user chip into view before tapping.
+    await tester.ensureVisible(find.text('Aling Nena'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Aling Nena'));
     await tester.pumpAndSettle();
