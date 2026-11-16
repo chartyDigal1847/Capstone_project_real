@@ -73,6 +73,97 @@ class WelcomePage extends StatelessWidget {
   }
 }
 
+class EmailVerificationPage extends StatefulWidget {
+  const EmailVerificationPage({
+    super.key,
+    required this.email,
+    required this.onRefresh,
+    required this.onResend,
+    required this.onLogout,
+  });
+
+  final String email;
+  final Future<String?> Function() onRefresh;
+  final Future<String?> Function() onResend;
+  final VoidCallback onLogout;
+
+  @override
+  State<EmailVerificationPage> createState() => _EmailVerificationPageState();
+}
+
+class _EmailVerificationPageState extends State<EmailVerificationPage> {
+  String? message;
+  bool busy = false;
+
+  Future<void> _run(Future<String?> Function() action) async {
+    setState(() => busy = true);
+    final result = await action();
+    if (!mounted) return;
+    setState(() {
+      busy = false;
+      message = result ?? 'Verification email sent. Check your inbox.';
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(20, 28, 20, 28),
+      children: [
+        const AppLogo(size: 48),
+        const SizedBox(height: 28),
+        const Text(
+          'Verify your email',
+          style: TextStyle(
+            fontFamily: 'Georgia',
+            fontSize: 32,
+            color: charcoal,
+          ),
+        ),
+        const SizedBox(height: 12),
+        Text(
+          'We sent a verification link to ${widget.email}. Verify it before opening your user dashboard.',
+          style: const TextStyle(color: taupe, height: 1.5),
+        ),
+        const SizedBox(height: 20),
+        SoftCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'After verifying, return here and tap “I verified my email.”',
+              ),
+              const SizedBox(height: 16),
+              PrimaryButton(
+                'I verified my email',
+                onPressed: busy ? null : () => _run(widget.onRefresh),
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton(
+                  onPressed: busy ? null : () => _run(widget.onResend),
+                  child: const Text('Resend verification email'),
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (message != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 14),
+            child: Text(message!, style: const TextStyle(color: taupe)),
+          ),
+        const SizedBox(height: 18),
+        TextButton(
+          onPressed: busy ? null : widget.onLogout,
+          child: const Text('Sign out'),
+        ),
+      ],
+    );
+  }
+}
+
 class LoginPage extends StatefulWidget {
   const LoginPage({
     super.key,

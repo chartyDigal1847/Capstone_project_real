@@ -15,6 +15,15 @@ class LocalSpotGateway {
   /// Current Firebase UID, or null when not signed in.
   String? get token => firebase.token;
 
+  bool get isEmailVerified => firebase.isEmailVerified;
+
+  String? get currentEmail => firebase.currentEmail;
+
+  Future<void> sendEmailVerification() => firebase.sendEmailVerification();
+
+  Future<bool> refreshEmailVerification() =>
+      firebase.refreshEmailVerification();
+
   Future<void> sendPasswordResetEmail(String email) =>
       firebase.sendPasswordResetEmail(email);
 
