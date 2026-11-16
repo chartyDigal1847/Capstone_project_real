@@ -54,6 +54,27 @@ class LocalSpotFirebaseApi {
 
   String? get token => _auth.currentUser?.uid;
 
+  bool get isEmailVerified => _auth.currentUser?.emailVerified ?? false;
+
+  String? get currentEmail => _auth.currentUser?.email;
+
+  Future<void> sendEmailVerification() async {
+    final user = _auth.currentUser;
+    if (user == null) return;
+    try {
+      await user.sendEmailVerification();
+    } on FirebaseAuthException catch (error) {
+      throw _mapAuth(error);
+    }
+  }
+
+  Future<bool> refreshEmailVerification() async {
+    final user = _auth.currentUser;
+    if (user == null) return false;
+    await user.reload();
+    return _auth.currentUser?.emailVerified ?? false;
+  }
+
   Future<void> sendPasswordResetEmail(String email) async {
     try {
       await _auth.sendPasswordResetEmail(email: email.trim());
@@ -106,6 +127,7 @@ class LocalSpotFirebaseApi {
       'id': (data['numericId'] as num?)?.toInt() ?? _userNumericId(user.uid),
       'name': data['name'] ?? user.displayName ?? '',
       'email': data['email'] ?? user.email ?? '',
+      'email_verified': user.emailVerified,
       'photo_url': user.photoURL ?? '',
       'role': data['role'] ?? 'customer',
       'owned_store_ids': [...?(data['ownedStoreIds'] as List?)],
@@ -1663,6 +1685,7 @@ class LocalSpotFirebaseApi {
       );
       final user = credential.user!;
       await user.updateDisplayName('${data['name']}');
+      await user.sendEmailVerification();
       // The Auth onUserCreated trigger owns profile creation. Once it has made
       // the customer-only profile, sync only the user-editable name field.
       try {

@@ -186,6 +186,19 @@ class _LocalSpotShellState extends State<LocalSpotShell> {
               }),
         ),
       };
+    } else if (app.requiresEmailVerification) {
+      showNav = false;
+      body = EmailVerificationPage(
+        email: app.currentUser?.email ?? '',
+        onRefresh: app.refreshEmailVerification,
+        onResend: app.resendVerificationEmail,
+        onLogout:
+            () => setState(() {
+              app.logout();
+              authView = AuthView.welcome;
+              tab = 0;
+            }),
+      );
     } else {
       showNav = overlay == OverlayView.none;
       body = switch (overlay) {

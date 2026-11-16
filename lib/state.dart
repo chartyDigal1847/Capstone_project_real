@@ -122,6 +122,8 @@ class AppState extends ChangeNotifier {
   int _nextFeedback = 10;
 
   bool get signedIn => currentUser != null;
+  bool emailVerified = true;
+  bool requiresEmailVerification = false;
   AppRole get role => currentUser?.role ?? AppRole.customer;
 
   List<Store> managedStores() {
@@ -168,6 +170,8 @@ class AppState extends ChangeNotifier {
           } catch (_) {
             // Auth token may have expired; clear and fall through to guest mode.
             currentUser = null;
+            emailVerified = true;
+            requiresEmailVerification = false;
           }
         }
       } catch (e) {
@@ -204,6 +208,8 @@ class AppState extends ChangeNotifier {
     messages.clear();
     vendorSessions.clear();
     currentUser = null;
+    emailVerified = true;
+    requiresEmailVerification = false;
     remoteSearchHits = null;
     usingSeededCatalog = false;
   }
@@ -461,6 +467,8 @@ class AppState extends ChangeNotifier {
         currentUser = userFromJson(
           Map<String, dynamic>.from(data['user'] as Map),
         );
+        emailVerified = api.isEmailVerified;
+        requiresEmailVerification = !emailVerified;
         // Hydrate catalog/favorites in the background; don't block the UI.
         unawaited(_hydrateSession().catchError((_) {}));
         notifyListeners();
@@ -492,6 +500,9 @@ class AppState extends ChangeNotifier {
         currentUser = userFromJson(
           Map<String, dynamic>.from(data['user'] as Map),
         );
+        emailVerified = api.isEmailVerified;
+        // Existing accounts do not need to verify again when signing in.
+        requiresEmailVerification = false;
         // Hydrate in background so the UI navigates immediately.
         unawaited(() async {
           try {
@@ -527,6 +538,8 @@ class AppState extends ChangeNotifier {
     );
     if (match.isEmpty) return 'Email or password is incorrect.';
     currentUser = match.first;
+    emailVerified = true;
+    requiresEmailVerification = false;
     notifyListeners();
     return null;
   }
@@ -536,6 +549,33 @@ class AppState extends ChangeNotifier {
     try {
       await authRepo.sendPasswordResetEmail(email);
       return null;
+    } on ApiException catch (error) {
+      return error.message;
+    }
+  }
+
+  Future<String?> resendVerificationEmail() async {
+    if (!apiOnline || !signedIn) {
+      return 'Email verification requires a connected account.';
+    }
+    try {
+      await api.sendEmailVerification();
+      return null;
+    } on ApiException catch (error) {
+      return error.message;
+    }
+  }
+
+  Future<String?> refreshEmailVerification() async {
+    if (!apiOnline || !signedIn) {
+      return 'Email verification requires a connected account.';
+    }
+    try {
+      emailVerified = await api.refreshEmailVerification();
+      requiresEmailVerification = !emailVerified;
+      if (emailVerified) await _hydrateSession();
+      notifyListeners();
+      return emailVerified ? null : 'Your email is not verified yet.';
     } on ApiException catch (error) {
       return error.message;
     }
@@ -628,6 +668,8 @@ class AppState extends ChangeNotifier {
       unawaited(api.delete('/auth/logout'));
     }
     currentUser = null;
+    emailVerified = true;
+    requiresEmailVerification = false;
     messages.clear();
     followMyLocation = false;
     unawaited(stopLocationUpdates());
