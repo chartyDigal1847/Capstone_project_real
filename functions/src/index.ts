@@ -15,6 +15,7 @@ export { processUploadedMedia, validatePanoramaUpload } from "./media_uploads";
 export { manageStoreTour } from "./tours";
 export { cleanupExpiredMediaAssets } from "./cleanup";
 export { submitUserFeedback, submitUserReport } from "./user_submissions";
+export { listStoreMessages, sendStoreMessage } from "./messaging";
 
 import { Timestamp } from "firebase-admin/firestore";
 import { HttpsError, onCall } from "firebase-functions/v2/https";

@@ -22,30 +22,7 @@ class WelcomePage extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const SizedBox(height: 12),
-          Container(
-            width: 48,
-            height: 48,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: leafDark,
-              borderRadius: BorderRadius.circular(16),
-              boxShadow: const [
-                BoxShadow(
-                  color: Color(0x332E5A27),
-                  blurRadius: 12,
-                  offset: Offset(0, 5),
-                ),
-              ],
-            ),
-            child: const Text(
-              'L',
-              style: TextStyle(
-                color: paper,
-                fontFamily: 'Georgia',
-                fontSize: 24,
-              ),
-            ),
-          ),
+          const AppLogo(size: 48),
           const Spacer(),
           SoftCard(
             color: const Color(0xFF24382C),
@@ -74,7 +51,7 @@ class WelcomePage extends StatelessWidget {
                 ),
                 SizedBox(height: 12),
                 Text(
-                  'Search participating sari-sari stores, market stalls and vendors. LocalSpot does not take orders or deliveries.',
+                  'Search participating sari-sari stores, market stalls and vendors. Locentra does not take orders or deliveries.',
                   style: TextStyle(color: Color(0xFFD8D0C4), height: 1.5),
                 ),
               ],
@@ -153,6 +130,36 @@ class _LoginPageState extends State<LoginPage> {
                   passwordError!,
                   style: const TextStyle(color: clay, fontSize: 12),
                 ),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  onPressed:
+                      busy
+                          ? null
+                          : () async {
+                            final address = email.text.trim();
+                            if (!address.contains('@')) {
+                              setState(
+                                () => emailError = 'Enter your email first.',
+                              );
+                              return;
+                            }
+                            setState(() {
+                              busy = true;
+                              error = null;
+                            });
+                            final message = await app.resetPassword(address);
+                            if (!mounted) return;
+                            setState(() {
+                              busy = false;
+                              error =
+                                  message ??
+                                  'Password reset instructions were sent to your email.';
+                            });
+                          },
+                  child: const Text('Forgot password?'),
+                ),
+              ),
             ],
           ),
         ),

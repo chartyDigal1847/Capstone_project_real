@@ -78,6 +78,30 @@ class MediaUpload {
     );
   }
 
+  static Future<String> uploadProfileImage(
+    XFile image, {
+    void Function(double value)? onProgress,
+  }) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      throw StateError('Sign in before uploading a profile image.');
+    }
+    final bytes = await image.readAsBytes();
+    if (bytes.isEmpty || bytes.length > 8 * 1024 * 1024) {
+      throw StateError('Choose an image smaller than 8 MiB.');
+    }
+    final format = _format(bytes);
+    if (format == null) throw StateError('Use a JPEG, PNG, or WebP image.');
+    final ref = FirebaseStorage.instance.ref('profiles/${user.uid}/avatar');
+    final task = ref.putData(bytes, SettableMetadata(contentType: format.$1));
+    await for (final snapshot in task.snapshotEvents) {
+      if (snapshot.totalBytes > 0) {
+        onProgress?.call(snapshot.bytesTransferred / snapshot.totalBytes);
+      }
+    }
+    return ref.getDownloadURL();
+  }
+
   static Future<String> uploadPanorama(
     XFile image, {
     required int tourId,

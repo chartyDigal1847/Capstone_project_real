@@ -15,6 +15,14 @@ class LocalSpotGateway {
   /// Current Firebase UID, or null when not signed in.
   String? get token => firebase.token;
 
+  Future<void> sendPasswordResetEmail(String email) =>
+      firebase.sendPasswordResetEmail(email);
+
+  Future<Map<String, dynamic>> updateProfile({
+    required String name,
+    String? photoUrl,
+  }) => firebase.updateProfile(name: name, photoUrl: photoUrl);
+
   Future<dynamic> get(String path, [Map<String, String>? query]) =>
       firebase.get(path, query);
 

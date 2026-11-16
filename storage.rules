@@ -54,6 +54,12 @@ service firebase.storage {
       allow write: if false;
     }
 
+    match /profiles/{uid}/{allPaths=**} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow write: if signedIn() && request.auth.uid == uid &&
+        (request.resource == null || validImage(8 * 1024 * 1024));
+    }
+
     match /tours/public/{storeId}/{allPaths=**} {
       // Public derivatives are readable without an account and written by trusted processing only.
       allow read: if true;

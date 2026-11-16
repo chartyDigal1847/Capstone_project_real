@@ -276,6 +276,7 @@ class UserAccount {
     required this.email,
     required this.password,
     required this.role,
+    this.photoUrl,
     this.ownedStoreIds = const [],
     this.memberStoreIds = const [],
     Map<int, StoreGrant>? storeGrants,
@@ -285,10 +286,37 @@ class UserAccount {
   String name;
   final String email;
   final String password;
+  String? photoUrl;
   AppRole role;
   List<int> ownedStoreIds;
   List<int> memberStoreIds;
   Map<int, StoreGrant> storeGrants;
+}
+
+class StoreMessage {
+  StoreMessage({
+    required this.id,
+    required this.storeId,
+    required this.storeName,
+    required this.senderUid,
+    required this.senderName,
+    required this.senderEmail,
+    required this.recipientUid,
+    required this.text,
+    required this.createdAt,
+    this.read = false,
+  });
+
+  final String id;
+  final int storeId;
+  final String storeName;
+  final String senderUid;
+  final String senderName;
+  final String senderEmail;
+  final String recipientUid;
+  final String text;
+  final DateTime createdAt;
+  bool read;
 }
 
 class Store {

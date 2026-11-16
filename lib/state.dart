@@ -49,6 +49,7 @@ class AppState extends ChangeNotifier {
   final favoriteProductIds = <int>{};
   final stockChanges = <int, List<StockChange>>{};
   final auditLogs = <AuditEntry>[];
+  final messages = <StoreMessage>[];
 
   UserAccount? currentUser;
   bool locationAllowed = false;
@@ -200,6 +201,7 @@ class AppState extends ChangeNotifier {
     favoriteProductIds.clear();
     stockChanges.clear();
     auditLogs.clear();
+    messages.clear();
     vendorSessions.clear();
     currentUser = null;
     remoteSearchHits = null;
@@ -529,12 +531,104 @@ class AppState extends ChangeNotifier {
     return null;
   }
 
+  Future<String?> resetPassword(String email) async {
+    if (!apiOnline) return 'Password reset requires a connected account.';
+    try {
+      await authRepo.sendPasswordResetEmail(email);
+      return null;
+    } on ApiException catch (error) {
+      return error.message;
+    }
+  }
+
+  Future<String?> updateProfile({
+    required String name,
+    String? photoUrl,
+  }) async {
+    final user = currentUser;
+    final cleanName = name.trim();
+    if (user == null) return 'Sign in to edit your profile.';
+    if (cleanName.isEmpty || cleanName.length > 80) {
+      return 'Enter a name between 1 and 80 characters.';
+    }
+    if (apiOnline) {
+      try {
+        final data = await authRepo.updateProfile(
+          name: cleanName,
+          photoUrl: photoUrl,
+        );
+        currentUser = userFromJson(
+          Map<String, dynamic>.from(data['user'] as Map),
+        );
+        notifyListeners();
+        return null;
+      } on ApiException catch (error) {
+        return error.message;
+      }
+    }
+    user.name = cleanName;
+    user.photoUrl = photoUrl ?? user.photoUrl;
+    notifyListeners();
+    return null;
+  }
+
+  Future<String?> sendStoreMessage({
+    required int storeId,
+    required String text,
+  }) async {
+    if (!apiOnline || currentUser == null) {
+      return 'Sign in to contact the store owner.';
+    }
+    try {
+      await api.post('/messages', {'store_id': storeId, 'text': text});
+      return null;
+    } on ApiException catch (error) {
+      return error.message;
+    }
+  }
+
+  Future<String?> loadMessages() async {
+    if (!apiOnline || currentUser == null) return 'Sign in to view messages.';
+    try {
+      final response = await api.get('/messages');
+      final rows =
+          response is Map && response['messages'] is List
+              ? response['messages'] as List
+              : response is List
+              ? response
+              : const [];
+      messages
+        ..clear()
+        ..addAll([
+          for (final row in rows)
+            StoreMessage(
+              id: '${row['id']}',
+              storeId: (row['storeId'] as num).toInt(),
+              storeName: '${row['storeName']}',
+              senderUid: '${row['senderUid']}',
+              senderName: '${row['senderName']}',
+              senderEmail: '${row['senderEmail']}',
+              recipientUid: '${row['recipientUid']}',
+              text: '${row['text']}',
+              createdAt:
+                  DateTime.tryParse('${row['createdAt']}') ?? DateTime.now(),
+              read: row['read'] == true,
+            ),
+        ]);
+      notifyListeners();
+      return null;
+    } on ApiException catch (error) {
+      return error.message;
+    }
+  }
+
   void logout() {
     // Firebase sign-out is handled inside the gateway's delete('/auth/logout').
     if (apiOnline) {
       unawaited(api.delete('/auth/logout'));
     }
     currentUser = null;
+    messages.clear();
     followMyLocation = false;
     unawaited(stopLocationUpdates());
     notifyListeners();
@@ -638,7 +732,7 @@ class AppState extends ChangeNotifier {
       );
       locationAllowed = true;
       locationNote =
-          'Foreground location is on. LocalSpot does not request background tracking.';
+          'Foreground location is on. Locentra does not request background tracking.';
       if (startUpdates) await startLocationUpdates();
       notifyListeners();
     } catch (_) {
@@ -1289,7 +1383,7 @@ class AppState extends ChangeNotifier {
       }
     }
     final match = users.where((user) => user.email.toLowerCase() == normalized);
-    if (match.isEmpty) return 'No LocalSpot account uses that email.';
+    if (match.isEmpty) return 'No Locentra account uses that email.';
     final member = match.first;
     if (member.role == AppRole.admin) {
       return 'Administrators cannot be added as store staff.';

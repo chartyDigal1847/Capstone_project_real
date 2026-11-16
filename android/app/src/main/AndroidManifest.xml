@@ -5,9 +5,9 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <application
-        android:label="LocalSpot"
+        android:label="Locentra"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher"
+        android:icon="@mipmap/app_icon"
         android:usesCleartextTraffic="true">
         <activity
             android:name=".MainActivity"

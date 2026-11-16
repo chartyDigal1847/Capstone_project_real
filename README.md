@@ -1,4 +1,4 @@
-# LocalSpot
+# Locentra
 
 Philippine local store and product locator. Vendors publish listings; customers search nearby participating stores and navigate there. There is no cart, checkout, or delivery.
 

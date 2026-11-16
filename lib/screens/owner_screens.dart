@@ -22,6 +22,7 @@ class OwnerDashboard extends StatelessWidget {
     required this.onTour,
     required this.onStaff,
     required this.onPin,
+    required this.onMessages,
   });
   final VoidCallback onAddProduct;
   final VoidCallback onInventory;
@@ -30,6 +31,7 @@ class OwnerDashboard extends StatelessWidget {
   final VoidCallback onTour;
   final VoidCallback onStaff;
   final VoidCallback onPin;
+  final VoidCallback onMessages;
 
   @override
   Widget build(BuildContext context) {
@@ -98,6 +100,13 @@ class OwnerDashboard extends StatelessWidget {
           title: 'Staff',
           subtitle: 'Assign inventory, promo and live-pin grants',
           onTap: onStaff,
+        ),
+      if (app.role == AppRole.owner)
+        DashTile(
+          icon: Icons.chat_bubble_outline,
+          title: 'Messages',
+          subtitle: 'Questions from customers',
+          onTap: onMessages,
         ),
       if (app.managedStores().any(
         (item) => item.isMobile && app.canShareLiveLocation(item),

@@ -162,6 +162,11 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    match /messages/{id} {
+      // Messaging is handled by callable Functions with server-side checks.
+      allow read, create, update, delete: if false;
+    }
+
     match /vendorSessions/{id} {
       // Public collection listing goes through an App Check callable so expiry
       // is evaluated at server time. Direct document reads expose only active

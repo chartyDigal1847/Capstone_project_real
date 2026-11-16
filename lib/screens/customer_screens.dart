@@ -1,8 +1,10 @@
 import 'dart:async';
 
+import 'package:image_picker/image_picker.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../map_view.dart';
+import '../firebase/media_upload.dart';
 import '../models.dart';
 import '../state.dart';
 import '../theme.dart';
@@ -751,7 +753,7 @@ class _MapPageState extends State<MapPage> {
                       if (widget.onRoute != null)
                         TextButton(
                           onPressed: () => widget.onRoute!(selected!),
-                          child: const Text('Preview route in LocalSpot'),
+                          child: const Text('Preview route in Locentra'),
                         ),
                     ],
                   ),
@@ -890,7 +892,7 @@ class SavedPage extends StatelessWidget {
   }
 }
 
-class ProfilePage extends StatelessWidget {
+class ProfilePage extends StatefulWidget {
   const ProfilePage({
     super.key,
     required this.onLocation,
@@ -904,9 +906,92 @@ class ProfilePage extends StatelessWidget {
   final VoidCallback onFeedback;
 
   @override
+  State<ProfilePage> createState() => _ProfilePageState();
+}
+
+class _ProfilePageState extends State<ProfilePage> {
+  final name = TextEditingController();
+  XFile? selectedPhoto;
+  bool editing = false;
+  bool saving = false;
+  double uploadProgress = 0;
+  bool initialized = false;
+
+  VoidCallback get onLocation => widget.onLocation;
+  VoidCallback get onLogout => widget.onLogout;
+  VoidCallback get onAdmin => widget.onAdmin;
+  VoidCallback get onFeedback => widget.onFeedback;
+
+  @override
+  void dispose() {
+    name.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickPhoto() async {
+    final file = await ImagePicker().pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 85,
+    );
+    if (file != null && mounted) setState(() => selectedPhoto = file);
+  }
+
+  Future<void> _save(AppState app) async {
+    setState(() {
+      saving = true;
+      uploadProgress = 0;
+    });
+    try {
+      String? photoUrl = app.currentUser?.photoUrl;
+      if (selectedPhoto != null) {
+        if (!app.apiOnline) {
+          throw StateError(
+            'Connect to Firebase before uploading a profile image.',
+          );
+        }
+        photoUrl = await MediaUpload.uploadProfileImage(
+          selectedPhoto!,
+          onProgress: (value) {
+            if (mounted) setState(() => uploadProgress = value);
+          },
+        );
+      }
+      final error = await app.updateProfile(
+        name: name.text,
+        photoUrl: photoUrl,
+      );
+      if (!mounted) return;
+      if (error != null) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error)));
+        return;
+      }
+      setState(() {
+        editing = false;
+        selectedPhoto = null;
+      });
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(error.toString().replaceFirst('Bad state: ', '')),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => saving = false);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
     final user = app.currentUser!;
+    if (!initialized) {
+      name.text = user.name;
+      initialized = true;
+    }
     return ListView(
       padding: const EdgeInsets.only(bottom: 28),
       children: [
@@ -919,14 +1004,21 @@ class ProfilePage extends StatelessWidget {
                 CircleAvatar(
                   radius: 26,
                   backgroundColor: leafDark,
-                  child: Text(
-                    user.name.substring(0, 1),
-                    style: const TextStyle(
-                      color: paper,
-                      fontFamily: 'Georgia',
-                      fontSize: 22,
-                    ),
-                  ),
+                  backgroundImage:
+                      user.photoUrl?.isNotEmpty == true
+                          ? NetworkImage(user.photoUrl!)
+                          : null,
+                  child:
+                      user.photoUrl?.isNotEmpty == true
+                          ? null
+                          : Text(
+                            user.name.substring(0, 1).toUpperCase(),
+                            style: const TextStyle(
+                              color: paper,
+                              fontFamily: 'Georgia',
+                              fontSize: 22,
+                            ),
+                          ),
                 ),
                 const SizedBox(width: 14),
                 Expanded(
@@ -952,10 +1044,79 @@ class ProfilePage extends StatelessWidget {
                     ],
                   ),
                 ),
+                IconButton(
+                  tooltip: 'Edit profile',
+                  onPressed:
+                      saving
+                          ? null
+                          : () => setState(() {
+                            editing = true;
+                            name.text = user.name;
+                          }),
+                  icon: const Icon(Icons.edit_outlined),
+                ),
               ],
             ),
           ),
         ),
+        if (editing) ...[
+          const SizedBox(height: 12),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: SoftCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Edit profile',
+                    style: TextStyle(fontFamily: 'Georgia', fontSize: 20),
+                  ),
+                  const SizedBox(height: 12),
+                  LabeledField('Name', name, maxLength: 80),
+                  const SizedBox(height: 10),
+                  OutlinedButton.icon(
+                    onPressed: saving ? null : _pickPhoto,
+                    icon: const Icon(Icons.photo_camera_outlined),
+                    label: Text(
+                      selectedPhoto == null
+                          ? 'Choose profile image'
+                          : 'Image selected',
+                    ),
+                  ),
+                  if (saving && selectedPhoto != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Text(
+                        'Uploading image ${(uploadProgress * 100).round()}%',
+                        style: const TextStyle(color: taupe, fontSize: 12),
+                      ),
+                    ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed:
+                              saving
+                                  ? null
+                                  : () => setState(() => editing = false),
+                          child: const Text('Cancel'),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: PrimaryButton(
+                          saving ? 'Saving…' : 'Save changes',
+                          onPressed: saving ? null : () => _save(app),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
         const SizedBox(height: 16),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -1109,7 +1270,7 @@ class ProfilePage extends StatelessWidget {
                 MenuRow(
                   icon: Icons.delete_forever_outlined,
                   title: 'Delete account',
-                  subtitle: 'Permanently remove your LocalSpot account',
+                  subtitle: 'Permanently remove your Locentra account',
                   iconColor: clay,
                   onTap: () async {
                     final confirmed = await showDialog<bool>(
@@ -1153,7 +1314,7 @@ class ProfilePage extends StatelessWidget {
         const Padding(
           padding: EdgeInsets.fromLTRB(20, 16, 20, 0),
           child: InfoBanner(
-            'Photos used for product recognition are suggestions only. Store owners confirm identity, price and stock. LocalSpot lists participating sellers, not every vendor in the Philippines. Lawful product categories such as groceries, hardware and electronics are supported. The 2D map, route preview and owner-created 360° store tour stay inside the app. Customer location is used in the foreground only and is not stored as a movement history.',
+            'Photos used for product recognition are suggestions only. Store owners confirm identity, price and stock. Locentra lists participating sellers, not every vendor in the Philippines. Lawful product categories such as groceries, hardware and electronics are supported. The 2D map, route preview and owner-created 360° store tour stay inside the app. Customer location is used in the foreground only and is not stored as a movement history.',
           ),
         ),
       ],

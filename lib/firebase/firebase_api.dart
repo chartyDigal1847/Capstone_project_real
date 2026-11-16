@@ -25,14 +25,10 @@ class LocalSpotFirebaseApi {
       FirebaseFunctions.instanceFor(region: 'asia-southeast1');
 
   String _catalogImage(Object? value) {
-    final image = value?.toString().trim() ?? '';
-    final uri = Uri.tryParse(image);
-    if (uri != null &&
-        (uri.host == 'images.unsplash.com' ||
-            uri.host == 'source.unsplash.com')) {
-      return '';
-    }
-    return image;
+    // Catalog photos may come from Firebase Storage or from the online image
+    // URLs used by the seeded catalog. Keep both kinds of remote URLs intact;
+    // blanking Unsplash URLs makes otherwise valid catalog photos disappear.
+    return value?.toString().trim() ?? '';
   }
 
   Future<dynamic> _call(String name, Map<String, dynamic> data) async {
@@ -57,6 +53,26 @@ class LocalSpotFirebaseApi {
   }
 
   String? get token => _auth.currentUser?.uid;
+
+  Future<void> sendPasswordResetEmail(String email) async {
+    try {
+      await _auth.sendPasswordResetEmail(email: email.trim());
+    } on FirebaseAuthException catch (error) {
+      throw _mapAuth(error);
+    }
+  }
+
+  Future<Map<String, dynamic>> updateProfile({
+    required String name,
+    String? photoUrl,
+  }) async {
+    await _requireUser();
+    final user = _auth.currentUser!;
+    await user.updateDisplayName(name.trim());
+    if (photoUrl != null) await user.updatePhotoURL(photoUrl);
+    await _db.collection('users').doc(user.uid).update({'name': name.trim()});
+    return {'user': await _userPayload(user)};
+  }
 
   int _toInt(dynamic v) {
     if (v is int) return v;
@@ -90,6 +106,7 @@ class LocalSpotFirebaseApi {
       'id': (data['numericId'] as num?)?.toInt() ?? _userNumericId(user.uid),
       'name': data['name'] ?? user.displayName ?? '',
       'email': data['email'] ?? user.email ?? '',
+      'photo_url': user.photoURL ?? '',
       'role': data['role'] ?? 'customer',
       'owned_store_ids': [...?(data['ownedStoreIds'] as List?)],
       'member_store_ids': [
@@ -597,6 +614,7 @@ class LocalSpotFirebaseApi {
       });
     }
     if (path == '/me') return _profile();
+    if (path == '/messages') return _call('listStoreMessages', const {});
     if (path == '/favorites') {
       final snap =
           await _db
@@ -1202,6 +1220,13 @@ class LocalSpotFirebaseApi {
       return _call('submitUserReport', {
         'target': data['target'],
         'reason': data['reason'],
+      });
+    }
+
+    if (path == '/messages') {
+      return _call('sendStoreMessage', {
+        'storeId': data['store_id'],
+        'text': data['text'],
       });
     }
 

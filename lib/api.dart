@@ -66,6 +66,7 @@ UserAccount userFromJson(Map<String, dynamic> json) {
     name: json['name'] as String,
     email: json['email'] as String,
     password: '',
+    photoUrl: json['photo_url'] as String?,
     role: _enum(AppRole.values, json['role'] as String, AppRole.customer),
     ownedStoreIds: [...?(json['owned_store_ids'] as List?)?.map(asInt)],
     memberStoreIds: [...?(json['member_store_ids'] as List?)?.map(asInt)],

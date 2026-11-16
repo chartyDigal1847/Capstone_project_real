@@ -8,6 +8,7 @@ import 'models.dart';
 import 'screens/auth_screens.dart';
 import 'screens/customer_screens.dart';
 import 'screens/detail_screens.dart';
+import 'screens/messaging_screens.dart';
 import 'screens/owner_screens.dart';
 import 'state.dart';
 import 'theme.dart';
@@ -46,7 +47,7 @@ class _LocalSpotRootState extends State<LocalSpotRoot> {
       notifier: state,
       child: MaterialApp(
         debugShowCheckedModeBanner: false,
-        title: 'LocalSpot',
+        title: 'Locentra',
         theme: localSpotTheme(),
         home: const LocalSpotShell(),
       ),
@@ -74,6 +75,7 @@ enum OverlayView {
   feedback,
   admin,
   route,
+  messages,
 }
 
 class LocalSpotShell extends StatefulWidget {
@@ -210,6 +212,16 @@ class _LocalSpotShellState extends State<LocalSpotShell> {
                 overlay = OverlayView.report;
               }),
           onRoute: () => setState(() => overlay = OverlayView.route),
+          onMessage: () => setState(() => overlay = OverlayView.messages),
+        ),
+        OverlayView.messages => MessageCenterPage(
+          store: store,
+          onBack:
+              () => setState(
+                () =>
+                    overlay =
+                        store == null ? OverlayView.none : OverlayView.store,
+              ),
         ),
         OverlayView.route => RoutePreviewPage(
           store: store!,
@@ -348,6 +360,7 @@ class _LocalSpotShellState extends State<LocalSpotShell> {
           onTour: () => setState(() => overlay = OverlayView.tourEditor),
           onStaff: () => setState(() => overlay = OverlayView.staff),
           onPin: () => setState(() => overlay = OverlayView.storePin),
+          onMessages: () => setState(() => overlay = OverlayView.messages),
         ),
         1 => InventoryPage(
           onAdd: () => setState(() => overlay = OverlayView.addProduct),

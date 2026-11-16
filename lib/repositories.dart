@@ -11,6 +11,14 @@ class AuthRepository {
   AuthRepository(this.api);
   final LocalSpotGateway api;
 
+  Future<void> sendPasswordResetEmail(String email) =>
+      api.sendPasswordResetEmail(email);
+
+  Future<Map<String, dynamic>> updateProfile({
+    required String name,
+    String? photoUrl,
+  }) => api.updateProfile(name: name, photoUrl: photoUrl);
+
   Future<Map<String, dynamic>> login({
     required String email,
     required String password,

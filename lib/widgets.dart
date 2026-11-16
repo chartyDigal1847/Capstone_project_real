@@ -19,6 +19,50 @@ class AppScope extends InheritedNotifier<AppState> {
   }
 }
 
+class AppLogo extends StatelessWidget {
+  const AppLogo({super.key, this.size = 40});
+
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final fallback = Container(
+      width: size,
+      height: size,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: leafDark,
+        borderRadius: BorderRadius.circular(size * .3),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x332E5A27),
+            blurRadius: 10,
+            offset: Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Text(
+        'L',
+        style: TextStyle(
+          color: paper,
+          fontFamily: 'Georgia',
+          fontSize: size * .5,
+        ),
+      ),
+    );
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(size * .3),
+      child: Image.asset(
+        'assets/images/locentra_logo.png',
+        width: size,
+        height: size,
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) => fallback,
+      ),
+    );
+  }
+}
+
 class PageHeader extends StatelessWidget {
   const PageHeader(
     this.title, {
@@ -73,30 +117,7 @@ class PageHeader extends StatelessWidget {
               icon: const Icon(Icons.arrow_back_ios_new, size: 17),
             )
           else
-            Container(
-              width: 40,
-              height: 40,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: leafDark,
-                borderRadius: BorderRadius.circular(14),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Color(0x332E5A27),
-                    blurRadius: 10,
-                    offset: Offset(0, 4),
-                  ),
-                ],
-              ),
-              child: const Text(
-                'L',
-                style: TextStyle(
-                  color: paper,
-                  fontFamily: 'Georgia',
-                  fontSize: 20,
-                ),
-              ),
-            ),
+            const AppLogo(size: 40),
           const SizedBox(width: 12),
           Expanded(
             child:

@@ -3,7 +3,8 @@
     "module": "commonjs",
     "noImplicitReturns": true,
     "noUnusedLocals": true,
-    "outDir": "lib",
+    "rootDir": "src",
+    "outDir": "./lib",
     "sourceMap": true,
     "strict": true,
     "target": "es2022",
@@ -11,5 +12,6 @@
     "skipLibCheck": true
   },
   "compileOnSave": true,
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": ["lib", "node_modules"]
 }
