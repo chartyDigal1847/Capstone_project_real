@@ -1,0 +1,30 @@
+services:
+  locentra-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: locentra-dev:3.47.1
+    working_dir: /workspace
+    stdin_open: true
+    tty: true
+    environment:
+      ANDROID_HOME: /opt/android-sdk
+      ANDROID_SDK_ROOT: /opt/android-sdk
+      JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
+      LOCALSPOT_BACKEND_URL: ${LOCALSPOT_BACKEND_URL:-https://locentra-api-trial-20261117.digalcharty0.workers.dev}
+    volumes:
+      - .:/workspace
+      - flutter_pub_cache:/root/.pub-cache
+      - gradle_cache:/root/.gradle
+      - npm_cache:/root/.npm
+      - backend_worker_modules:/workspace/cloudflare/backend-worker/node_modules
+      - upload_gateway_modules:/workspace/cloudflare/worker/node_modules
+      - legacy_functions_modules:/workspace/functions/node_modules
+
+volumes:
+  flutter_pub_cache:
+  gradle_cache:
+  npm_cache:
+  backend_worker_modules:
+  upload_gateway_modules:
+  legacy_functions_modules:

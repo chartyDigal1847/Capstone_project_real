@@ -17,13 +17,58 @@ The target backend keeps Firebase Authentication and Firestore on Spark and move
 
 ## Local development
 
-1. Install Flutter, Node.js 22, Java, and Firebase CLI. Run `flutter pub get`.
+1. Install Flutter, Node.js 22 or newer, Java, and Firebase CLI. Run `flutter pub get`.
 2. Start only the Auth and Firestore emulators with `firebase emulators:start --project demo-localspot --only auth,firestore`.
 3. For API and media validation, follow the two-Worker commands in [docs/OPERATIONS.md](docs/OPERATIONS.md). The API Worker uses local emulators and R2 simulation; no production bucket is configured. For API-only development, install dependencies in `cloudflare/backend-worker` and run `npm run dev` there.
 4. Run the Android app with the emulator settings from [docs/OPERATIONS.md](docs/OPERATIONS.md). To render Mapbox Streets and Directions locally, supply the ignored `config/local.json` file with `--dart-define-from-file=config/local.json`.
 5. Run Flutter checks with `flutter analyze` and `flutter test`. Worker checks are `npm run typecheck` and `npm test` from `cloudflare/backend-worker`.
 
 For physical-device or media-gateway setup, environment-specific ports, and emulator host addresses, follow [docs/OPERATIONS.md](docs/OPERATIONS.md). Never use emulator settings or local R2 simulation in a release build.
+
+### Docker toolchain
+
+Docker Desktop with Docker Compose is the easiest way to share a consistent
+build environment. The image pins Flutter 3.47.1 / Dart 3.13.1, Node.js
+24.14.1 / npm 11.11.0, Java 17, Android platform 36, Build Tools 36.0.0,
+NDK 28.2.13676358, and CMake 3.22.1. Gradle, Flutter packages, and Worker
+packages use the versions pinned in their checked-in wrapper and lock files.
+
+From PowerShell at the repository root, build the image and start a project
+shell:
+
+```powershell
+docker compose build
+docker compose run --rm locentra-dev
+```
+
+Inside the container, install dependencies from the lock files:
+
+```bash
+flutter pub get
+npm --prefix cloudflare/backend-worker ci
+npm --prefix cloudflare/worker ci
+```
+
+To build the signed trial APK, first keep your ignored `config/local.json`,
+`android/key.properties`, and release keystore in place on the host. Then run
+the same guarded trial build used by this repository:
+
+```bash
+flutter build apk --flavor trial --release --target-platform android-arm64 \
+  --dart-define=LOCALSPOT_TRIAL_RELEASE=true \
+  --dart-define=LOCALSPOT_BACKEND_URL="$LOCALSPOT_BACKEND_URL" \
+  --dart-define-from-file=config/local.json \
+  --android-project-arg=localspotReleaseEnvironment=trial \
+  --android-project-arg=localspotReleaseProjectId=locentra-spark-trial-20261117 \
+  --android-project-arg=localspotReleaseApplicationId=app.locentra.mobile
+```
+
+The repository is mounted into the container, so APKs appear under the host
+project’s `build/` directory. Docker stores Gradle, Pub, npm, and Linux
+`node_modules` caches in named volumes. Local Mapbox configuration, signing
+keys, secrets, dependencies, and build outputs are excluded from the Docker
+image. The Docker files are not Flutter assets and are never bundled into the
+APK. See [docs/DOCKER_DEVELOPMENT.md](docs/DOCKER_DEVELOPMENT.md) for details.
 
 ## Mapbox configuration
 
