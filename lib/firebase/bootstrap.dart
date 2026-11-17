@@ -9,11 +9,13 @@ import 'package:flutter/foundation.dart';
 
 import '../firebase_options.dart';
 import 'build_mode.dart';
+import 'worker_backend.dart';
 
 bool _appCheckActivated = false;
 bool _emulatorsConfigured = false;
 
 const _useFirebaseEmulators = bool.fromEnvironment('USE_FIREBASE_EMULATORS');
+const _workerBackendUrl = String.fromEnvironment('LOCALSPOT_BACKEND_URL');
 const _enableLocalPanoramaE2E = bool.fromEnvironment(
   'ENABLE_LOCAL_PANORAMA_E2E',
 );
@@ -25,6 +27,14 @@ const _firebaseEmulatorHost = String.fromEnvironment(
   'FIREBASE_EMULATOR_HOST',
   defaultValue: '',
 );
+const _firebaseAuthEmulatorPort = int.fromEnvironment(
+  'FIREBASE_AUTH_EMULATOR_PORT',
+  defaultValue: 9099,
+);
+const _firestoreEmulatorPort = int.fromEnvironment(
+  'FIRESTORE_EMULATOR_PORT',
+  defaultValue: 8080,
+);
 
 @visibleForTesting
 void validateFirebaseBootstrapConfiguration({
@@ -33,6 +43,10 @@ void validateFirebaseBootstrapConfiguration({
   required bool previewBuild,
   required String emulatorProjectId,
   required String emulatorHost,
+  bool trialBuild = false,
+  String workerBackendUrl = '',
+  int authEmulatorPort = 9099,
+  int firestoreEmulatorPort = 8080,
 }) {
   if (debugBuild && !useEmulators) {
     throw StateError(
@@ -43,9 +57,22 @@ void validateFirebaseBootstrapConfiguration({
   if (useEmulators && !debugBuild) {
     throw StateError('Firebase emulators cannot be enabled in release builds.');
   }
-  if (!debugBuild && !previewBuild) {
+  if (previewBuild && trialBuild) {
+    throw StateError('Choose either the read-only preview or online trial mode.');
+  }
+  if (!debugBuild && !previewBuild && !trialBuild) {
     throw StateError(
-      'This APK requires an explicit LOCALSPOT_PREVIEW release configuration.',
+      'This APK requires explicit LOCALSPOT_PREVIEW or LOCALSPOT_TRIAL_RELEASE configuration.',
+    );
+  }
+  if (trialBuild &&
+      !workerBaseUrlAllowed(
+        workerBackendUrl,
+        debugBuild: false,
+        useFirebaseEmulators: false,
+      )) {
+    throw StateError(
+      'Trial releases require an HTTPS Worker hostname; emulator, LAN, and IP URLs are not allowed.',
     );
   }
   if (useEmulators && emulatorProjectId != 'demo-localspot') {
@@ -55,6 +82,13 @@ void validateFirebaseBootstrapConfiguration({
   }
   if (useEmulators && emulatorHost.trim().isEmpty) {
     throw StateError('FIREBASE_EMULATOR_HOST is required for emulator builds.');
+  }
+  if (useEmulators &&
+      (authEmulatorPort < 1 ||
+          authEmulatorPort > 65535 ||
+          firestoreEmulatorPort < 1 ||
+          firestoreEmulatorPort > 65535)) {
+    throw StateError('Firebase emulator ports must be between 1 and 65535.');
   }
 }
 
@@ -73,6 +107,8 @@ Future<bool> initLocalSpotFirebase() async {
     previewBuild: localSpotPreviewRelease,
     emulatorProjectId: _firebaseEmulatorProjectId,
     emulatorHost: _firebaseEmulatorHost,
+    trialBuild: localSpotTrialRelease,
+    workerBackendUrl: _workerBackendUrl,
   );
   if (!_useFirebaseEmulators &&
       Firebase.apps.isEmpty &&
@@ -156,16 +192,22 @@ void _configureFirebaseEmulators() {
     throw StateError('FIREBASE_EMULATOR_HOST cannot be empty.');
   }
 
-  FirebaseAuth.instance.useAuthEmulator(_firebaseEmulatorHost, 9099);
-  FirebaseFirestore.instance.useFirestoreEmulator(_firebaseEmulatorHost, 8080);
+  FirebaseAuth.instance.useAuthEmulator(
+    _firebaseEmulatorHost,
+    _firebaseAuthEmulatorPort,
+  );
+  FirebaseFirestore.instance.useFirestoreEmulator(
+    _firebaseEmulatorHost,
+    _firestoreEmulatorPort,
+  );
   FirebaseFunctions.instanceFor(
     region: 'asia-southeast1',
   ).useFunctionsEmulator(_firebaseEmulatorHost, 5001);
   _emulatorsConfigured = true;
   debugPrint(
     '[firebase-bootstrap] emulators project=$_firebaseEmulatorProjectId '
-    'auth=$_firebaseEmulatorHost:9099 '
-    'firestore=$_firebaseEmulatorHost:8080 '
+    'auth=$_firebaseEmulatorHost:$_firebaseAuthEmulatorPort '
+    'firestore=$_firebaseEmulatorHost:$_firestoreEmulatorPort '
     'functions=$_firebaseEmulatorHost:5001',
   );
 }

@@ -1,58 +1,38 @@
-# LocalSpot
+# Locentra
 
-Philippine local store and product locator. Vendors publish listings; customers search nearby participating stores and navigate there. There is no cart, checkout, or delivery.
+Philippine local store and product locator. Vendors publish listings; customers search nearby stores and navigate there. There is no cart, checkout, or delivery.
 
 **Pilot area:** Cubao, Quezon City.
 
-## Layout
+## Project layout
 
-- Flutter app at the repository root (`lib/`)
-- Firebase Authentication, Firestore, Storage, and Cloud Functions
-- Firebase rules and indexes at the repository root
+- Flutter Android application: `lib/`
+- Firebase Authentication, Cloud Firestore rules, and indexes: repository root
+- Retained Firebase Functions source for migration comparison and rollback: `functions/`
+- Local Cloudflare API Worker: `cloudflare/backend-worker/`
+- Separate upload and media gateway Worker: `cloudflare/worker/`
+- Migration, security, and free-tier planning: `docs/`
+
+The target backend keeps Firebase Authentication and Firestore on Spark and moves trusted operations to Cloudflare Workers and R2. The Firebase Functions source remains in the repository; do not deploy it as part of local migration validation. No production Worker, R2 bucket, or Spark service-account credentials are configured by these local instructions.
 
 ## Local development
 
-1. Install Flutter and Firebase CLI, then run `flutter pub get`.
-2. Select the Firebase project with `firebase use capstone-project-561a2`.
-3. Run the Firebase emulators for local development, or deploy the rules and
-   functions for a shared environment.
-4. Run the app with a restricted **public** Mapbox token:
-   `flutter run --dart-define=PUBLIC_MAPBOX_ACCESS_TOKEN=YOUR_NEW_TOKEN`
+1. Install Flutter, Node.js 22, Java, and Firebase CLI. Run `flutter pub get`.
+2. Start only the Auth and Firestore emulators with `firebase emulators:start --project demo-localspot --only auth,firestore`.
+3. For API and media validation, follow the two-Worker commands in [docs/OPERATIONS.md](docs/OPERATIONS.md). The API Worker uses local emulators and R2 simulation; no production bucket is configured. For API-only development, install dependencies in `cloudflare/backend-worker` and run `npm run dev` there.
+4. Run the Android app with the emulator settings from [docs/OPERATIONS.md](docs/OPERATIONS.md). To render Mapbox Streets and Directions locally, supply the ignored `config/local.json` file with `--dart-define-from-file=config/local.json`.
+5. Run Flutter checks with `flutter analyze` and `flutter test`. Worker checks are `npm run typecheck` and `npm test` from `cloudflare/backend-worker`.
 
-Do not put the real token in Dart source or a committed file. The token is
-passed only at launch/build time through the `PUBLIC_MAPBOX_ACCESS_TOKEN`
-define. Use a newly issued, restricted public token for local development.
+For physical-device or media-gateway setup, environment-specific ports, and emulator host addresses, follow [docs/OPERATIONS.md](docs/OPERATIONS.md). Never use emulator settings or local R2 simulation in a release build.
 
-`config/local.json` stays ignored because GitHub secret scanning may classify
-Mapbox tokens as credentials, even when they are public `pk.` client tokens.
-Never put a private `sk.` token or service-account credential in the repository.
+## Mapbox configuration
 
-The app renders Mapbox Streets and requests driving routes from the Mapbox Directions API.
-Create a public token (`pk.`) with the read scopes required for Maps and Directions. Restrict it
-by platform, bundle ID/package name, allowed URLs, and usage limits in the Mapbox dashboard.
-Never use a secret token (`sk.`) in the mobile app. The SDK's Mapbox logo and clickable attribution
-remain visible, including the telemetry opt-out. Check [Mapbox pricing and terms](https://www.mapbox.com/pricing/)
-before production use: the Flutter Maps SDK is measured in monthly active users, while Directions is
-measured in API requests. Free-tier amounts, prices, and rate limits depend on the current plan; see the
-[Maps SDK pricing guide](https://docs.mapbox.com/flutter/maps/guides/pricing/) and
-[Directions API pricing and limits](https://docs.mapbox.com/api/navigation/directions/).
+The restricted public token is stored in the ignored `config/local.json` file under `PUBLIC_MAPBOX_ACCESS_TOKEN`. Flutter receives it at launch/build time with `--dart-define-from-file=config/local.json`. Do not put the token in Dart source or commit the local config file. Never use a private `sk.` token or a service-account credential in the mobile app.
 
-Customer GPS is requested only while using the app. Store/provider coordinates come from Firestore.
-With no Mapbox token, the app shows a configuration notice and does not draw a fake road route.
+The app renders Mapbox Streets and requests driving routes from the Mapbox Directions API. Create a public token (`pk.`) with the read scopes required for Maps and Directions. Restrict it by platform, package name, allowed URLs, and usage limits in the Mapbox dashboard. The SDK's Mapbox logo and clickable attribution remain visible, including the telemetry opt-out. Check [Mapbox pricing and terms](https://www.mapbox.com/pricing/) before production use: the Flutter Maps SDK is measured in monthly active users, while Directions is measured in API requests. Free-tier amounts, prices, and rate limits depend on the current plan; see the [Maps SDK pricing guide](https://docs.mapbox.com/flutter/maps/guides/pricing/) and [Directions API pricing and limits](https://docs.mapbox.com/api/navigation/directions/).
 
-## Tests
+Customer GPS is requested only while using the app. Store/provider coordinates come from Firestore. With no Mapbox token, the app shows a configuration notice and does not draw a fake road route.
 
-```bash
-cd backend && php artisan test
-flutter analyze && flutter test
-```
+## Migration and release
 
-CI runs both suites and builds the production API image.
-
-## Production
-
-Deploy Cloud Functions and Firebase rules with the Firebase CLI. Keep service-account
-credentials and server secrets outside the repository. Firebase web/mobile API keys may
-be public client configuration, but access must be enforced by Authentication, App Check,
-Firestore/Storage rules, and callable-function authorization. See [docs/OPERATIONS.md](docs/OPERATIONS.md)
-for release and rollback guidance.
+Read [docs/CLOUDFLARE_BACKEND_MIGRATION.md](docs/CLOUDFLARE_BACKEND_MIGRATION.md) for current migration state, [docs/CLOUDFLARE_FUNCTIONS_MIGRATION.md](docs/CLOUDFLARE_FUNCTIONS_MIGRATION.md) for the Function-to-Worker inventory, and [docs/LOCALSPOT_FREE_TRIAL_DEPLOYMENT.md](docs/LOCALSPOT_FREE_TRIAL_DEPLOYMENT.md) for the gated trial plan. Production setup and deployment require separate review and approval. Do not activate Firebase Blaze, link billing, deploy Functions, or point local Workers at existing production resources as part of local development.

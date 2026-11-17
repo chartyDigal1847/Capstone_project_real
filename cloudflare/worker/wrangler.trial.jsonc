@@ -1,0 +1,17 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "locentra-upload-gateway-trial-20261117",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-17",
+  "workers_dev": true,
+  "vars": {
+    "FIREBASE_PROJECT_ID": "locentra-spark-trial-20261117",
+    "GATEWAY_PUBLIC_JWKS": "{\"keys\":[{\"kty\":\"EC\",\"crv\":\"P-256\",\"x\":\"FGE-i4D1IdznZ3eLqCdj7mqYZyoZPxbsDxjL1zgWf9c\",\"y\":\"kaGLjCrS7cPfOsIHypUhEH3Z2XEYDhZyzdNrpn45_U0\",\"kid\":\"locentra-trial-gateway-20261117\",\"alg\":\"ES256\",\"use\":\"sig\",\"key_ops\":[\"verify\"]}]}"
+  },
+  "r2_buckets": [
+    {
+      "binding": "MEDIA_BUCKET",
+      "bucket_name": "locentra-trial-media-20261117"
+    }
+  ]
+}

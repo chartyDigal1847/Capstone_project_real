@@ -199,7 +199,7 @@ String matchTypeLabel(SearchMatchType type) => switch (type) {
 
 enum PrivacyStatus { pending, processing, needsReview, ready, failed }
 
-enum StoreStatus { pending, approved, suspended }
+enum StoreStatus { pending, approved, rejected, suspended }
 
 enum ListingStatus { active, archived, unavailable }
 

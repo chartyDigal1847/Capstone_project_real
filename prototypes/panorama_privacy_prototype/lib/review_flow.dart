@@ -27,8 +27,9 @@ class ReviewCoverage {
   ReviewDirection get nextUninspected =>
       reviewDirections.firstWhere((d) => !inspected.contains(d.index));
   void markInspected(int index) {
-    if (index < 0 || index >= reviewDirections.length)
+    if (index < 0 || index >= reviewDirections.length) {
       throw RangeError.index(index, reviewDirections);
+    }
     inspected.add(index);
   }
 

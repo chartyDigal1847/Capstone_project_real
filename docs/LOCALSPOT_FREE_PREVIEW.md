@@ -1,4 +1,4 @@
-# LocalSpot free preview APK
+# Locentra free preview APK
 
 ## Configuration
 
@@ -27,10 +27,10 @@ Disabled API operations return errors or remain unavailable; the client never re
 
 ## Build and install
 
-The current APK is at `build/app/outputs/flutter-apk/app-release.apk`. To reproduce it from PowerShell:
+The previously installed preview APK is at `build/app/outputs/flutter-apk/app-release.apk`. The flavored rebuild below outputs `build/app/outputs/flutter-apk/app-preview-release.apk`:
 
 ```powershell
-flutter build apk --release `
+flutter build apk --flavor preview --release `
   --dart-define=LOCALSPOT_PREVIEW=true `
   --dart-define=USE_FIREBASE_EMULATORS=false `
   --android-project-arg=localspotReleaseEnvironment=preview `

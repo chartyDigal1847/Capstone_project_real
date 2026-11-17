@@ -1,5 +1,5 @@
 name: localspot
-description: Philippine local store and product locator.
+description: Locentra Philippine local store and product locator.
 publish_to: 'none'
 version: 1.0.0+1
 environment:
@@ -30,4 +30,8 @@ dev_dependencies:
     sdk: flutter
   flutter_lints: ^5.0.0
 flutter:
+  default-flavor: local
   uses-material-design: true
+  assets:
+    - assets/brand/locentra-logo.png
+    - assets/data/ph_psgc_locations.json

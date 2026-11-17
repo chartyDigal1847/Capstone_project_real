@@ -61,10 +61,11 @@ class LocalOwnerReviewStore {
     DateTime? reviewedAt,
   }) async {
     final uid = owner.authenticatedUid.trim();
-    if (uid.isEmpty)
+    if (uid.isEmpty) {
       throw StateError(
         'An authenticated owner UID is required to record review.',
       );
+    }
     if (!RegExp(r'^[a-f0-9]{64}$').hasMatch(derivativeSha256)) {
       throw ArgumentError.value(
         derivativeSha256,
@@ -150,14 +151,16 @@ class LocalOwnerReviewStore {
   Future<OwnerReviewRecord?> loadForDerivative(
     String currentDerivativeSha256,
   ) async {
-    if (!RegExp(r'^[a-f0-9]{64}$').hasMatch(currentDerivativeSha256))
+    if (!RegExp(r'^[a-f0-9]{64}$').hasMatch(currentDerivativeSha256)) {
       return null;
+    }
     final prefs = await SharedPreferences.getInstance();
     final stored = prefs.getString(_key(currentDerivativeSha256));
     if (stored == null) return null;
     final record = OwnerReviewRecord.fromJson(stored);
-    if (record == null || record.derivativeSha256 != currentDerivativeSha256)
+    if (record == null || record.derivativeSha256 != currentDerivativeSha256) {
       return null;
+    }
     return record;
   }
 

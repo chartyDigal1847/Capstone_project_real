@@ -1,4 +1,4 @@
-# LocalSpot trial user guide (draft)
+# Locentra trial user guide (draft)
 
 **Not distributable yet.** No signed trial APK exists and there is no trial cloud environment. Do not install the current debug APK as a tester release: it is configured for local Firebase emulators and is not usable outside the development network.
 

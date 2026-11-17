@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' hide Size;
 
@@ -28,6 +29,7 @@ class LocalMapView extends StatelessWidget {
     required this.centerLng,
     this.userLat,
     this.userLng,
+    this.pickedLocation,
     this.selectedId,
     this.onSelect,
     this.onPick,
@@ -44,6 +46,7 @@ class LocalMapView extends StatelessWidget {
   final double centerLng;
   final double? userLat;
   final double? userLng;
+  final GeoPoint? pickedLocation;
   final int? selectedId;
   final ValueChanged<Store>? onSelect;
   final void Function(double lat, double lng)? onPick;
@@ -65,6 +68,7 @@ class LocalMapView extends StatelessWidget {
               centerLng: centerLng,
               userLat: userLat,
               userLng: userLng,
+              pickedLocation: pickedLocation,
               selectedId: selectedId,
               onSelect: onSelect,
               onPick: onPick,
@@ -80,6 +84,7 @@ class LocalMapView extends StatelessWidget {
               centerLng: centerLng,
               userLat: userLat,
               userLng: userLng,
+              pickedLocation: pickedLocation,
               selectedId: selectedId,
               onSelect: onSelect,
               onPick: onPick,
@@ -101,6 +106,7 @@ class _MapboxCanvas extends StatefulWidget {
     required this.centerLng,
     required this.userLat,
     required this.userLng,
+    required this.pickedLocation,
     required this.selectedId,
     required this.onSelect,
     required this.onPick,
@@ -116,6 +122,7 @@ class _MapboxCanvas extends StatefulWidget {
   final double centerLng;
   final double? userLat;
   final double? userLng;
+  final GeoPoint? pickedLocation;
   final int? selectedId;
   final ValueChanged<Store>? onSelect;
   final void Function(double lat, double lng)? onPick;
@@ -135,12 +142,14 @@ class _MapboxCanvasState extends State<_MapboxCanvas> {
   static const _storesSourceId = 'localspot-stores-source';
   static const _selectedSourceId = 'localspot-selected-source';
   static const _customerSourceId = 'localspot-customer-source';
+  static const _pickedPinSourceId = 'localspot-picked-pin-source';
 
   MapboxMap? _map;
   GeoJsonSource? _routeSource;
   GeoJsonSource? _storesSource;
   GeoJsonSource? _selectedSource;
   GeoJsonSource? _customerSource;
+  GeoJsonSource? _pickedPinSource;
   var _styleReady = false;
   var _panChanged = false;
   var _satellite = false;
@@ -166,6 +175,7 @@ class _MapboxCanvasState extends State<_MapboxCanvas> {
         oldWidget.selectedId != widget.selectedId ||
         oldWidget.userLat != widget.userLat ||
         oldWidget.userLng != widget.userLng ||
+        oldWidget.pickedLocation != widget.pickedLocation ||
         oldWidget.route != widget.route;
     final routeChanged = oldWidget.route != widget.route;
     if (markersChanged) _syncFeatures();
@@ -250,7 +260,9 @@ class _MapboxCanvasState extends State<_MapboxCanvas> {
             closestDistanceKm = distanceKm;
           }
         }
-        if (closest != null && closestDistanceKm < 0.05) {
+        if (closest != null &&
+            closestDistanceKm < 0.05 &&
+            widget.onSelect != null) {
           widget.onSelect?.call(closest);
         } else {
           widget.onPick?.call(latitude, longitude);
@@ -288,11 +300,16 @@ class _MapboxCanvasState extends State<_MapboxCanvas> {
         id: _customerSourceId,
         data: _emptyCollection,
       );
+      _pickedPinSource = GeoJsonSource(
+        id: _pickedPinSourceId,
+        data: _emptyCollection,
+      );
 
       await map.addSource(_routeSource!);
       await map.addSource(_storesSource!);
       await map.addSource(_selectedSource!);
       await map.addSource(_customerSource!);
+      await map.addSource(_pickedPinSource!);
       await map.addLayer(
         LineLayer(
           id: 'localspot-route-layer',
@@ -331,6 +348,16 @@ class _MapboxCanvasState extends State<_MapboxCanvas> {
           circleColor: champagne.toARGB32(),
           circleStrokeColor: Colors.white.toARGB32(),
           circleStrokeWidth: 2,
+        ),
+      );
+      await map.addLayer(
+        CircleLayer(
+          id: 'localspot-picked-pin-layer',
+          sourceId: _pickedPinSourceId,
+          circleRadius: 12,
+          circleColor: clay.toARGB32(),
+          circleStrokeColor: Colors.white.toARGB32(),
+          circleStrokeWidth: 3,
         ),
       );
       await map.logo.updateSettings(LogoSettings(enabled: true));
@@ -384,10 +411,12 @@ class _MapboxCanvasState extends State<_MapboxCanvas> {
     final stores = _storesSource;
     final selected = _selectedSource;
     final customer = _customerSource;
+    final pickedPin = _pickedPinSource;
     if (route == null ||
         stores == null ||
         selected == null ||
-        customer == null) {
+        customer == null ||
+        pickedPin == null) {
       return;
     }
 
@@ -417,6 +446,12 @@ class _MapboxCanvasState extends State<_MapboxCanvas> {
       _featureCollection([
         if (userLat != null && userLng != null)
           _pointFeature(userLng, userLat, 'customer'),
+      ]),
+    );
+    final pin = widget.pickedLocation;
+    pickedPin.updateGeoJSON(
+      _featureCollection([
+        if (pin != null) _pointFeature(pin.lng, pin.lat, 'picked-pin'),
       ]),
     );
   }
@@ -461,6 +496,9 @@ class _MapboxCanvasState extends State<_MapboxCanvas> {
       children: [
         MapWidget(
           styleUri: MapboxStyles.MAPBOX_STREETS,
+          gestureRecognizers: <Factory<OneSequenceGestureRecognizer>>{
+            Factory<EagerGestureRecognizer>(() => EagerGestureRecognizer()),
+          },
           viewport: CameraViewportState(
             center: Point(
               coordinates: Position(widget.centerLng, widget.centerLat),
@@ -548,7 +586,7 @@ class _MapboxCanvasState extends State<_MapboxCanvas> {
                 const SizedBox(height: 6),
                 FloatingActionButton.small(
                   heroTag: null,
-                  tooltip: 'Center on my location',
+                  tooltip: 'My location',
                   onPressed: widget.onLocateUser,
                   child: const Icon(Icons.my_location),
                 ),
@@ -567,6 +605,7 @@ class _SchematicMapView extends StatelessWidget {
     required this.centerLng,
     required this.userLat,
     required this.userLng,
+    required this.pickedLocation,
     required this.selectedId,
     required this.onSelect,
     required this.onPick,
@@ -580,6 +619,7 @@ class _SchematicMapView extends StatelessWidget {
   final double centerLng;
   final double? userLat;
   final double? userLng;
+  final GeoPoint? pickedLocation;
   final int? selectedId;
   final ValueChanged<Store>? onSelect;
   final void Function(double lat, double lng)? onPick;
@@ -672,6 +712,32 @@ class _SchematicMapView extends StatelessWidget {
                     );
                   },
                 ),
+              if (pickedLocation != null)
+                Builder(
+                  builder: (_) {
+                    final pin = _toOffset(
+                      pickedLocation!.lat,
+                      pickedLocation!.lng,
+                      size,
+                    );
+                    return Positioned(
+                      left: pin.dx - 11,
+                      top: pin.dy - 11,
+                      child: Container(
+                        width: 22,
+                        height: 22,
+                        decoration: BoxDecoration(
+                          color: clay,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 3),
+                          boxShadow: const [
+                            BoxShadow(color: Color(0x55000000), blurRadius: 5),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
               const Positioned(
                 left: 10,
                 right: 10,
@@ -687,7 +753,7 @@ class _SchematicMapView extends StatelessWidget {
                   top: 10,
                   child: FloatingActionButton.small(
                     heroTag: null,
-                    tooltip: 'Center on my location',
+                    tooltip: 'My location',
                     onPressed: onLocateUser,
                     child: const Icon(Icons.my_location),
                   ),

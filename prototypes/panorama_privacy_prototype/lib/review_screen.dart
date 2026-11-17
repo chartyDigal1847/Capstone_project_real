@@ -87,8 +87,9 @@ class _PanoramaReviewScreenState extends State<PanoramaReviewScreen> {
     final shown =
         _near(longitude, target.longitude) &&
         (latitude - target.latitude).abs() <= 12;
-    if (shown != _directionPresented && mounted)
+    if (shown != _directionPresented && mounted) {
       setState(() => _directionPresented = shown);
+    }
   }
 
   Future<void> _markAndAdvance() async {
@@ -121,7 +122,7 @@ class _PanoramaReviewScreenState extends State<PanoramaReviewScreen> {
     });
     try {
       final saved = await widget.onApprove(widget.digest);
-      if (mounted)
+      if (mounted) {
         setState(() {
           _approved = saved;
           _invalidated = !saved;
@@ -129,6 +130,7 @@ class _PanoramaReviewScreenState extends State<PanoramaReviewScreen> {
               ? 'Local prototype review saved for this derivative.'
               : 'Derivative changed or review could not be saved. Start a new review.';
         });
+      }
       if (saved && widget.closeAfterApproval && mounted) {
         Navigator.of(context).pop('approved');
       }

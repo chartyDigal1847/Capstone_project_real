@@ -17,7 +17,7 @@ const NO_CACHE_HEADERS = {
 interface Env {
   MEDIA_BUCKET: R2Bucket;
   FIREBASE_PROJECT_ID: string;
-  /** Development-only Auth Emulator endpoint; loopback-only and never configured for deployment. */
+  /** Development-only Auth Emulator endpoint; loopback or RFC1918 only, never configured for deployment. */
   FIREBASE_AUTH_EMULATOR_URL?: string;
   /** Public ES256 verification keys, encoded as a JSON JWK set. Private keys belong in Firebase Secret Manager. */
   GATEWAY_PUBLIC_JWKS?: string;
@@ -167,7 +167,8 @@ async function verifyFirebaseEmulatorToken(token: string, projectId: string, emu
     throw new HttpError(503, "Firebase Auth Emulator configuration is invalid.");
   }
   if (projectId !== "demo-localspot" || endpoint.protocol !== "http:" ||
-      !["127.0.0.1", "localhost", "::1"].includes(endpoint.hostname)) {
+      endpoint.username || endpoint.password || endpoint.pathname !== "/" || endpoint.search || endpoint.hash ||
+      !isPrivateEmulatorHost(endpoint.hostname)) {
     throw new HttpError(503, "Firebase Auth Emulator configuration is invalid.");
   }
   let response: Response;
@@ -190,6 +191,16 @@ async function verifyFirebaseEmulatorToken(token: string, projectId: string, emu
     throw new HttpError(401, "The Firebase token is invalid or expired.");
   }
   return (user as { localId: string }).localId;
+}
+
+function isPrivateEmulatorHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (host === "localhost" || host === "::1" || host === "127.0.0.1") return true;
+  const octets = host.split(".").map(Number);
+  if (octets.length !== 4 || octets.some((value) => !Number.isInteger(value) || value < 0 || value > 255)) return false;
+  const [first, second] = octets;
+  return first === 10 || (first === 192 && second === 168) ||
+    (first === 172 && second >= 16 && second <= 31);
 }
 
 async function authenticateUser(request: Request, env: Env): Promise<string> {
@@ -261,14 +272,22 @@ function hasImageSignature(bytes: Uint8Array, contentType: string): boolean {
     new TextDecoder().decode(bytes.subarray(8, 12)) === "WEBP";
 }
 
-function checkedUploadStream(body: ReadableStream<Uint8Array>, contentLength: number, maxBytes: number, contentType: string): ReadableStream<Uint8Array> {
+function checkedUploadStream(body: ReadableStream<Uint8Array>, contentLength: number, maxBytes: number, contentType: string, requireJpegEnd = false): ReadableStream<Uint8Array> {
   let prefix = new Uint8Array(0);
+  let tail = new Uint8Array(0);
   let signatureChecked = false;
   let actualBytes = 0;
   const validator = new TransformStream<Uint8Array, Uint8Array>({
     transform(chunk, controller) {
       actualBytes += chunk.byteLength;
       if (actualBytes > maxBytes) throw new HttpError(413, "The upload exceeds its reserved size.");
+      if (requireJpegEnd) {
+        const last = chunk.subarray(Math.max(0, chunk.length - 2));
+        const combinedTail = new Uint8Array(tail.length + last.length);
+        combinedTail.set(tail);
+        combinedTail.set(last, tail.length);
+        tail = combinedTail.subarray(Math.max(0, combinedTail.length - 2));
+      }
       if (signatureChecked) {
         controller.enqueue(chunk);
         return;
@@ -291,10 +310,20 @@ function checkedUploadStream(body: ReadableStream<Uint8Array>, contentLength: nu
         controller.enqueue(prefix);
       }
       if (actualBytes !== contentLength) throw new HttpError(400, "The received file size does not match Content-Length.");
+      if (requireJpegEnd && (tail.length !== 2 || tail[0] !== 0xff || tail[1] !== 0xd9)) {
+        throw new HttpError(415, "The JPEG image is missing its end marker.");
+      }
     },
   });
   // FixedLengthStream gives R2 a known-length body while rejecting short or long streams.
   return body.pipeThrough(validator).pipeThrough(new FixedLengthStream(contentLength));
+}
+
+function hexDigestBuffer(value: string): ArrayBuffer {
+  if (!/^[a-f0-9]{64}$/.test(value)) throw new HttpError(401, "The upload authorization has an invalid SHA-256 digest.");
+  const bytes = new Uint8Array(32);
+  for (let i = 0; i < bytes.length; i++) bytes[i] = Number.parseInt(value.slice(i * 2, i * 2 + 2), 16);
+  return bytes.buffer;
 }
 
 function uploadLimit(payload: UploadClaims): number {
@@ -331,9 +360,12 @@ async function upload(request: Request, env: Env, reservationId: string): Promis
 
   let stored: R2Object | null;
   try {
-    stored = await env.MEDIA_BUCKET.put(key, checkedUploadStream(request.body, contentLength, maxBytes, payload.contentType), {
+    stored = await env.MEDIA_BUCKET.put(key, checkedUploadStream(request.body, contentLength, maxBytes, payload.contentType, payload.mediaType === "panorama-derivative"), {
       onlyIf: { etagDoesNotMatch: "*" },
       httpMetadata: { contentType: payload.contentType, cacheControl: "private,no-store" },
+      ...(payload.mediaType === "panorama-derivative" && typeof payload.derivativeSha256 === "string"
+        ? { sha256: hexDigestBuffer(payload.derivativeSha256) }
+        : {}),
       customMetadata: {
         reservationId,
         uid,
@@ -492,6 +524,7 @@ async function internalObject(request: Request, env: Env, url: URL): Promise<Res
     for (const [name, value] of Object.entries(object.customMetadata ?? {})) {
       if (["reservationId", "uid", "mediaType", "sha256", "publicApproved"].includes(name)) headers.set(`X-Object-${name.replace(/[A-Z]/g, (letter) => `-${letter}`).toLowerCase()}`, value);
     }
+    if (object.checksums?.sha256) headers.set("X-Object-Verified-Sha256", Array.from(new Uint8Array(object.checksums.sha256), (byte) => byte.toString(16).padStart(2, "0")).join(""));
     return new Response(null, { status: 200, headers });
   }
   const object = await env.MEDIA_BUCKET.get(key);
@@ -589,4 +622,4 @@ export default {
   },
 };
 
-export const __test__ = { isManagedKey, uploadObjectKey, checkedUploadStream };
+export const __test__ = { isManagedKey, uploadObjectKey, checkedUploadStream, hexDigestBuffer };

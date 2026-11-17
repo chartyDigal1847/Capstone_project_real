@@ -74,9 +74,13 @@ config/local.json
 
 # Cloudflare Worker local dependencies, runtime cache, and secrets
 cloudflare/worker/node_modules/
+cloudflare/backend-worker/node_modules/
 cloudflare/worker/.wrangler/
 .wrangler/
 cloudflare/worker/.dev.vars
+cloudflare/backend-worker/.dev.vars
+firebase.physical.local.json
+cloudflare/worker/wrangler.physical.local.jsonc
 cloudflare/worker/.env
 cloudflare/worker/.local-secrets/
 

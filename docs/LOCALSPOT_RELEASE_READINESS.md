@@ -1,7 +1,9 @@
-# LocalSpot release readiness
+# LocalSpot release readiness (historical audit)
+
+> **Superseded for the no-Blaze Cloudflare migration.** This 2026-11-16 audit predates the current Worker architecture and contains old Functions-based trial requirements. Use [CLOUDFLARE_BACKEND_MIGRATION.md](CLOUDFLARE_BACKEND_MIGRATION.md), [LOCALSPOT_FREE_TRIAL_DEPLOYMENT.md](LOCALSPOT_FREE_TRIAL_DEPLOYMENT.md), and [ANDROID_RELEASE_SIGNING.md](ANDROID_RELEASE_SIGNING.md) for current gates.
 
 **Audit date:** 2026-11-16  
-**Decision:** **Not ready for trial distribution.** Current debug and automated checks pass in part, but there is no isolated trial cloud environment, no signed release artifact, and critical integrated media operations have not been validated against live R2.
+**Historical decision:** Not ready for trial distribution at the time of the audit.
 
 ## Environment boundary
 
@@ -44,9 +46,9 @@ The actual Flutter debug build is isolated: it requires explicit emulator opt-in
 
 ## Release gates
 
-1. Obtain approval to create an isolated Firebase trial project (including the required billing association for deployed Cloud Functions), trial Android registration, separate Worker, and separate private R2 bucket. No such resources exist.
-2. Configure isolated Firebase Auth, Firestore rules/indexes, Functions parameters/secrets, App Check, and region. Verify debug/release project isolation.
-3. Create and deploy only the trial Worker/Functions after configuration review; use a trial-only ES256 signing pair, keeping its private key in Secret Manager and publishing only its public JWKS to the Worker.
+1. Historical gate: an isolated Firebase trial project, trial Android registration, separate Worker, and private R2 bucket were not present at the time of this audit. See the current no-Blaze deployment plan before any resource setup.
+2. Historical Functions-based configuration gate; do not follow its Functions parameter/secret setup for the no-Blaze migration. Use the current Worker plan for project isolation, App Check, and secrets.
+3. Do not use this historical Worker/Functions deployment sequence. The current no-Blaze plan requires a separately named Worker and private R2 bucket, with Worker secrets configured only after separate approval.
 4. Run first reconciliation against the trial bucket. Keep uploads disabled until R2 object inventory and Firestore quota ledgers reconcile exactly. Preserve the 9,000,000,000-byte hard limit.
 5. Exercise controlled real trial R2 upload, read, private access, digest verification, quota finalization, deletion, retry, and approved public delivery. Test denied/expired/cross-object cases.
 6. Finish physical customer/owner/admin, store/product, image, network-failure and panorama workflows. Complete the genuine 48-direction owner review and integrated media path. Panorama publication stays disabled until those checks pass.

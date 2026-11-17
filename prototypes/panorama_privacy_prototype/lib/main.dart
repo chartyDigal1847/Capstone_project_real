@@ -102,8 +102,9 @@ class _PrototypeScreenState extends State<PrototypeScreen> {
         });
       },
       onError: (Object error) {
-        if (mounted)
+        if (mounted) {
           setState(() => _error = 'Progress reporting failed: $error');
+        }
       },
     );
     if (widget.initialPath != null) {
@@ -130,8 +131,9 @@ class _PrototypeScreenState extends State<PrototypeScreen> {
     try {
       final oldDigest = _derivativeSha256;
       final file = File(path);
-      if (!await file.exists())
+      if (!await file.exists()) {
         throw StateError('Selected panorama is no longer available.');
+      }
       final digest = await _hashFile(path);
       final prefs = await SharedPreferences.getInstance();
       final saved = prefs.getString('pano.manual.$digest');
@@ -182,8 +184,9 @@ class _PrototypeScreenState extends State<PrototypeScreen> {
       );
       if (picked != null) await _setSource(picked.path);
     } catch (error) {
-      if (mounted)
+      if (mounted) {
         setState(() => _error = 'Could not open the selected panorama: $error');
+      }
     }
   }
 
@@ -221,8 +224,9 @@ class _PrototypeScreenState extends State<PrototypeScreen> {
       final path = selected['path'] as String;
       final sourceBytes = await File(path).readAsBytes();
       final hash = sha256.convert(sourceBytes).toString();
-      if (hash != selected['sha256'])
+      if (hash != selected['sha256']) {
         throw StateError('Fixture digest changed while loading.');
+      }
       await _setSource(path, name: selected['name'] as String);
     } catch (error) {
       if (mounted) setState(() => _error = 'Debug fixture load failed: $error');
@@ -371,8 +375,9 @@ class _PrototypeScreenState extends State<PrototypeScreen> {
         'process',
         {'path': source},
       );
-      if (response == null)
+      if (response == null) {
         throw StateError('The native processor returned no result.');
+      }
       final output = response['path'] as String?;
       final preview = response['previewPath'] as String?;
       if (output == null ||
@@ -426,10 +431,11 @@ class _PrototypeScreenState extends State<PrototypeScreen> {
     try {
       await _channel.invokeMethod<void>('cancel');
     } on PlatformException catch (error) {
-      if (mounted)
+      if (mounted) {
         setState(
           () => _error = 'Cancellation request failed: ${error.message}',
         );
+      }
     }
   }
 
@@ -497,8 +503,9 @@ class _PrototypeScreenState extends State<PrototypeScreen> {
         path == null ||
         digest == null ||
         _working ||
-        _derivativeOutdated)
+        _derivativeOutdated) {
       return;
+    }
     final navigator = Navigator.of(context);
     if (!await File(path).exists()) return;
     final coverage = await _reviewStore.loadCoverage(digest);
@@ -511,11 +518,12 @@ class _PrototypeScreenState extends State<PrototypeScreen> {
           processingVersion: _processingVersion,
           initialInspected: coverage,
           persistCoverage: (reviewDigest, inspected) async {
-            if (reviewDigest == _derivativeSha256)
+            if (reviewDigest == _derivativeSha256) {
               await _reviewStore.saveCoverage(
                 derivativeSha256: reviewDigest,
                 inspected: inspected,
               );
+            }
           },
           onApprove: (reviewDigest) async {
             final latestPath = _derivativePath;
@@ -523,18 +531,20 @@ class _PrototypeScreenState extends State<PrototypeScreen> {
                 _working ||
                 _derivativeOutdated ||
                 latestPath == null ||
-                !await File(latestPath).exists())
+                !await File(latestPath).exists()) {
               return false;
+            }
             final actualDigest = await _hashFile(latestPath);
             if (actualDigest != reviewDigest ||
                 actualDigest != _derivativeSha256) {
               await _reviewStore.invalidate(reviewDigest);
-              if (mounted)
+              if (mounted) {
                 setState(() {
                   _derivativeSha256 = actualDigest;
                   _reviewedDigest = null;
                   _reviewTimestamp = null;
                 });
+              }
               return false;
             }
             final owner = widget.ownerContext;
@@ -552,11 +562,12 @@ class _PrototypeScreenState extends State<PrototypeScreen> {
                 approved: true,
               );
             }
-            if (mounted)
+            if (mounted) {
               setState(() {
                 _reviewedDigest = actualDigest;
                 _reviewTimestamp = DateTime.now().toUtc().toIso8601String();
               });
+            }
             return true;
           },
           closeAfterApproval: widget.integratedMode,
@@ -565,6 +576,7 @@ class _PrototypeScreenState extends State<PrototypeScreen> {
     );
     if (result == 'approved' && mounted && widget.integratedMode) {
       final inspected = await _reviewStore.loadCoverage(digest);
+      if (!mounted) return;
       final receipt = PanoramaPrivacyReceipt(
         sourcePath: _source!,
         sourceName: _sourceName ?? File(_source!).uri.pathSegments.last,

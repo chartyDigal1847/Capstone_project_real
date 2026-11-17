@@ -1,0 +1,27 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "locentra-api-trial-20261117",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-17",
+  "workers_dev": true,
+  "vars": {
+    "FIREBASE_PROJECT_ID": "locentra-spark-trial-20261117",
+    "FIREBASE_PROJECT_NUMBER": "295175740638",
+    "FIREBASE_ANDROID_APP_ID": "1:295175740638:android:5c69d12e29c215ca51f64f",
+    "FIREBASE_WEB_API_KEY": "AIzaSyAa7RrkdATLxwqbnU327CORZXkBOiZqBgg",
+    "R2_GATEWAY_URL": "https://locentra-upload-gateway-trial-20261117.digalcharty0.workers.dev",
+    "GATEWAY_PUBLIC_JWKS": "{\"keys\":[{\"kty\":\"EC\",\"crv\":\"P-256\",\"x\":\"FGE-i4D1IdznZ3eLqCdj7mqYZyoZPxbsDxjL1zgWf9c\",\"y\":\"kaGLjCrS7cPfOsIHypUhEH3Z2XEYDhZyzdNrpn45_U0\",\"kid\":\"locentra-trial-gateway-20261117\",\"alg\":\"ES256\",\"use\":\"sig\",\"key_ops\":[\"verify\"]}]}"
+  },
+  "r2_buckets": [
+    {
+      "binding": "MEDIA_BUCKET",
+      "bucket_name": "locentra-trial-media-20261117"
+    }
+  ]
+  ,"services": [
+    {
+      "binding": "R2_GATEWAY",
+      "service": "locentra-upload-gateway-trial-20261117"
+    }
+  ]
+}

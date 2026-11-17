@@ -1,9 +1,11 @@
 import 'dart:async';
 
 import 'package:material_ui/material_ui.dart';
+import 'package:geolocator/geolocator.dart';
 
 import '../map_view.dart';
 import '../models.dart';
+import '../services/mapbox_location_search.dart';
 import '../state.dart';
 import '../theme.dart';
 import '../widgets.dart';
@@ -634,10 +636,69 @@ class MapPage extends StatefulWidget {
 }
 
 class _MapPageState extends State<MapPage> {
+  final _areaSearchController = TextEditingController();
+  List<MapboxLocationResult> _areaSuggestions = const [];
+  String? _areaSearchError;
+  bool _searchingArea = false;
   Store? selected;
   AppState? _app;
+  var _permissionGranted = false;
+  var _checkingPermission = false;
   var _asked = false;
+  String _permissionMessage = 'Location access is required to use the map.';
   var _holdingLocation = false;
+
+  @override
+  void dispose() {
+    _areaSearchController.dispose();
+    if (_holdingLocation) _app?.releaseForegroundLocation();
+    super.dispose();
+  }
+
+  Future<void> _searchArea(AppState app) async {
+    final query = _areaSearchController.text.trim();
+    if (query.length < 2) {
+      setState(() {
+        _areaSuggestions = const [];
+        _areaSearchError = 'Enter at least 2 characters to search.';
+      });
+      return;
+    }
+    setState(() {
+      _searchingArea = true;
+      _areaSearchError = null;
+      _areaSuggestions = const [];
+    });
+    try {
+      final results = await searchMapboxLocations(
+        query,
+        latitude: app.searchLat,
+        longitude: app.searchLng,
+      );
+      if (!mounted) return;
+      setState(() {
+        _areaSuggestions = results;
+        if (results.isEmpty) _areaSearchError = 'No matching places found.';
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _areaSearchError = error.toString());
+    } finally {
+      if (mounted) setState(() => _searchingArea = false);
+    }
+  }
+
+  Future<void> _goToMyLocation(AppState app) async {
+    await app.requestForegroundLocation(startUpdates: true);
+    if (!mounted) return;
+    if (app.locationAllowed && app.deviceLat != null && app.deviceLng != null) {
+      app.setFollowMyLocation(true);
+      return;
+    }
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(app.locationNote)));
+  }
 
   @override
   void didChangeDependencies() {
@@ -645,20 +706,51 @@ class _MapPageState extends State<MapPage> {
     _app = AppScope.of(context);
     if (_asked) return;
     _asked = true;
-    _holdLocation();
+    _ensureLocationPermission(requestIfNeeded: true);
   }
 
-  Future<void> _holdLocation() async {
-    await _app?.requestForegroundLocation(startUpdates: true);
-    if (!mounted) return;
-    _app?.retainForegroundLocation();
-    _holdingLocation = true;
-  }
-
-  @override
-  void dispose() {
-    if (_holdingLocation) _app?.releaseForegroundLocation();
-    super.dispose();
+  Future<void> _ensureLocationPermission({
+    required bool requestIfNeeded,
+  }) async {
+    if (_checkingPermission) return;
+    setState(() => _checkingPermission = true);
+    try {
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied && requestIfNeeded) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (!mounted) return;
+      if (permission == LocationPermission.whileInUse ||
+          permission == LocationPermission.always) {
+        setState(() {
+          _permissionGranted = true;
+          _permissionMessage = '';
+        });
+        await _app?.requestForegroundLocation(startUpdates: true);
+        if (!mounted) return;
+        if (_app?.locationAllowed == true && !_holdingLocation) {
+          _app?.retainForegroundLocation();
+          _holdingLocation = true;
+        }
+      } else {
+        setState(() {
+          _permissionGranted = false;
+          _permissionMessage =
+              permission == LocationPermission.deniedForever
+                  ? 'Location access is blocked. Enable it in app settings to use the map.'
+                  : 'Allow foreground location access to use the map.';
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _permissionGranted = false;
+          _permissionMessage = 'Could not check location access. Try again.';
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _checkingPermission = false);
+    }
   }
 
   @override
@@ -669,9 +761,163 @@ class _MapPageState extends State<MapPage> {
         app.followMyLocation ? (app.deviceLat ?? app.searchLat) : app.searchLat;
     final focusLng =
         app.followMyLocation ? (app.deviceLng ?? app.searchLng) : app.searchLng;
+    if (!_permissionGranted) {
+      return Column(
+        children: [
+          const PageHeader('Map'),
+          Expanded(
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: SoftCard(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const IconWell(Icons.location_on_outlined),
+                      const SizedBox(height: 16),
+                      const Text(
+                        'Location access required',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(_permissionMessage, textAlign: TextAlign.center),
+                      const SizedBox(height: 16),
+                      PrimaryButton(
+                        _checkingPermission
+                            ? 'Checking…'
+                            : 'Allow location access',
+                        onPressed:
+                            _checkingPermission
+                                ? null
+                                : () async {
+                                  final permission =
+                                      await Geolocator.checkPermission();
+                                  if (permission ==
+                                      LocationPermission.deniedForever) {
+                                    await Geolocator.openAppSettings();
+                                  } else {
+                                    await _ensureLocationPermission(
+                                      requestIfNeeded: true,
+                                    );
+                                  }
+                                },
+                      ),
+                      if (_permissionMessage.contains('app settings')) ...[
+                        const SizedBox(height: 8),
+                        TextButton(
+                          onPressed:
+                              () => _ensureLocationPermission(
+                                requestIfNeeded: false,
+                              ),
+                          child: const Text('Check permission again'),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      );
+    }
     return Column(
       children: [
         const PageHeader('Map'),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+          child: Column(
+            children: [
+              TextField(
+                controller: _areaSearchController,
+                textInputAction: TextInputAction.search,
+                onSubmitted: (_) => _searchArea(app),
+                decoration: InputDecoration(
+                  hintText: 'Search an area or address',
+                  prefixIcon: const Icon(Icons.search),
+                  suffixIcon:
+                      _searchingArea
+                          ? const Padding(
+                            padding: EdgeInsets.all(14),
+                            child: SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          )
+                          : IconButton(
+                            tooltip: 'Search places',
+                            onPressed: () => _searchArea(app),
+                            icon: const Icon(Icons.arrow_forward),
+                          ),
+                  filled: true,
+                  fillColor: paper,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    borderSide: BorderSide(color: line),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    borderSide: BorderSide(color: line),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    borderSide: const BorderSide(color: leafDark, width: 1.5),
+                  ),
+                ),
+              ),
+              if (_areaSearchError != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      _areaSearchError!,
+                      style: const TextStyle(color: clay, fontSize: 12),
+                    ),
+                  ),
+                ),
+              if (_areaSuggestions.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: SoftCard(
+                    padding: EdgeInsets.zero,
+                    child: Column(
+                      children: [
+                        for (var i = 0; i < _areaSuggestions.length; i++) ...[
+                          if (i > 0) const Divider(height: 1),
+                          ListTile(
+                            dense: true,
+                            leading: const Icon(Icons.place_outlined),
+                            title: Text(_areaSuggestions[i].name),
+                            subtitle: Text(_areaSuggestions[i].placeName),
+                            onTap: () {
+                              final place = _areaSuggestions[i];
+                              FocusScope.of(context).unfocus();
+                              app.setManualCenter(
+                                place.latitude,
+                                place.longitude,
+                                place.placeName,
+                              );
+                              setState(() {
+                                _areaSearchController.text = place.name;
+                                _areaSuggestions = const [];
+                                _areaSearchError = null;
+                              });
+                            },
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
         const CatalogFilters(showCategory: false),
         Padding(
           padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
@@ -699,14 +945,8 @@ class _MapPageState extends State<MapPage> {
                   shape: const CircleBorder(),
                   elevation: 2,
                   child: IconButton(
-                    tooltip: 'Recenter',
-                    onPressed: () async {
-                      if (!app.locationAllowed) {
-                        await app.requestForegroundLocation(startUpdates: true);
-                      }
-                      if (!context.mounted) return;
-                      app.setFollowMyLocation(true);
-                    },
+                    tooltip: 'My location',
+                    onPressed: () => _goToMyLocation(app),
                     icon: const Icon(Icons.my_location, color: leafDark),
                   ),
                 ),
@@ -751,7 +991,7 @@ class _MapPageState extends State<MapPage> {
                       if (widget.onRoute != null)
                         TextButton(
                           onPressed: () => widget.onRoute!(selected!),
-                          child: const Text('Preview route in LocalSpot'),
+                          child: const Text('Preview route in Locentra'),
                         ),
                     ],
                   ),
@@ -893,12 +1133,10 @@ class SavedPage extends StatelessWidget {
 class ProfilePage extends StatelessWidget {
   const ProfilePage({
     super.key,
-    required this.onLocation,
     required this.onLogout,
     required this.onAdmin,
     required this.onFeedback,
   });
-  final VoidCallback onLocation;
   final VoidCallback onLogout;
   final VoidCallback onAdmin;
   final VoidCallback onFeedback;
@@ -908,7 +1146,8 @@ class ProfilePage extends StatelessWidget {
     final app = AppScope.of(context);
     final user = app.currentUser!;
     final profileName = user.name.trim();
-    final profileInitial = profileName.isEmpty ? '?' : profileName.substring(0, 1).toUpperCase();
+    final profileInitial =
+        profileName.isEmpty ? '?' : profileName.substring(0, 1).toUpperCase();
     return ListView(
       padding: const EdgeInsets.only(bottom: 28),
       children: [
@@ -936,7 +1175,7 @@ class ProfilePage extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        profileName.isEmpty ? 'LocalSpot user' : profileName,
+                        profileName.isEmpty ? 'Locentra user' : profileName,
                         style: const TextStyle(
                           fontWeight: FontWeight.w700,
                           fontSize: 17,
@@ -946,70 +1185,8 @@ class ProfilePage extends StatelessWidget {
                         '${user.email} · ${roleLabel(user.role)}',
                         style: const TextStyle(color: taupe, fontSize: 12),
                       ),
-                      const SizedBox(height: 6),
-                      Text(
-                        app.connectionNote,
-                        style: const TextStyle(color: taupe, fontSize: 11),
-                      ),
                     ],
                   ),
-                ),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 16),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20),
-          child: SoftCard(
-            padding: EdgeInsets.zero,
-            child: Column(
-              children: [
-                MenuRow(
-                  icon: Icons.cloud_outlined,
-                  title:
-                      app.apiOnline
-                          ? 'Firebase connected'
-                          : 'Firebase not connected',
-                  subtitle: app.connectionNote,
-                  onTap: () => app.bootstrap(),
-                ),
-                const Divider(height: 1),
-                MenuRow(
-                  icon: Icons.place_outlined,
-                  title: 'Search area',
-                  subtitle: app.searchAreaLabel,
-                  onTap: onLocation,
-                ),
-                const Divider(height: 1),
-                SwitchListTile(
-                  contentPadding: const EdgeInsets.fromLTRB(12, 4, 8, 4),
-                  secondary: const IconWell(Icons.my_location_outlined),
-                  title: const Text(
-                    'Follow my location',
-                    style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
-                  ),
-                  subtitle: const Text(
-                    'Centers the map only while this is on',
-                    style: TextStyle(fontSize: 11, color: taupe),
-                  ),
-                  value: app.followMyLocation,
-                  onChanged: (value) {
-                    if (value) {
-                      app
-                          .requestForegroundLocation(startUpdates: true)
-                          .then((_) => app.setFollowMyLocation(true));
-                    } else {
-                      app.setFollowMyLocation(false);
-                    }
-                  },
-                ),
-                const Divider(height: 1),
-                MenuRow(
-                  icon: Icons.privacy_tip_outlined,
-                  title: 'Location permission',
-                  subtitle: app.locationNote,
-                  onTap: onLocation,
                 ),
               ],
             ),
@@ -1111,7 +1288,7 @@ class ProfilePage extends StatelessWidget {
                 MenuRow(
                   icon: Icons.delete_forever_outlined,
                   title: 'Delete account',
-                  subtitle: 'Permanently remove your LocalSpot account',
+                  subtitle: 'Permanently remove your Locentra account',
                   iconColor: clay,
                   onTap: () async {
                     final confirmed = await showDialog<bool>(
@@ -1155,7 +1332,7 @@ class ProfilePage extends StatelessWidget {
         const Padding(
           padding: EdgeInsets.fromLTRB(20, 16, 20, 0),
           child: InfoBanner(
-            'Photos used for product recognition are suggestions only. Store owners confirm identity, price and stock. LocalSpot lists participating sellers, not every vendor in the Philippines. Lawful product categories such as groceries, hardware and electronics are supported. The 2D map, route preview and owner-created 360° store tour stay inside the app. Customer location is used in the foreground only and is not stored as a movement history.',
+            'Photos used for product recognition are suggestions only. Store owners confirm identity, price and stock. Locentra lists participating sellers, not every vendor in the Philippines. Lawful product categories such as groceries, hardware and electronics are supported. The 2D map, route preview and owner-created 360° store tour stay inside the app. Customer location is used in the foreground only and is not stored as a movement history.',
           ),
         ),
       ],

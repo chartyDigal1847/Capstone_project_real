@@ -1,9 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_firestore/cloud_firestore.dart' hide GeoPoint;
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:panorama_privacy_prototype/main.dart' as panorama_privacy;
@@ -14,8 +15,10 @@ import 'package:panorama_privacy_prototype/review_model.dart'
 import '../firebase/media_upload.dart';
 import '../firebase/bootstrap.dart';
 import '../firebase/build_mode.dart';
+import '../api.dart';
 import '../map_view.dart';
 import '../models.dart';
+import '../services/offline_psgc_locations.dart';
 import '../state.dart';
 import '../theme.dart';
 import '../widgets.dart';
@@ -25,6 +28,48 @@ class _FirebaseOwnerContext
   const _FirebaseOwnerContext(this.authenticatedUid);
   @override
   final String authenticatedUid;
+}
+
+Future<(double, double)?> _readOwnerMapLocation(
+  BuildContext context,
+  AppState app,
+) async {
+  var permission = await Geolocator.checkPermission();
+  if (permission == LocationPermission.denied) {
+    permission = await Geolocator.requestPermission();
+  }
+  if (!context.mounted) return null;
+  if (permission == LocationPermission.denied ||
+      permission == LocationPermission.deniedForever) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          permission == LocationPermission.deniedForever
+              ? 'Allow location access in app settings to use My location.'
+              : 'Location permission is required to use My location.',
+        ),
+        action:
+            permission == LocationPermission.deniedForever
+                ? SnackBarAction(
+                  label: 'Settings',
+                  onPressed: () => Geolocator.openAppSettings(),
+                )
+                : null,
+      ),
+    );
+    return null;
+  }
+  await app.requestForegroundLocation();
+  if (!context.mounted) return null;
+  final latitude = app.deviceLat;
+  final longitude = app.deviceLng;
+  if (app.locationAllowed && latitude != null && longitude != null) {
+    return (latitude, longitude);
+  }
+  ScaffoldMessenger.of(
+    context,
+  ).showSnackBar(SnackBar(content: Text(app.locationNote)));
+  return null;
 }
 
 class OwnerDashboard extends StatelessWidget {
@@ -213,8 +258,8 @@ class StoreRegisterPage extends StatefulWidget {
 
 class _StoreRegisterPageState extends State<StoreRegisterPage> {
   final name = TextEditingController();
-  final barangay = TextEditingController(text: 'Socorro');
-  final city = TextEditingController(text: 'Quezon City');
+  final barangay = TextEditingController();
+  final city = TextEditingController();
   final address = TextEditingController();
   final landmark = TextEditingController();
   final schedule = TextEditingController(text: 'Daily 7:00 AM – 8:00 PM');
@@ -226,12 +271,26 @@ class _StoreRegisterPageState extends State<StoreRegisterPage> {
   XFile? storePhoto;
   double lat = defaultCenterLat;
   double lng = defaultCenterLng;
+  double mapCenterLat = defaultCenterLat;
+  double mapCenterLng = defaultCenterLng;
+  late Future<OfflinePsgcLocations> _offlineLocations;
+  PsgcCityMunicipality? _selectedCity;
+  PsgcBarangay? _selectedBarangay;
 
   // Field-level validation errors.
   String? nameError;
+  String? cityError;
+  String? barangayError;
   String? landmarkError;
   String? verificationError;
   bool submitting = false;
+  int step = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _offlineLocations = OfflinePsgcLocations.load();
+  }
 
   @override
   void dispose() {
@@ -247,10 +306,9 @@ class _StoreRegisterPageState extends State<StoreRegisterPage> {
 
   void _validate() {
     nameError = name.text.trim().isEmpty ? 'Enter a store name.' : null;
-    landmarkError =
-        landmark.text.trim().isEmpty
-            ? 'Enter a landmark so customers can find you.'
-            : null;
+    cityError = _selectedCity == null ? 'Choose a city or municipality.' : null;
+    barangayError = _selectedBarangay == null ? 'Choose a barangay.' : null;
+    landmarkError = null;
     verificationError =
         verification.text.trim().isEmpty
             ? 'Add a verification note (e.g. business permit number).'
@@ -258,7 +316,177 @@ class _StoreRegisterPageState extends State<StoreRegisterPage> {
   }
 
   bool get _hasErrors =>
-      nameError != null || landmarkError != null || verificationError != null;
+      nameError != null ||
+      cityError != null ||
+      barangayError != null ||
+      verificationError != null;
+
+  void _continue() {
+    var valid = false;
+    setState(() {
+      if (step == 0) {
+        nameError = name.text.trim().isEmpty ? 'Enter a store name.' : null;
+        valid = nameError == null;
+      } else if (step == 1) {
+        cityError =
+            _selectedCity == null ? 'Choose a city or municipality.' : null;
+        barangayError = _selectedBarangay == null ? 'Choose a barangay.' : null;
+        valid = cityError == null && barangayError == null;
+      }
+      if (valid) step++;
+    });
+  }
+
+  Future<void> _useMyLocation(AppState app) async {
+    final point = await _readOwnerMapLocation(context, app);
+    if (point == null || !mounted) return;
+    setState(() {
+      lat = point.$1;
+      lng = point.$2;
+      mapCenterLat = point.$1;
+      mapCenterLng = point.$2;
+    });
+  }
+
+  Future<T?> _chooseOfflineLocation<T>({
+    required String title,
+    required List<T> options,
+    required String Function(T) labelOf,
+    required String Function(T) searchTextOf,
+  }) {
+    return showModalBottomSheet<T>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) {
+        var query = '';
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            final normalized = query.trim().toLowerCase();
+            final matches =
+                options
+                    .where(
+                      (option) =>
+                          normalized.isEmpty ||
+                          searchTextOf(
+                            option,
+                          ).toLowerCase().contains(normalized),
+                    )
+                    .take(100)
+                    .toList();
+            final media = MediaQuery.of(sheetContext);
+            return SafeArea(
+              child: Padding(
+                padding: EdgeInsets.only(
+                  left: 16,
+                  right: 16,
+                  top: 16,
+                  bottom: media.viewInsets.bottom + 12,
+                ),
+                child: SizedBox(
+                  height: media.size.height * 0.72,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      TextField(
+                        autofocus: true,
+                        onChanged:
+                            (value) => setSheetState(() => query = value),
+                        decoration: const InputDecoration(
+                          prefixIcon: Icon(Icons.search),
+                          hintText: 'Type to filter the offline list',
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Expanded(
+                        child:
+                            matches.isEmpty
+                                ? const Center(
+                                  child: Text('No matching areas found.'),
+                                )
+                                : ListView.builder(
+                                  itemCount: matches.length,
+                                  itemBuilder: (context, index) {
+                                    final option = matches[index];
+                                    return ListTile(
+                                      leading: const Icon(Icons.place_outlined),
+                                      title: Text(labelOf(option)),
+                                      onTap:
+                                          () => Navigator.of(
+                                            sheetContext,
+                                          ).pop(option),
+                                    );
+                                  },
+                                ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _selectOfflineCity() async {
+    final catalog = await _offlineLocations;
+    if (!mounted) return;
+    final selected = await _chooseOfflineLocation<PsgcCityMunicipality>(
+      title: 'Choose city or municipality',
+      options: catalog.cities,
+      labelOf: (item) => item.displayLabel,
+      searchTextOf: (item) => item.searchLabel,
+    );
+    if (selected == null || !mounted) return;
+    setState(() {
+      _selectedCity = selected;
+      _selectedBarangay = null;
+      city.text = selected.name;
+      barangay.clear();
+      cityError = null;
+      barangayError = null;
+      if (selected.latitude != null && selected.longitude != null) {
+        lat = selected.latitude!;
+        lng = selected.longitude!;
+        mapCenterLat = selected.latitude!;
+        mapCenterLng = selected.longitude!;
+      }
+    });
+  }
+
+  Future<void> _selectOfflineBarangay() async {
+    final selectedCity = _selectedCity;
+    if (selectedCity == null) return;
+    final selected = await _chooseOfflineLocation<PsgcBarangay>(
+      title: 'Choose barangay',
+      options: selectedCity.barangays,
+      labelOf: (item) => item.name,
+      searchTextOf: (item) => item.name,
+    );
+    if (selected == null || !mounted) return;
+    setState(() {
+      _selectedBarangay = selected;
+      barangay.text = selected.name;
+      barangayError = null;
+      final newLat = selected.latitude ?? selectedCity.latitude;
+      final newLng = selected.longitude ?? selectedCity.longitude;
+      if (newLat != null && newLng != null) {
+        lat = newLat;
+        lng = newLng;
+        mapCenterLat = newLat;
+        mapCenterLng = newLng;
+      }
+    });
+  }
 
   Future<void> _pickStorePhoto(ImageSource source) async {
     try {
@@ -285,9 +513,9 @@ class _StoreRegisterPageState extends State<StoreRegisterPage> {
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 8, 20, 28),
       children: [
-        PageHeader('Register store', onBack: widget.onBack),
+        PageHeader('Store registration', onBack: widget.onBack),
         const InfoBanner(
-          'Submit a pin, landmark and verification note. Store photos stay private while your application is pending and become public only after admin approval.',
+          'Complete three short steps. Your store appears to customers after it is reviewed and approved.',
           icon: Icons.storefront_outlined,
         ),
         const SizedBox(height: 12),
@@ -295,194 +523,366 @@ class _StoreRegisterPageState extends State<StoreRegisterPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              LabeledField('Store name', name),
-              const SizedBox(height: 10),
-              Wrap(
-                spacing: 8,
-                children: [
-                  OutlinedButton.icon(
-                    onPressed:
-                        uploadingPhoto
-                            ? null
-                            : () => _pickStorePhoto(ImageSource.camera),
-                    icon: const Icon(Icons.photo_camera_outlined),
-                    label: const Text('Take storefront photo'),
+              Text(
+                'STEP ${step + 1} OF 3',
+                style: const TextStyle(
+                  color: taupe,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1.1,
+                  fontSize: 11,
+                ),
+              ),
+              const SizedBox(height: 8),
+              LinearProgressIndicator(value: (step + 1) / 3),
+              const SizedBox(height: 12),
+              Text(
+                const [
+                  'Business details',
+                  'Store location',
+                  'Final details',
+                ][step],
+                style: const TextStyle(
+                  fontSize: 19,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                const [
+                  'Add the name and category customers will see.',
+                  'Place the pin and describe how to find your store.',
+                  'Confirm the business information for your application.',
+                ][step],
+                style: const TextStyle(color: taupe),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        if (step == 0)
+          SoftCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                LabeledField('Business name', name),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed:
+                          uploadingPhoto
+                              ? null
+                              : () => _pickStorePhoto(ImageSource.camera),
+                      icon: const Icon(Icons.photo_camera_outlined),
+                      label: const Text('Take photo'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed:
+                          uploadingPhoto
+                              ? null
+                              : () => _pickStorePhoto(ImageSource.gallery),
+                      icon: const Icon(Icons.photo_library_outlined),
+                      label: const Text('Choose photo'),
+                    ),
+                  ],
+                ),
+                if (storePhoto != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      'Selected: ${storePhoto!.name}',
+                      style: const TextStyle(color: taupe, fontSize: 12),
+                    ),
                   ),
-                  OutlinedButton.icon(
-                    onPressed:
-                        uploadingPhoto
-                            ? null
-                            : () => _pickStorePhoto(ImageSource.gallery),
-                    icon: const Icon(Icons.photo_library_outlined),
-                    label: const Text('Choose photo'),
+                if (uploadingPhoto) ...[
+                  const SizedBox(height: 8),
+                  LinearProgressIndicator(
+                    value: photoProgress == 0 ? null : photoProgress,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Uploading and preparing photo ${(photoProgress * 100).round()}%',
+                    style: const TextStyle(color: taupe, fontSize: 11),
                   ),
                 ],
-              ),
-              if (storePhoto != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Text(
-                    'Selected: ${storePhoto!.name}',
-                    style: const TextStyle(color: taupe, fontSize: 12),
+                if (nameError != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      nameError!,
+                      style: const TextStyle(color: clay, fontSize: 12),
+                    ),
                   ),
+                const SizedBox(height: 12),
+                FilterMenu<StoreType>(
+                  label: 'Business category',
+                  value: type,
+                  items: [
+                    for (final value in StoreType.values)
+                      DropdownMenuItem(
+                        value: value,
+                        child: Text(
+                          value.label,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                  ],
+                  onChanged: (value) {
+                    if (value != null) setState(() => type = value);
+                  },
                 ),
-              if (uploadingPhoto) ...[
-                const SizedBox(height: 8),
-                LinearProgressIndicator(
-                  value: photoProgress == 0 ? null : photoProgress,
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'Uploading and preparing photo ${(photoProgress * 100).round()}%',
-                  style: const TextStyle(color: taupe, fontSize: 11),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Mobile vendor'),
+                  subtitle: const Text(
+                    'For a stall or business that moves between locations.',
+                  ),
+                  value: isMobile,
+                  onChanged: (v) => setState(() => isMobile = v),
                 ),
               ],
-              if (nameError != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Text(
-                    nameError!,
-                    style: const TextStyle(color: clay, fontSize: 12),
-                  ),
-                ),
-              const SizedBox(height: 12),
-              FilterMenu<StoreType>(
-                label: 'Seller type',
-                value: type,
-                items: [
-                  for (final value in StoreType.values)
-                    DropdownMenuItem(
-                      value: value,
-                      child: Text(value.label, overflow: TextOverflow.ellipsis),
-                    ),
-                ],
-                onChanged: (value) {
-                  if (value != null) setState(() => type = value);
-                },
-              ),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Mobile vendor'),
-                subtitle: const Text(
-                  'You update the public pin. No continuous tracking.',
-                ),
-                value: isMobile,
-                onChanged: (v) => setState(() => isMobile = v),
-              ),
-            ],
+            ),
           ),
-        ),
-        const SizedBox(height: 12),
-        LocalMapView(
-          stores: const [],
-          centerLat: lat,
-          centerLng: lng,
-          onPick:
-              (pickedLat, pickedLng) => setState(() {
+        if (step == 1) ...[
+          const InfoBanner(
+            'Choose a city and barangay from the offline list. The map moves near that area; tap the map to place the pin at the exact store location.',
+            icon: Icons.place_outlined,
+          ),
+          const SizedBox(height: 10),
+          LocalMapView(
+            stores: const [],
+            centerLat: mapCenterLat,
+            centerLng: mapCenterLng,
+            userLat: app.deviceLat,
+            userLng: app.deviceLng,
+            pickedLocation: GeoPoint(lat, lng),
+            onLocateUser: () => _useMyLocation(app),
+            onPick: (pickedLat, pickedLng) {
+              setState(() {
                 lat = pickedLat;
                 lng = pickedLng;
-              }),
-          height: 180,
-        ),
-        const SizedBox(height: 12),
-        SoftCard(
-          child: Column(
-            children: [
-              LabeledField('Barangay', barangay),
-              const SizedBox(height: 8),
-              LabeledField('City', city),
-              const SizedBox(height: 8),
-              LabeledField('Street address (if any)', address),
-              const SizedBox(height: 8),
-              LabeledField('Landmark', landmark),
-              if (landmarkError != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Text(
-                    landmarkError!,
-                    style: const TextStyle(color: clay, fontSize: 12),
-                  ),
-                ),
-              const SizedBox(height: 8),
-              LabeledField('Operating schedule', schedule),
-              const SizedBox(height: 8),
-              LabeledField('Verification details', verification),
-              if (verificationError != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Text(
-                    verificationError!,
-                    style: const TextStyle(color: clay, fontSize: 12),
-                  ),
-                ),
-            ],
+              });
+            },
+            height: 320,
           ),
-        ),
+          const SizedBox(height: 12),
+        ],
+        if (step == 1 || step == 2)
+          SoftCard(
+            child: Column(
+              children: [
+                if (step == 1) ...[
+                  const Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'City or municipality',
+                      style: TextStyle(
+                        color: taupe,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: _selectOfflineCity,
+                      icon: const Icon(Icons.location_city_outlined),
+                      label: Text(
+                        _selectedCity?.displayLabel ??
+                            'Choose city/municipality',
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ),
+                  if (cityError != null)
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        cityError!,
+                        style: const TextStyle(color: clay, fontSize: 12),
+                      ),
+                    ),
+                  const SizedBox(height: 10),
+                  const Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Barangay',
+                      style: TextStyle(
+                        color: taupe,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed:
+                          _selectedCity == null ? null : _selectOfflineBarangay,
+                      icon: const Icon(Icons.place_outlined),
+                      label: Text(
+                        _selectedBarangay?.name ?? 'Choose barangay',
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ),
+                  if (barangayError != null)
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        barangayError!,
+                        style: const TextStyle(color: clay, fontSize: 12),
+                      ),
+                    ),
+                  const SizedBox(height: 8),
+                  LabeledField('Street address', address),
+                  const SizedBox(height: 8),
+                  LabeledField(
+                    'More details (optional)',
+                    landmark,
+                    maxLines: 2,
+                  ),
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Map pin: ${lat.toStringAsFixed(5)}, ${lng.toStringAsFixed(5)}\nBarangay centers are approximate. Adjust the pin to the storefront.',
+                      style: const TextStyle(color: taupe, fontSize: 12),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  const Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Location names: Philippine Statistics Authority (PSA), PSGC Q3 2026.',
+                      style: TextStyle(color: taupe, fontSize: 10),
+                    ),
+                  ),
+                ],
+                if (step == 2) ...[
+                  const Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Application summary',
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      '${name.text.trim()} · ${type.label}\n${address.text.trim()}, ${barangay.text.trim()}, ${city.text.trim()}${landmark.text.trim().isNotEmpty ? '\n${landmark.text.trim()}' : ''}',
+                      style: const TextStyle(color: taupe, fontSize: 12),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  const SizedBox(height: 8),
+                  LabeledField('Operating hours', schedule),
+                  const SizedBox(height: 8),
+                  LabeledField(
+                    'Verification information',
+                    verification,
+                    maxLines: 3,
+                  ),
+                  if (verificationError != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        verificationError!,
+                        style: const TextStyle(color: clay, fontSize: 12),
+                      ),
+                    ),
+                  const SizedBox(height: 12),
+                  const InfoBanner(
+                    'Your application is reviewed before the store appears to customers. Provide only details requested by the pilot team.',
+                    icon: Icons.verified_user_outlined,
+                  ),
+                ],
+              ],
+            ),
+          ),
         const SizedBox(height: 16),
-        PrimaryButton(
-          uploadingPhoto ? 'Uploading storefront photo…' : 'Submit for review',
-          onPressed:
-              submitting || uploadingPhoto || app.writeBusy
-                  ? null
-                  : () async {
-                    setState(_validate);
-                    if (_hasErrors) return;
-                    setState(() => submitting = true);
-                    String? imageAssetId;
-                    if (storePhoto != null && app.apiOnline) {
-                      setState(() {
-                        uploadingPhoto = true;
-                        photoProgress = 0;
-                      });
-                      try {
-                        final media = await MediaUpload.uploadAndWait(
-                          storePhoto!,
-                          kind: 'store',
-                          onProgress: (value) {
-                            if (mounted) {
-                              setState(() {
-                                photoProgress = value;
-                              });
-                            }
-                          },
-                        );
-                        imageAssetId = media.assetId;
-                      } catch (error) {
-                        if (!mounted) return;
+        if (step > 0)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton(
+              onPressed: () => setState(() => step--),
+              child: const Text('Back'),
+            ),
+          ),
+        if (step < 2) PrimaryButton('Continue', onPressed: _continue),
+        if (step == 2)
+          PrimaryButton(
+            uploadingPhoto ? 'Uploading photo…' : 'Submit application',
+            onPressed:
+                submitting || uploadingPhoto || app.writeBusy
+                    ? null
+                    : () async {
+                      setState(_validate);
+                      if (_hasErrors) return;
+                      setState(() => submitting = true);
+                      String? imageAssetId;
+                      if (storePhoto != null && app.apiOnline) {
                         setState(() {
-                          submitting = false;
-                          uploadingPhoto = false;
+                          uploadingPhoto = true;
+                          photoProgress = 0;
                         });
-                        if (!context.mounted) return;
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              error.toString().replaceFirst('Bad state: ', ''),
+                        try {
+                          final media = await MediaUpload.uploadAndWait(
+                            storePhoto!,
+                            kind: 'store',
+                            onProgress: (value) {
+                              if (mounted) {
+                                setState(() {
+                                  photoProgress = value;
+                                });
+                              }
+                            },
+                          );
+                          imageAssetId = media.assetId;
+                        } catch (error) {
+                          if (!mounted) return;
+                          setState(() {
+                            submitting = false;
+                            uploadingPhoto = false;
+                          });
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                error.toString().replaceFirst(
+                                  'Bad state: ',
+                                  '',
+                                ),
+                              ),
                             ),
-                          ),
-                        );
-                        return;
+                          );
+                          return;
+                        }
                       }
-                    }
-                    if (!context.mounted) return;
-                    setState(() => uploadingPhoto = false);
-                    app.registerStore(
-                      name: name.text.trim(),
-                      type: type,
-                      lat: lat,
-                      lng: lng,
-                      barangay: barangay.text.trim(),
-                      city: city.text.trim(),
-                      address: address.text.trim(),
-                      landmark: landmark.text.trim(),
-                      schedule: schedule.text.trim(),
-                      isMobile: isMobile,
-                      verificationNote: verification.text.trim(),
-                      imageAssetId: imageAssetId,
-                    );
-                    widget.onBack();
-                  },
-        ),
+                      if (!context.mounted) return;
+                      setState(() => uploadingPhoto = false);
+                      app.registerStore(
+                        name: name.text.trim(),
+                        type: type,
+                        lat: lat,
+                        lng: lng,
+                        barangay: barangay.text.trim(),
+                        city: city.text.trim(),
+                        address: address.text.trim(),
+                        landmark: landmark.text.trim(),
+                        schedule: schedule.text.trim(),
+                        isMobile: isMobile,
+                        verificationNote: verification.text.trim(),
+                        imageAssetId: imageAssetId,
+                      );
+                      widget.onBack();
+                    },
+          ),
       ],
     );
   }
@@ -499,6 +899,19 @@ class StorePinPage extends StatefulWidget {
 class _StorePinPageState extends State<StorePinPage> {
   double? lat;
   double? lng;
+  double? mapCenterLat;
+  double? mapCenterLng;
+
+  Future<void> _useMyLocation(AppState app) async {
+    final point = await _readOwnerMapLocation(context, app);
+    if (point == null || !mounted) return;
+    setState(() {
+      lat = point.$1;
+      lng = point.$2;
+      mapCenterLat = point.$1;
+      mapCenterLng = point.$2;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -525,21 +938,25 @@ class _StorePinPageState extends State<StorePinPage> {
       children: [
         PageHeader('Vendor location', onBack: widget.onBack),
         const InfoBanner(
-          'Fixed and regular pins stay until you move them. Live public location needs an explicit session, shows a last-updated time, and expires automatically.',
+          'Drag the map to position your pin, or use My location to recenter. Fixed pins stay in place; live sharing always requires an explicit session.',
           icon: Icons.share_location_outlined,
         ),
         const SizedBox(height: 12),
         LocalMapView(
           stores: [store],
-          centerLat: pinLat,
-          centerLng: pinLng,
+          centerLat: mapCenterLat ?? store.lat,
+          centerLng: mapCenterLng ?? store.lng,
+          userLat: app.deviceLat,
+          userLng: app.deviceLng,
+          pickedLocation: GeoPoint(pinLat, pinLng),
           selectedId: store.id,
+          onLocateUser: () => _useMyLocation(app),
           onPick:
               (pickedLat, pickedLng) => setState(() {
                 lat = pickedLat;
                 lng = pickedLng;
               }),
-          height: 220,
+          height: 320,
         ),
         const SizedBox(height: 12),
         SoftCard(
@@ -2791,6 +3208,12 @@ class _AdminPageState extends State<AdminPage> {
   var _loaded = false;
   Future<Map<String, dynamic>>? _storageQuota;
 
+  String _storageErrorMessage(Object error, String fallback) {
+    if (error is ApiException) return error.message;
+    if (error is FirebaseFunctionsException) return error.message ?? fallback;
+    return fallback;
+  }
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -2801,12 +3224,9 @@ class _AdminPageState extends State<AdminPage> {
   }
 
   void _refreshStorageQuota() {
-    if (localSpotPreviewRelease) return;
+    if (!mounted || localSpotPreviewRelease) return;
     setState(() {
-      _storageQuota = FirebaseFunctions.instanceFor(region: 'asia-southeast1')
-          .httpsCallable('getStorageQuota')
-          .call()
-          .then((result) => Map<String, dynamic>.from(result.data as Map));
+      _storageQuota = AppScope.of(context).api.getStorageQuota();
     });
   }
 
@@ -2818,16 +3238,17 @@ class _AdminPageState extends State<AdminPage> {
   Future<void> _runStorageReconciliation() async {
     if (localSpotPreviewRelease) return;
     try {
-      await FirebaseFunctions.instanceFor(
-        region: 'asia-southeast1',
-      ).httpsCallable('requestStorageReconciliation').call();
+      await AppScope.of(context).api.requestStorageReconciliation();
       _refreshStorageQuota();
-    } on FirebaseFunctionsException catch (error) {
+    } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            error.message ?? 'Storage reconciliation could not run.',
+            _storageErrorMessage(
+              error,
+              'Storage reconciliation could not run.',
+            ),
           ),
         ),
       );
@@ -2837,15 +3258,15 @@ class _AdminPageState extends State<AdminPage> {
   Future<void> _deleteStorageOrphan(String key) async {
     if (localSpotPreviewRelease) return;
     try {
-      await FirebaseFunctions.instanceFor(
-        region: 'asia-southeast1',
-      ).httpsCallable('deleteStorageOrphan').call({'key': key});
+      await AppScope.of(context).api.deleteStorageOrphan(key);
       await _runStorageReconciliation();
-    } on FirebaseFunctionsException catch (error) {
+    } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(error.message ?? 'The orphan could not be removed.'),
+          content: Text(
+            _storageErrorMessage(error, 'The orphan could not be removed.'),
+          ),
         ),
       );
     }
@@ -2877,7 +3298,7 @@ class _AdminPageState extends State<AdminPage> {
               if (localSpotPreviewRelease) {
                 return const SoftCard(
                   child: Text(
-                    'R2 quota, reconciliation, and object deletion require the unavailable Cloud Functions backend. These actions are disabled in the free preview.',
+                    'R2 quota tools need the configured backend and are disabled in the read-only preview.',
                   ),
                 );
               }
@@ -3064,24 +3485,54 @@ class _AdminPageState extends State<AdminPage> {
                     style: const TextStyle(color: taupe, fontSize: 12),
                   ),
                   const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      TextButton(
-                        onPressed:
-                            () =>
-                                app.setStoreStatus(store, StoreStatus.approved),
-                        child: const Text('Approve'),
-                      ),
-                      TextButton(
-                        onPressed:
-                            () => app.setStoreStatus(
+                  if (store.status == StoreStatus.pending)
+                    Row(
+                      children: [
+                        TextButton(
+                          onPressed: () async {
+                            final error = await app.setStoreStatus(
                               store,
-                              StoreStatus.suspended,
-                            ),
-                        child: const Text('Suspend'),
-                      ),
-                    ],
-                  ),
+                              StoreStatus.approved,
+                            );
+                            if (error != null && context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text(error)),
+                              );
+                            }
+                          },
+                          child: const Text('Approve'),
+                        ),
+                        TextButton(
+                          onPressed: () async {
+                            final error = await app.setStoreStatus(
+                              store,
+                              StoreStatus.rejected,
+                            );
+                            if (error != null && context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text(error)),
+                              );
+                            }
+                          },
+                          child: const Text('Decline'),
+                        ),
+                      ],
+                    )
+                  else if (store.status == StoreStatus.approved)
+                    TextButton(
+                      onPressed: () async {
+                        final error = await app.setStoreStatus(
+                          store,
+                          StoreStatus.suspended,
+                        );
+                        if (error != null && context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text(error)),
+                          );
+                        }
+                      },
+                      child: const Text('Suspend'),
+                    ),
                 ],
               ),
             ),

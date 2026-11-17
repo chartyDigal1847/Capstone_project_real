@@ -9,17 +9,26 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
-val releaseBuildRequested = gradle.startParameter.taskNames.any {
-    it.contains("release", ignoreCase = true)
+val taskNames = gradle.startParameter.taskNames.joinToString(" ").lowercase()
+val releaseBuildRequested = taskNames.contains("release")
+val requestedReleaseFlavor = when {
+    taskNames.contains("trialrelease") -> "trial"
+    taskNames.contains("previewrelease") -> "preview"
+    releaseBuildRequested -> null
+    else -> null
 }
 val localspotReleaseEnvironment = providers.gradleProperty("localspotReleaseEnvironment").orNull
 val localspotReleaseProjectId = providers.gradleProperty("localspotReleaseProjectId").orNull
 val localspotPreviewProjectId = providers.gradleProperty("localspotPreviewProjectId").orNull
 val localspotReleaseApplicationId = providers.gradleProperty("localspotReleaseApplicationId").orNull
 val localspotApplicationId = if (releaseBuildRequested && localspotReleaseEnvironment == "trial") {
-    requireNotNull(localspotReleaseApplicationId) {
+    val configuredApplicationId = requireNotNull(localspotReleaseApplicationId) {
         "Trial releases require -PlocalspotReleaseApplicationId for the registered trial Android app."
     }
+    require(configuredApplicationId == "app.locentra.mobile") {
+        "The registered Locentra trial Android app uses application ID app.locentra.mobile."
+    }
+    configuredApplicationId
 } else {
     // The preview uses only the Android app ID already registered in the
     // checked-in Firebase config. It does not relax the trial release checks.
@@ -30,11 +39,19 @@ if (releaseBuildRequested) {
     require(localspotReleaseEnvironment == "trial" || localspotReleaseEnvironment == "preview") {
         "Release tasks require an explicit trial or preview mode. No implicit release configuration is allowed."
     }
-    val googleServicesFile = file("google-services.json")
-    require(googleServicesFile.isFile) { "Missing android/app/google-services.json." }
+    require(requestedReleaseFlavor == localspotReleaseEnvironment) {
+        "Release flavor must match -PlocalspotReleaseEnvironment (trial or preview). Use --flavor ${localspotReleaseEnvironment}."
+    }
+    val trialRelease = localspotReleaseEnvironment == "trial"
+    val googleServicesFile = if (trialRelease) {
+        file("src/trial/google-services.json")
+    } else {
+        file("google-services.json")
+    }
+    require(googleServicesFile.isFile) { "Missing Firebase Android config at ${googleServicesFile.path}." }
     val googleServices = JsonSlurper().parse(googleServicesFile) as Map<*, *>
     val firebaseProjectId = (googleServices["project_info"] as? Map<*, *>)?.get("project_id")
-    val expectedFirebaseProjectId = if (localspotReleaseEnvironment == "trial") {
+    val expectedFirebaseProjectId = if (trialRelease) {
         require(!localspotReleaseProjectId.isNullOrBlank() && localspotReleaseProjectId != "capstone-project-561a2") {
             "Trial release requires an isolated Firebase project; the configured application project is not allowed."
         }
@@ -48,7 +65,7 @@ if (releaseBuildRequested) {
     require(firebaseProjectId == expectedFirebaseProjectId) {
         "Firebase Android project mismatch: expected $expectedFirebaseProjectId, got $firebaseProjectId."
     }
-    if (localspotReleaseEnvironment == "trial") {
+    if (trialRelease) {
         require(localspotApplicationId.matches(Regex("^[a-zA-Z][a-zA-Z0-9_]*(\\.[a-zA-Z][a-zA-Z0-9_]*)+$")) &&
             !localspotApplicationId.startsWith("com.example.")) {
             "Set a registered non-placeholder trial application ID."
@@ -65,7 +82,13 @@ if (releaseBuildRequested) {
         "google-services.json has no client registered for $localspotApplicationId."
     }
     val googleAppId = ((matchingClient["client_info"] as? Map<*, *>)?.get("mobilesdk_app_id") as? String)
-    val optionsText = file("../../lib/firebase_options.dart").readText()
+    val optionsFile = if (trialRelease) {
+        file("../../lib/firebase_options_trial.dart")
+    } else {
+        file("../../lib/firebase_options.dart")
+    }
+    require(optionsFile.isFile) { "Missing Firebase Dart options at ${optionsFile.path}." }
+    val optionsText = optionsFile.readText()
     val androidOptions = Regex(
         "static const FirebaseOptions android = FirebaseOptions\\((.*?)\\);",
         RegexOption.DOT_MATCHES_ALL,
@@ -109,9 +132,8 @@ android {
     }
 
     defaultConfig {
-        // Debug keeps its emulator-registered identity. Trial releases use the
-        // explicitly configured Firebase-registered application ID above.
-        applicationId = localspotApplicationId
+        // Flavor identities are explicit below. The default is only a fallback.
+        applicationId = "com.example.test1"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         // ML Kit bundled face detection and the panorama native pipeline require API 24+.
@@ -123,6 +145,22 @@ android {
         // flag during build.
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+    }
+
+    flavorDimensions += "environment"
+    productFlavors {
+        create("local") {
+            dimension = "environment"
+            applicationId = "com.example.test1"
+        }
+        create("preview") {
+            dimension = "environment"
+            applicationId = "com.example.test1"
+        }
+        create("trial") {
+            dimension = "environment"
+            applicationId = "app.locentra.mobile"
+        }
     }
 
     buildTypes {

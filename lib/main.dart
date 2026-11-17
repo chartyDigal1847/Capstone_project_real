@@ -49,7 +49,7 @@ class _LocalSpotRootState extends State<LocalSpotRoot> {
       notifier: state,
       child: MaterialApp(
         debugShowCheckedModeBanner: false,
-        title: 'LocalSpot',
+        title: 'Locentra',
         theme: localSpotTheme(),
         // Temporary bridge for the legacy Material subtree in the panorama
         // prototype while that package is being migrated to material_ui.
@@ -379,7 +379,6 @@ class _LocalSpotShellState extends State<LocalSpotShell> {
         2 => const AddProductPage(),
         3 => const PromotionsPage(),
         _ => ProfilePage(
-          onLocation: () => setState(() => overlay = OverlayView.location),
           onLogout:
               () => setState(() {
                 AppScope.of(context).logout();
@@ -405,7 +404,6 @@ class _LocalSpotShellState extends State<LocalSpotShell> {
               }),
         ),
         _ => ProfilePage(
-          onLocation: () => setState(() => overlay = OverlayView.location),
           onLogout:
               () => setState(() {
                 AppScope.of(context).logout();
@@ -439,7 +437,6 @@ class _LocalSpotShellState extends State<LocalSpotShell> {
       ),
       3 => SavedPage(onProduct: _openProduct, onStore: _openStore),
       _ => ProfilePage(
-        onLocation: () => setState(() => overlay = OverlayView.location),
         onLogout:
             () => setState(() {
               AppScope.of(context).logout();

@@ -5,3 +5,9 @@ const localSpotPreviewRelease = bool.fromEnvironment(
   'LOCALSPOT_PREVIEW',
   defaultValue: false,
 );
+
+/// Explicit online trial mode. Trial releases must use an HTTPS Worker endpoint.
+const localSpotTrialRelease = bool.fromEnvironment(
+  'LOCALSPOT_TRIAL_RELEASE',
+  defaultValue: false,
+);

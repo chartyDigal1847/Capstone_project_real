@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "295175740638",
+    "project_id": "locentra-spark-trial-20261117",
+    "storage_bucket": "locentra-spark-trial-20261117.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:295175740638:android:5c69d12e29c215ca51f64f",
+        "android_client_info": {
+          "package_name": "app.locentra.mobile"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAa7RrkdATLxwqbnU327CORZXkBOiZqBgg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

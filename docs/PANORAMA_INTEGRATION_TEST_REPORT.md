@@ -143,3 +143,93 @@ One concrete physical-local configuration blocker was identified: `functions/.en
 ## Updated readiness decision
 
 Local source checks and emulator isolation checks are green, but physical end-to-end and local R2 end-to-end validation are **incomplete**. Production deployment and production media cutover remain blocked. No real Cloudflare R2 request has been made.
+
+### Follow-up validation — 2026-11-16
+
+- Added explicit debug-only `FIREBASE_AUTH_EMULATOR_PORT` and `FIRESTORE_EMULATOR_PORT` overrides (defaults remain 9099 and 8080) so an isolated LAN-bound emulator pair can be used by a physical device without disturbing the existing loopback emulators.
+- On the Infinix X6873, installed a debug build targeting only `demo-localspot`, LAN-bound Auth/Firestore emulators, the local API Worker, and the local R2 test mode. Registration succeeded; Worker profile bootstrap returned 200; Firestore server profile read resolved the account as `customer`. Selecting the owner role in the registration form did not elevate the profile. Customer Profile now exposes the existing store-application form.
+- Called the Worker store-application endpoint with the emulator-authenticated account; it returned `pending` and wrote an owner-bound application. The test document was removed afterward.
+- Exercised the media API and local upload gateway against Wrangler's persistent local R2 simulation using a small repository JPEG: reservation, upload (201), server finalization (`ready`), and verified deletion all succeeded. The temporary upload records were removed and the demo quota was reset to `usedBytes=0`, `reservedBytes=0`. This flow was driven from the development host and is not evidence of a phone-originated file upload or panorama review/publication.
+- Panorama processing, the 48-checkpoint review, derivative reservation/finalization from the app, publication, private/public fetch, and authorization edge cases remain outstanding on-device. Production R2 and live service checks remain unperformed.
+
+### Physical follow-up — 2026-11-16 (local Worker route and processing)
+
+- Replaced the previously mismatched ignored gateway dev JWKS with a newly generated local-only ES256 keypair. The gateway's public JWKS and API Worker's private JWK now match; neither key was printed or added to tracked source. Both local Workers use Wrangler's local `localspot-backend-local` R2 simulation and LAN-bound emulator endpoints. No Cloudflare deployment or remote bucket was used.
+- Started separate Auth/Firestore emulators on LAN ports 19099/18080. A debug APK connected to `demo-localspot`, `http://192.168.1.58:8788` (API Worker), and `http://192.168.1.58:8787` (local upload gateway). App logs confirmed the configured emulator project and server-loaded profile.
+- Registered `panotest20261116@localspot.invalid` on the Infinix. Choosing “Store owner” during sign-up still produced a customer profile, confirming the requested role was not trusted. For this isolated workflow only, the emulator profile was then elevated using the Admin SDK and an approved test store was seeded; Firestore rules were not changed.
+- Created a draft tour for the test store from the device through the Worker-backed tour route and opened the panorama picker. The device selected `6039.jpg` (the staged Wikimania panorama). On-device privacy processing completed: 6528×3264 derivative, 2,219,329 bytes, 303 face detections, 73 person detections, 376 total blur regions, 12,257 ms, derivative SHA-256 `ed45db614aee2ab9eeed982bd16841948aee1230f91d404132c969c3b26472f7`.
+- **Stopped at owner review.** No 48-direction attestation was submitted, no original or derivative was uploaded from the phone, and no publication or private/public retrieval occurred. The app remains at the physical panorama review screen so the owner can conduct the required visual inspection. Local emulator and Worker processes remain running for that review; they are temporary and must be stopped after the session.
+
+### Completed physical panorama workflow and local R2 reconciliation — 2026-11-17
+
+This follow-up supersedes the earlier “Not completed” outcome above. The owner inspected the panorama in the app and explicitly confirmed it was acceptable; the app recorded all 48 review directions and both required acknowledgements before upload.
+
+- The Infinix X6873 completed on-device panorama privacy processing, owner review submission, upload, backend verification, quota finalization, tour-node update, and retrieval of both the private original and verified derivative. Upload/finalization/review responses were successful. The original was 11,690,366 bytes; the backend verified derivative was 2,119,189 bytes with SHA-256 539136ecde38e3c00887d78e4f71b7017ca730b4bdd5b13a01e9df152aaa7400.
+- Both objects were written through the LAN-bound local Workers to Wrangler's persistent local R2 simulation. No live Cloudflare R2 or production Firebase service was used. Owner-only original retrieval succeeded; unauthenticated private retrieval returned 401, and attempting the private original via the public media route returned 404.
+- Publishing was attempted and correctly rejected with HTTP 412 because the draft contains only one reviewed viewpoint. No publication occurred; a second independently processed and reviewed viewpoint is still required to meet the publication gate.
+- The backend integration suite had previously been run against this physical test emulator and left quota-test fixtures behind. The fixtures were checked against their exact test-only fields and removed; the fake public object was confirmed absent from local R2 (404). The Worker then performed a fresh inventory reconciliation: completed, 2 objects, 13,809,555 actual/used bytes, 0 reserved bytes, 0 pending reservations, 0 missing objects, 0 orphaned objects, and 0 size mismatches. Final emulator quota state is uploadEnabled=true, maintenanceLock=false. The test account role was restored to owner.
+- Typechecks and suites previously run for this migration passed: backend Worker 38/38 (7 files), gateway Worker 18/18. Do not rerun emulator integration tests against the physical workflow emulator; those tests seed emulator-only fixtures. Use a separate isolated Auth/Firestore emulator instance for any repeat run.
+- Local-only Worker validation accepts the private LAN address only when emulator mode is enabled; production gateway URLs continue to require HTTPS. No deployment, production write, or production media cutover was performed.
+
+Readiness: the physical single-viewpoint upload/review/private-access flow and local R2 accounting are now verified. Production deployment and cutover remain unvalidated and were not performed. Public delivery after publication and a multi-viewpoint publish flow remain unverified.
+
+### Second viewpoint prepared for owner inspection — 2026-11-17
+
+The 35C3 sample fixture was staged on the Infinix and processed locally. The review screen is open on the device for the owner to inspect. No second-viewpoint attestation or upload has been submitted.
+
+- Source fixture SHA-256: 5af25da7706ce6dad1b67dbcec01953a44811a386ce5cf7d12daf1cc5c557a3e. Derivative: 18,000×9,000, 22,132,765 bytes, SHA-256 b63ec7631a408c98873f4bf976f3d2f36d4c045e351534db36298837f5a503a9; processing took 47,496 ms and reported 0 face detections, 4 person detections, and 4 total blur regions. These are detector counts, not a privacy guarantee.
+- The review requires visual inspection of the full sphere and all 48 directions, including any missed people. Keep publication gated until the owner finishes that review and submits the attestation, then upload/finalize and verify the second derivative.
+
+### Second viewpoint verified and local two-view publication completed — 2026-11-17
+
+After the owner approved the second derivative in the app, the device submitted the 48-direction review with both acknowledgements. The app uploaded the original and processed derivative, created Viewpoint 2 connected to Viewpoint 1, and reported backend verification, quota finalization, and owner attestation success.
+
+- The second original is 12,563,809 bytes. Its backend-verified derivative is 22,132,765 bytes, SHA-256 b63ec7631a408c98873f4bf976f3d2f36d4c045e351534db36298837f5a503a9. The local tour has two viewpoints, each with a current backend-verified derivative and owner review containing directions 0–47 and both acknowledgements.
+- The owner published the draft through the app to the local emulator. The tour status is published. For each viewpoint, the authenticated published-access route returned a signed gateway capability; media GET returned 200 and downloaded bytes matched the derivative’s SHA-256. Requests without a gateway capability returned 401. The second private original via the public media route returned 404.
+- Final local Worker reconciliation completed with 4 objects totaling 48,506,129 bytes, 0 pending reservations, 0 missing objects, 0 orphaned objects, and 0 size mismatches. Firestore quota is 48,506,129 used, 0 reserved, upload enabled, and maintenance lock cleared. The test profile was restored to owner.
+- This validates two-viewpoint publication and signed delivery against local emulators and Wrangler's local R2 simulation only. Nothing was deployed or published to production.
+
+### Additional physical owner inventory workflow — 2026-11-17
+
+- On the same Infinix X6873 local-emulator session, the owner created a manual `MangoLocalQA` listing through the Worker-backed Add Product screen with price PHP 10, unit `piece`, and starting quantity 10. The app returned to the owner dashboard showing one active listing; Inventory displayed the same confirmed listing.
+- The Restock action increased quantity from 10 to 15. The Archive action presented a confirmation identifying the listing and warning that customers would no longer see it; after confirmation, the active inventory was empty. This exercised safe archival, not hard deletion.
+- No product photo was attached, so physical product-media upload and catalog image delivery remain unverified. This was emulator data only; no live Firebase or Cloudflare services were contacted.
+- The owner also submitted a `LocalQAOffer` promotion with the sponsored-placement request enabled. The app displayed it in the owner list as `pending`, confirming the Worker-backed submission route; admin approval and customer-side sponsored-card display were not exercised. The pending record remains in local emulator data for review/testing.
+
+### Customer browse, search, filters, and map preview — 2026-11-17
+
+- Registered and signed in a second emulator-only customer account (`browseqa@localspot.invalid`) on the Infinix. The customer Home screen loaded sponsored and nearby-store sections; after switching the search area to the approximate Cubao fix, the customer Search screen returned two active `LocalBrowseQA` listings at PHP 25 per piece and 0.1 km. The category filter was set to Groceries and a PHP 20 minimum price filter applied; both listings remained. The app status text identifies this as a direct Firebase catalog query, consistent with Firestore remaining the client catalog source.
+- The Map screen rendered its in-app preview with location and seller pins, and the app requested foreground location permission. The permission was granted for this device test; Profile states foreground-only use and no background tracking. Mapbox is not configured in this debug build, so production street tiles, geocoding/routing, and navigation remain unverified. No Mapbox token or paid mapping service was used.
+- Two same-name active QA listings are currently visible in the local test catalog; they were created while preparing browse data. Archive them after customer-side inspection. This test account's approximate-area setting and foreground permission are local device state.
+
+- Follow-up cleanup: both LocalBrowseQA inventory records were confirmed archived on-device; owner Inventory is empty. No hard deletion was used.
+
+### Account deletion cleanup hardening — 2026-11-17
+
+- Code review found account deletion removed panorama originals but did not include immutable derivative revisions stored in `mediaAssets/{uid_asset}/derivatives`. The Worker and retained Firebase Function fallback now delete those derivative R2 objects through the quota ledger and mark their revision records deleted. The Worker paginates the derivative subcollection so later revisions are included.
+- Focused tests passed for user-prefix filtering and multi-page Firestore subcollection traversal. The complete backend Worker suite passed 43/43 tests across nine files against a separate Auth/Firestore emulator pair. The account-deletion integration case exercised the Worker against emulator Auth/Firestore with an in-memory R2 gateway mock, confirming both derivative revisions were removed and all three object sizes were released from the quota ledger. A new regression test verifies media deletion re-reads linked state inside the transaction before claiming deletion. Both the Worker and retained Firebase Function fallback now use that transactional deletion claim; Worker and Functions TypeScript checks passed. This does not replace a test against Wrangler's local R2 binding, and the account deletion flow was not rerun against the physical emulator in this pass.
+
+### Mapbox token wiring and physical street map — 2026-11-17
+
+- Removed the public token fallback from tracked Dart source. The locally copied `pk.` token now lives in ignored `config/local.json`; Flutter receives it through `--dart-define-from-file=config/local.json`. `main.dart` already initializes the Mapbox SDK from `mapbox_config.dart`, so no token literal was added to the entry point. README local-run instructions now use the ignored config file.
+- Rebuilt and launched the debug app on the Infinix X6873 with `demo-localspot`, local Auth/Firestore emulators, and the local Worker endpoint. The customer Map screen rendered Mapbox Streets with readable roads/labels, scale bar, Mapbox logo/attribution, nearby map pins, and the foreground-only location notice. This supersedes the earlier missing-token preview result for the current local build.
+- Map rendering is now physically verified with the copied public token. Directions API routing, geocoding, satellite style, billing/usage limits, and production token restrictions remain unverified. No deployment or production service access occurred.
+
+- Additional physical Mapbox checks: selecting the local emulator store opened its details over Mapbox Streets. “Preview route in LocalSpot” reached the Mapbox Directions API and displayed a 0.1 km, 1 minute driving route with an in-app route polyline. “Start in-app navigation” opened the foreground position-following map screen; UI states turn-by-turn voice guidance is not included. Position-following was stopped after the check. The manual approximate Cubao search-area setting was used to reach the local store; route result is local test data and should not be interpreted as a real navigation trip.
+
+### Physical product media upload check — 2026-11-17
+
+- On the Infinix X6873, the owner added `LocalSpot mango QA` at PHP 25 per piece with quantity 10. The listing appeared in owner Inventory and then in customer Search, where its thumbnail loaded from the local catalog/media route. This confirms the handset completed the product-image reservation/upload/finalization path and the customer client fetched the resulting image.
+- The picker selected a recent app screenshot rather than the synthetic fruit image staged for this test. Therefore this verifies media transport and delivery, but not fruit-photo content, image appearance, or metadata handling. The listing remains local emulator QA data pending owner-side archival; the app session was signed out before cleanup. No production Firebase or Cloudflare service was contacted.
+
+### Physical account deletion check — 2026-11-17
+
+- Registered a fresh throwaway customer account on the Infinix X6873 against the local Firebase Auth/Firestore emulators and initiated account deletion from Profile. The app returned to the welcome screen. A follow-up sign-in request to the local Auth emulator returned `EMAIL_NOT_FOUND`, confirming that the Worker-backed flow removed the Auth account.
+- This was an emulator-only test account; no existing test user or production account was changed. Related-data cleanup remains covered by Worker tests; a production Firebase account deletion was not attempted.
+- The account-deletion implementation also exposed a Worker bootstrap gap during subsequent isolated testing: emulator Auth identity lookup returned email/display name, but the Worker dropped those claims, producing blank profile email/default names. The adapter now preserves those verified emulator fields, and registration passes the chosen name to bootstrap. A dedicated isolated emulator regression test asserts these profile fields and the customer-only role.
+- Repeating the Worker integration suite against a second, isolated Auth/Firestore emulator revealed intermittent Firestore `409 Transaction lock timeout` failures during concurrent quota reservations. `FirestoreRest.runTransaction` now retries those transient lock/contention conflicts with bounded jittered backoff, alongside `ABORTED`. The dedicated race case and full 38-test Worker suite pass against the isolated emulator pair; no active physical-workflow emulator fixtures were touched by that run.
+
+### Pixel 9 emulator customer startup and search — 2026-11-17
+
+- Installed the debug build on a Pixel 9 API 35 emulator pointed at a separate `demo-localspot` Auth/Firestore emulator pair and Wrangler's local backend Worker/R2 simulation. Registered a disposable customer account through the app; registration completed into the customer Home screen, which displayed the Firebase-connected empty-catalog state. The Search screen opened and rendered its filters and empty results state (`0 participating listings within 3 km`).
+- This confirms registration/bootstrap and customer search UI startup on a second emulator. The isolated Firestore dataset had no catalog listings, so result rendering with records, filtering, and map flows were not verified on this device. This is not a physical second-device run. No production Firebase or Cloudflare services were contacted.

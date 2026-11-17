@@ -12,6 +12,7 @@ import 'build_mode.dart';
 import 'geo.dart';
 import 'product_ai.dart';
 import 'search_cursor.dart';
+import 'worker_backend.dart';
 
 class LocalSpotFirebaseApi {
   LocalSpotFirebaseApi();
@@ -25,6 +26,31 @@ class LocalSpotFirebaseApi {
   FirebaseFirestore get _db => FirebaseFirestore.instance;
   FirebaseFunctions get _functions =>
       FirebaseFunctions.instanceFor(region: 'asia-southeast1');
+
+  bool get _workerBackendConfigured => LocalSpotWorker.configured;
+
+  Future<Map<String, dynamic>> getStorageQuota() async {
+    final result = await _call('getStorageQuota', const {});
+    if (result is! Map) {
+      throw ApiException('The storage quota response is invalid.', status: 502);
+    }
+    return Map<String, dynamic>.from(result);
+  }
+
+  Future<void> requestStorageReconciliation() async {
+    await _call('requestStorageReconciliation', const {});
+  }
+
+  Future<void> deleteStorageOrphan(String key) async {
+    await _call('deleteStorageOrphan', {'key': key});
+  }
+
+  Future<void> deleteMediaAsset(String assetId) async {
+    if (!RegExp(r'^[A-Za-z0-9_-]{1,100}$').hasMatch(assetId)) {
+      throw ApiException('A valid media ID is required.', status: 400);
+    }
+    await _call('deleteMediaAsset', {'assetId': assetId});
+  }
 
   String _catalogImage(Object? value) {
     final image = value?.toString().trim() ?? '';
@@ -43,6 +69,69 @@ class LocalSpotFirebaseApi {
         'This operation needs the Cloud Functions backend, which is disabled in the free preview.',
         status: 409,
       );
+    }
+    if (_workerBackendConfigured) {
+      const routes = <String, (String, String)>{
+        'listActiveVendorLocations': ('/api/v1/vendor-locations/active', 'GET'),
+        'startVendorLocationSession': (
+          '/api/v1/vendor-locations/sessions/start',
+          'POST',
+        ),
+        'updateVendorLocationSession': (
+          '/api/v1/vendor-locations/sessions/update',
+          'POST',
+        ),
+        'stopVendorLocationSession': (
+          '/api/v1/vendor-locations/sessions/stop',
+          'POST',
+        ),
+        'submitUserFeedback': ('/api/v1/feedback', 'POST'),
+        'submitUserReport': ('/api/v1/reports', 'POST'),
+        'resolveReport': ('/api/v1/admin/reports/resolve', 'POST'),
+        'submitStoreApplication': ('/api/v1/stores/applications', 'POST'),
+        'updateStore': ('/api/v1/stores/update', 'POST'),
+        'reviewStoreApplication': ('/api/v1/admin/stores/review', 'POST'),
+        'approveStoreApplication': ('/api/v1/admin/stores/approve', 'POST'),
+        'manageStoreMembership': ('/api/v1/stores/members/manage', 'POST'),
+        'listStoreMemberships': ('/api/v1/stores/members', 'POST'),
+        'createStoreListing': ('/api/v1/listings', 'POST'),
+        'updateStoreListing': ('/api/v1/listings/update', 'POST'),
+        'archiveStoreListing': ('/api/v1/listings/archive', 'POST'),
+        'listStoreListingMovements': ('/api/v1/listings/movements', 'POST'),
+        'createStorePromotion': ('/api/v1/promotions', 'POST'),
+        'reviewStorePromotion': ('/api/v1/admin/promotions/review', 'POST'),
+        'manageStoreTour': ('/api/v1/tours/manage', 'POST'),
+        'recordTourPanoramaReview': ('/api/v1/tours/panorama/review', 'POST'),
+        'publishStoreTour': ('/api/v1/tours/panorama/publish', 'POST'),
+        'getPublishedTourPanoramaAccess': (
+          '/api/v1/tours/panorama/published-access',
+          'POST',
+        ),
+        'getPanoramaPrivateMediaAccess': (
+          '/api/v1/tours/panorama/private-access',
+          'POST',
+        ),
+        'getPrivateMediaAccess': ('/api/v1/media/private-access', 'POST'),
+        'deleteMediaAsset': ('/api/v1/media/delete', 'POST'),
+        'cleanupAbandonedMediaReservations': (
+          '/api/v1/admin/media/cleanup-reservations',
+          'POST',
+        ),
+        'getStorageQuota': ('/api/v1/admin/storage/quota', 'POST'),
+        'requestStorageReconciliation': (
+          '/api/v1/admin/storage/reconcile',
+          'POST',
+        ),
+        'deleteStorageOrphan': ('/api/v1/admin/storage/orphans/delete', 'POST'),
+      };
+      final route = routes[name];
+      if (route == null) {
+        throw ApiException(
+          'The Worker route for $name has not been migrated.',
+          status: 501,
+        );
+      }
+      return LocalSpotWorker.request(route.$1, data, route.$2);
     }
     final result = await _functions
         .httpsCallable(name)
@@ -86,7 +175,17 @@ class LocalSpotFirebaseApi {
     });
   }
 
-  Future<Map<String, dynamic>> _userPayload(User user) async {
+  Future<Map<String, dynamic>> _userPayload(User user, {String? newAccountRole}) async {
+    // Auth registration can succeed even when the following Worker request is
+    // interrupted. Repair the idempotent Worker-managed Firestore profile
+    // before attempting the direct, rules-protected client read. This also
+    // makes the profile Retry action repair accounts left half-registered.
+    if (_workerBackendConfigured) {
+      await LocalSpotWorker.request('/api/v1/auth/profile/bootstrap', {
+        'name': user.displayName ?? '',
+        if (newAccountRole != null) 'role': newAccountRole,
+      });
+    }
     final projectId = _db.app.options.projectId;
     final authUidMatches = _auth.currentUser?.uid == user.uid;
     final profileRef = _db.collection('users').doc(user.uid);
@@ -1731,6 +1830,9 @@ class LocalSpotFirebaseApi {
     }
     await _requireUser();
     if (path == '/auth/account') {
+      if (_workerBackendConfigured) {
+        return LocalSpotWorker.request('/api/v1/account/delete');
+      }
       return _call('deleteUserAccount', const {});
     }
     final session = RegExp(
@@ -1760,20 +1862,25 @@ class LocalSpotFirebaseApi {
       );
       final user = credential.user!;
       await user.updateDisplayName('${data['name']}');
-      // The Auth onUserCreated trigger owns profile creation. Once it has made
-      // the customer-only profile, sync only the user-editable name field.
-      try {
-        final profile = _db.collection('users').doc(user.uid);
-        for (var attempt = 0; attempt < 20; attempt++) {
-          final snapshot = await profile.get();
-          if (snapshot.exists) {
-            await profile.update({'name': data['name']});
-            break;
+      // In Worker mode, _userPayload performs the idempotent server bootstrap
+      // before reading the profile. The legacy path still waits for its Auth
+      // trigger to create the document.
+      if (!_workerBackendConfigured)
+        try {
+          final profile = _db.collection('users').doc(user.uid);
+          for (var attempt = 0; attempt < 20; attempt++) {
+            final snapshot = await profile.get();
+            if (snapshot.exists) {
+              await profile.update({'name': data['name']});
+              break;
+            }
+            await Future<void>.delayed(const Duration(milliseconds: 300));
           }
-          await Future<void>.delayed(const Duration(milliseconds: 300));
-        }
-      } catch (_) {}
-      return {'token': user.uid, 'user': await _userPayload(user)};
+        } catch (_) {}
+      return {
+        'token': user.uid,
+        'user': await _userPayload(user, newAccountRole: '${data['role']}'),
+      };
     } on FirebaseAuthException catch (error) {
       throw _mapAuth(error);
     }

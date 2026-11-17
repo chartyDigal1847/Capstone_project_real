@@ -1,7 +1,7 @@
 import { beforeAll, afterAll, describe, expect, it, vi } from "vitest";
 import { exportJWK, generateKeyPair, importPKCS8, SignJWT, type JWK } from "jose";
 import * as selfsigned from "selfsigned";
-import worker from "../src/index.js";
+import worker, { type Env } from "../src/index.js";
 
 const PROJECT_ID = "capstone-project-561a2";
 const UID = "user_123";
@@ -10,7 +10,7 @@ const RESERVATION_ID = "reservation_123456789";
 const IMAGE_KEY = `products/quarantine/${UID}/${ASSET_ID}`;
 const PNG = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]);
 const JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x02, 0x11, 0x22, 0xff, 0xd9]);
-const DERIVATIVE_SHA256 = "b".repeat(64);
+const DERIVATIVE_SHA256 = "d9eff68ae5b45f44ef65c899b6c3265b3d57ca56e7213e340da8e4b20b15908c";
 const DERIVATIVE_KEY = `tours/derivatives/${UID}/91/3/abcdef0123456789_${DERIVATIVE_SHA256}.jpg`;
 
 class TestFixedLengthStream extends TransformStream<Uint8Array, Uint8Array> {
@@ -61,16 +61,20 @@ function makeObject(key: string, bytes: Uint8Array, contentType = "image/png", c
 }
 
 function mockBucket() {
-  const files = new Map<string, { bytes: Uint8Array; contentType: string; etag: string; customMetadata: Record<string, string> }>();
+  const files = new Map<string, { bytes: Uint8Array; contentType: string; etag: string; customMetadata: Record<string, string>; sha256?: ArrayBuffer }>();
   const bucket = {
     async put(key: string, body: ReadableStream<Uint8Array> | ArrayBuffer | string, options?: R2PutOptions) {
       if (options?.onlyIf?.etagDoesNotMatch === "*" && files.has(key)) return null;
       if (options?.onlyIf?.etagMatches && files.get(key)?.etag !== options.onlyIf.etagMatches) return null;
       const bytes = new Uint8Array(await new Response(body as BodyInit).arrayBuffer());
+      const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+      if (options?.sha256 && !new Uint8Array(options.sha256 instanceof ArrayBuffer ? options.sha256 : new TextEncoder().encode(options.sha256)).every((value, index) => value === digest[index])) {
+        throw new Error("BadDigest");
+      }
       const contentType = options?.httpMetadata?.contentType ?? "application/octet-stream";
-      const entry = { bytes, contentType, etag: `etag-${files.size + 1}`, customMetadata: options?.customMetadata ?? {} };
+      const entry = { bytes, contentType, etag: `etag-${files.size + 1}`, customMetadata: options?.customMetadata ?? {}, ...(options?.sha256 ? { sha256: digest.buffer } : {}) };
       files.set(key, entry);
-      return { key, size: bytes.length, etag: entry.etag } as R2Object;
+      return { key, size: bytes.length, etag: entry.etag, checksums: { sha256: entry.sha256 } } as R2Object;
     },
     async get(key: string) {
       const entry = files.get(key);
@@ -78,7 +82,7 @@ function mockBucket() {
     },
     async head(key: string) {
       const entry = files.get(key);
-      return entry ? { key, size: entry.bytes.length, etag: entry.etag, httpEtag: `"${entry.etag}"`, uploaded: new Date(), httpMetadata: { contentType: entry.contentType }, customMetadata: entry.customMetadata } as R2Object : null;
+      return entry ? { key, size: entry.bytes.length, etag: entry.etag, httpEtag: `"${entry.etag}"`, uploaded: new Date(), httpMetadata: { contentType: entry.contentType }, customMetadata: entry.customMetadata, checksums: { sha256: entry.sha256 } } as R2Object : null;
     },
     async delete(key: string) { files.delete(key); },
     async list(options?: R2ListOptions) {
@@ -156,12 +160,15 @@ async function uploadRequest(overrides: {
 
 async function derivativeUploadRequest(overrides: {
   contentType?: string;
+  bytes?: Uint8Array;
   claims?: Record<string, unknown>;
 } = {}): Promise<Request> {
   const token = await firebaseToken();
+  const derivativeSha256 = typeof overrides.claims?.derivativeSha256 === "string" ? overrides.claims.derivativeSha256 : DERIVATIVE_SHA256;
+  const objectKey = DERIVATIVE_KEY.replace(DERIVATIVE_SHA256, derivativeSha256);
   const capability = await gatewayToken({
     scope: "upload",
-    objectKey: DERIVATIVE_KEY,
+    objectKey,
     contentType: "image/jpeg",
     maxBytes: 50 * 1024 * 1024,
     mediaType: "panorama-derivative",
@@ -169,7 +176,7 @@ async function derivativeUploadRequest(overrides: {
     tourId: 91,
     nodeId: 3,
     revisionId: "abcdef0123456789",
-    derivativeSha256: DERIVATIVE_SHA256,
+    derivativeSha256,
     ...overrides.claims,
   });
   return new Request(`https://gateway.test/v1/uploads/${RESERVATION_ID}`, {
@@ -178,9 +185,9 @@ async function derivativeUploadRequest(overrides: {
       Authorization: `Bearer ${token}`,
       "X-Upload-Authorization": `Bearer ${capability}`,
       "Content-Type": overrides.contentType ?? "image/jpeg",
-      "Content-Length": String(JPEG.length),
+      "Content-Length": String((overrides.bytes ?? JPEG).length),
     },
-    body: JPEG,
+    body: overrides.bytes ?? JPEG,
   });
 }
 
@@ -221,6 +228,31 @@ describe("R2 upload gateway", () => {
     expect(response.status).toBe(401);
   });
 
+  it("accepts a LAN Auth Emulator only for the demo project in local testing", async () => {
+    const runtime = env() as unknown as Env;
+    runtime.FIREBASE_PROJECT_ID = "demo-localspot";
+    runtime.FIREBASE_AUTH_EMULATOR_URL = "http://192.168.1.58:19099";
+    const previousFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input) => {
+      expect(String(input)).toContain("192.168.1.58:19099/identitytoolkit.googleapis.com");
+      return new Response(JSON.stringify({ users: [{ localId: UID }] }), { headers: { "Content-Type": "application/json" } });
+    });
+    try {
+      const response = await worker.fetch(await uploadRequest(), runtime);
+      expect(response.status).toBe(201);
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
+  });
+
+  it("rejects public or malformed Auth Emulator endpoints", async () => {
+    const runtime = env() as unknown as Env;
+    runtime.FIREBASE_PROJECT_ID = "demo-localspot";
+    runtime.FIREBASE_AUTH_EMULATOR_URL = "http://example.com:19099";
+    const response = await worker.fetch(await uploadRequest(), runtime);
+    expect(response.status).toBe(503);
+  });
+
   it("stores a valid, signature-checked upload at the server-derived key", async () => {
     const runtime = env();
     const response = await worker.fetch(await uploadRequest(), runtime);
@@ -235,6 +267,8 @@ describe("R2 upload gateway", () => {
     expect(response.status).toBe(201);
     expect((await response.json()).bytes).toBe(JPEG.length);
     const bucket = runtime.MEDIA_BUCKET as unknown as ReturnType<typeof mockBucket>;
+    expect(bucket.files.get(DERIVATIVE_KEY)?.sha256).toBeDefined();
+    expect(Array.from(new Uint8Array(bucket.files.get(DERIVATIVE_KEY)!.sha256! as ArrayBuffer), (byte) => byte.toString(16).padStart(2, "0")).join("")).toBe(DERIVATIVE_SHA256);
     expect(bucket.files.get(DERIVATIVE_KEY)?.customMetadata).toMatchObject({
       reservationId: RESERVATION_ID,
       uid: UID,
@@ -246,6 +280,26 @@ describe("R2 upload gateway", () => {
   it("rejects non-JPEG panorama derivatives", async () => {
     const response = await worker.fetch(await derivativeUploadRequest({ contentType: "image/png" }), env());
     expect(response.status).toBe(415);
+  });
+
+  it("rejects a panorama derivative whose streamed bytes do not match the signed SHA-256", async () => {
+    const runtime = env();
+    const tampered = JPEG.slice();
+    tampered[5] ^= 1;
+    const response = await worker.fetch(await derivativeUploadRequest({ bytes: tampered }), runtime);
+    expect(response.status).toBe(400);
+    expect((runtime.MEDIA_BUCKET as unknown as ReturnType<typeof mockBucket>).files.size).toBe(0);
+  });
+
+  it("rejects a digest-matching panorama derivative without a JPEG end marker", async () => {
+    const runtime = env();
+    const truncated = JPEG.slice();
+    truncated[truncated.length - 1] = 0;
+    const digest = await crypto.subtle.digest("SHA-256", truncated);
+    const sha256 = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+    const response = await worker.fetch(await derivativeUploadRequest({ bytes: truncated, claims: { derivativeSha256: sha256 } }), runtime);
+    expect(response.status).toBe(415);
+    expect((runtime.MEDIA_BUCKET as unknown as ReturnType<typeof mockBucket>).files.size).toBe(0);
   });
 
   it("rejects a client body that does not match its reported size", async () => {

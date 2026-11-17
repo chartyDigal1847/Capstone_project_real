@@ -26,7 +26,9 @@ void main() {
     () {
       final coverage = ReviewCoverage();
       expect(coverage.completed, 0);
-      for (var i = 0; i < 47; i++) coverage.markInspected(i);
+      for (var i = 0; i < 47; i++) {
+        coverage.markInspected(i);
+      }
       expect(coverage.completed, 47);
       expect(coverage.isComplete, isFalse);
       expect(coverage.nextUninspected.index, 47);

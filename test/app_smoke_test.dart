@@ -5,6 +5,7 @@ import 'package:localspot/main.dart';
 import 'package:localspot/models.dart';
 import 'package:localspot/screens/customer_screens.dart';
 import 'package:localspot/screens/detail_screens.dart';
+import 'package:localspot/screens/owner_screens.dart';
 import 'package:localspot/services/directions_service.dart';
 import 'package:localspot/state.dart';
 import 'package:localspot/widgets.dart';
@@ -21,7 +22,7 @@ void main() {
     expect(app.usingSeededCatalog, isFalse);
   });
 
-  testWidgets('shows LocalSpot welcome and customer home after demo login', (
+  testWidgets('shows Locentra welcome and customer home after demo login', (
     tester,
   ) async {
     await tester.pumpWidget(const LocalSpotRoot());
@@ -53,7 +54,7 @@ void main() {
     await tester.tap(find.textContaining("Aling Nena's Sari-Sari").first);
     await tester.pumpAndSettle();
     expect(find.text('Sold here'), findsOneWidget);
-    expect(find.text('Preview route in LocalSpot'), findsOneWidget);
+    expect(find.text('Preview route in Locentra'), findsOneWidget);
     expect(find.text('Directions in Google Maps'), findsNothing);
   });
 
@@ -164,10 +165,92 @@ void main() {
 
   test('sponsored cards ignore expired promotions', () {
     final app = AppState();
+    final currentSponsored = app.liveSponsored();
+    expect(currentSponsored, isNotEmpty);
+    expect(
+      currentSponsored.every(
+        (promo) =>
+            promo.status == PromotionStatus.approved && promo.sponsored,
+      ),
+      isTrue,
+    );
     for (final promo in app.promotions) {
       promo.endsAt = DateTime.now().subtract(const Duration(days: 1));
     }
     expect(app.liveSponsored(), isEmpty);
+  });
+
+  testWidgets('Admin can approve and reject pending promotion cards', (
+    tester,
+  ) async {
+    final app = AppState();
+    final approval = Promotion(
+      id: 901,
+      storeId: 1,
+      title: 'Widget approval offer',
+      offer: 'Test approval',
+      startsAt: DateTime.now(),
+      endsAt: DateTime.now().add(const Duration(days: 7)),
+      sponsored: true,
+      status: PromotionStatus.pending,
+    );
+    final rejection = Promotion(
+      id: 902,
+      storeId: 1,
+      title: 'Widget rejection offer',
+      offer: 'Test rejection',
+      startsAt: DateTime.now(),
+      endsAt: DateTime.now().add(const Duration(days: 7)),
+      sponsored: true,
+      status: PromotionStatus.pending,
+    );
+    app.promotions.addAll([approval, rejection]);
+
+    await tester.pumpWidget(
+      AppScope(
+        notifier: app,
+        child: const MaterialApp(
+          home: Scaffold(body: AdminPage()),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final approvalCard = find.ancestor(
+      of: find.text(approval.title),
+      matching: find.byType(SoftCard),
+    );
+    final approveButton = find.descendant(
+      of: approvalCard,
+      matching: find.text('Approve'),
+    );
+    await tester.scrollUntilVisible(
+      approveButton,
+      240,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(approveButton);
+    await tester.pump();
+    expect(approval.status, PromotionStatus.approved);
+    expect(find.text('Test approval · approved'), findsOneWidget);
+
+    final rejectionCard = find.ancestor(
+      of: find.text(rejection.title),
+      matching: find.byType(SoftCard),
+    );
+    final rejectButton = find.descendant(
+      of: rejectionCard,
+      matching: find.text('Reject'),
+    );
+    await tester.scrollUntilVisible(
+      rejectButton,
+      240,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(rejectButton);
+    await tester.pump();
+    expect(rejection.status, PromotionStatus.rejected);
+    expect(find.text('Test rejection · rejected'), findsOneWidget);
   });
 
   test('visual search returns participating mango listings', () async {

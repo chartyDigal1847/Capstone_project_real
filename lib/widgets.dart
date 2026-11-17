@@ -1253,6 +1253,7 @@ String availabilityLabel(Availability value) => switch (value) {
 String storeStatusLabel(StoreStatus value) => switch (value) {
   StoreStatus.pending => 'Pending review',
   StoreStatus.approved => 'Approved',
+  StoreStatus.rejected => 'Declined',
   StoreStatus.suspended => 'Suspended',
 };
 

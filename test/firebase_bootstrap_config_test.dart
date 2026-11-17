@@ -51,6 +51,32 @@ void main() {
     );
   });
 
+  test('emulator ports are validated and may be overridden for local runs', () {
+    expect(
+      () => validateFirebaseBootstrapConfiguration(
+        debugBuild: true,
+        useEmulators: true,
+        previewBuild: false,
+        emulatorProjectId: 'demo-localspot',
+        emulatorHost: '192.168.1.58',
+        authEmulatorPort: 19099,
+        firestoreEmulatorPort: 18080,
+      ),
+      returnsNormally,
+    );
+    expect(
+      () => validateFirebaseBootstrapConfiguration(
+        debugBuild: true,
+        useEmulators: true,
+        previewBuild: false,
+        emulatorProjectId: 'demo-localspot',
+        emulatorHost: '192.168.1.58',
+        authEmulatorPort: 70000,
+      ),
+      throwsStateError,
+    );
+  });
+
   test('release preview configuration passes without emulator settings', () {
     expect(
       () => validateFirebaseBootstrapConfiguration(
@@ -75,5 +101,65 @@ void main() {
       ),
       throwsStateError,
     );
+  });
+
+  test('trial release requires a remote HTTPS Worker hostname', () {
+    expect(
+      () => validateFirebaseBootstrapConfiguration(
+        debugBuild: false,
+        useEmulators: false,
+        previewBuild: false,
+        trialBuild: true,
+        workerBackendUrl: '',
+        emulatorProjectId: 'trial-project',
+        emulatorHost: '',
+      ),
+      throwsStateError,
+    );
+    expect(
+      () => validateFirebaseBootstrapConfiguration(
+        debugBuild: false,
+        useEmulators: false,
+        previewBuild: false,
+        trialBuild: true,
+        workerBackendUrl: 'https://127.0.0.1:8787',
+        emulatorProjectId: 'trial-project',
+        emulatorHost: '',
+      ),
+      throwsStateError,
+    );
+    expect(
+      () => validateFirebaseBootstrapConfiguration(
+        debugBuild: false,
+        useEmulators: false,
+        previewBuild: false,
+        trialBuild: true,
+        workerBackendUrl: 'https://localspot.example.workers.dev',
+        emulatorProjectId: 'trial-project',
+        emulatorHost: '',
+      ),
+      returnsNormally,
+    );
+    for (final url in [
+      'http://localspot.example.workers.dev',
+      'https://localhost.',
+      'https://gateway.local',
+      'https://worker.home.arpa',
+      'https://192.168.1.10',
+    ]) {
+      expect(
+        () => validateFirebaseBootstrapConfiguration(
+          debugBuild: false,
+          useEmulators: false,
+          previewBuild: false,
+          trialBuild: true,
+          workerBackendUrl: url,
+          emulatorProjectId: 'trial-project',
+          emulatorHost: '',
+        ),
+        throwsStateError,
+        reason: 'Trial releases must reject $url',
+      );
+    }
   });
 }

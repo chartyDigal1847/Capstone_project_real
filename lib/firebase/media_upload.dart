@@ -6,7 +6,9 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 
+import '../api.dart';
 import 'build_mode.dart';
+import 'worker_backend.dart';
 
 class UploadedMedia {
   const UploadedMedia({required this.assetId, this.downloadUrl});
@@ -21,6 +23,18 @@ class MediaUpload {
   static final _functions = FirebaseFunctions.instanceFor(
     region: 'asia-southeast1',
   );
+
+  static Future<Map<String, dynamic>> _backendCall(
+    String functionName,
+    String workerRoute,
+    Map<String, dynamic> data,
+  ) async {
+    if (LocalSpotWorker.configured) {
+      return LocalSpotWorker.request(workerRoute, data);
+    }
+    final result = await _functions.httpsCallable(functionName).call(data);
+    return Map<String, dynamic>.from(result.data as Map);
+  }
 
   static String createAssetId() {
     final suffix = Random.secure()
@@ -58,10 +72,11 @@ class MediaUpload {
       'expectedBytes': bytes.length,
     });
     await _upload(reservation, bytes, format.$1, onProgress);
-    final finalized = await _functions
-        .httpsCallable('finalizeMediaUpload')
-        .call({'reservationId': reservation['reservationId']});
-    final result = Map<String, dynamic>.from(finalized.data as Map);
+    final result = await _backendCall(
+      'finalizeMediaUpload',
+      '/api/v1/media/finalize',
+      {'reservationId': reservation['reservationId']},
+    );
     if (result['status'] != 'ready' ||
         result['assetId'] != assetId ||
         (kind == 'product' && result['downloadUrl'] is! String)) {
@@ -116,10 +131,11 @@ class MediaUpload {
       'image/jpeg',
       onProgress,
     );
-    final finalized = await _functions
-        .httpsCallable('finalizeMediaUpload')
-        .call({'reservationId': reservation['reservationId']});
-    final result = Map<String, dynamic>.from(finalized.data as Map);
+    final result = await _backendCall(
+      'finalizeMediaUpload',
+      '/api/v1/media/finalize',
+      {'reservationId': reservation['reservationId']},
+    );
     if (result['status'] != 'awaiting-privacy-processing' ||
         result['assetId'] != assetId ||
         result['originalPath'] is! String) {
@@ -164,18 +180,19 @@ class MediaUpload {
         head[2] != 0xff) {
       throw StateError('The processed derivative is not a JPEG image.');
     }
-    final reserved = await _functions
-        .httpsCallable('reservePanoramaDerivativeUpload')
-        .call({
-          'tourId': tourId,
-          'nodeId': nodeId,
-          'assetId': assetId,
-          'contentType': 'image/jpeg',
-          'expectedBytes': fileBytes,
-          'derivativeSha256': derivativeSha256,
-          'processingVersion': processingVersion,
-        });
-    final reservation = Map<String, dynamic>.from(reserved.data as Map);
+    final reservation = await _backendCall(
+      'reservePanoramaDerivativeUpload',
+      '/api/v1/media/panorama-derivative/reservations',
+      {
+        'tourId': tourId,
+        'nodeId': nodeId,
+        'assetId': assetId,
+        'contentType': 'image/jpeg',
+        'expectedBytes': fileBytes,
+        'derivativeSha256': derivativeSha256,
+        'processingVersion': processingVersion,
+      },
+    );
     for (final key in [
       'reservationId',
       'uploadUrl',
@@ -193,10 +210,11 @@ class MediaUpload {
       'image/jpeg',
       onProgress,
     );
-    final finalized = await _functions
-        .httpsCallable('finalizePanoramaDerivativeUpload')
-        .call({'reservationId': reservation['reservationId']});
-    final result = Map<String, dynamic>.from(finalized.data as Map);
+    final result = await _backendCall(
+      'finalizePanoramaDerivativeUpload',
+      '/api/v1/media/panorama-derivative/finalize',
+      {'reservationId': reservation['reservationId']},
+    );
     if (result['status'] != 'verified' ||
         result['objectKey'] != reservation['objectKey'] ||
         result['sha256'] != derivativeSha256 ||
@@ -211,10 +229,11 @@ class MediaUpload {
 
   static Future<Map<String, dynamic>> _reserve(Map<String, Object> data) async {
     try {
-      final response = await _functions
-          .httpsCallable('reserveMediaUpload')
-          .call(data);
-      final result = Map<String, dynamic>.from(response.data as Map);
+      final result = await _backendCall(
+        'reserveMediaUpload',
+        '/api/v1/media/reservations',
+        Map<String, dynamic>.from(data),
+      );
       for (final key in ['reservationId', 'uploadUrl', 'uploadToken']) {
         if (result[key] is! String) {
           throw StateError('The upload reservation response is invalid.');
@@ -224,6 +243,14 @@ class MediaUpload {
     } on FirebaseFunctionsException catch (error) {
       if (error.message?.contains('STORAGE_LIMIT_REACHED') == true ||
           error.code == 'resource-exhausted') {
+        throw StateError(
+          'Storage is full or temporarily unavailable. Delete unused media or contact an administrator.',
+        );
+      }
+      rethrow;
+    } on ApiException catch (error) {
+      if (error.message.contains('STORAGE_LIMIT_REACHED') ||
+          error.status == 429) {
         throw StateError(
           'Storage is full or temporarily unavailable. Delete unused media or contact an administrator.',
         );

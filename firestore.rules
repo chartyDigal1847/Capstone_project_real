@@ -75,7 +75,7 @@ service cloud.firestore {
 
     match /users/{userId} {
       allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
-      // Customer profiles are initialized by the Auth trigger.
+      // Customer profiles are initialized by the retained Auth trigger or Worker bootstrap.
       allow create: if false;
       allow update: if isAuthenticated() && isValidUser(request.resource.data) &&
         request.resource.data.numericId == resource.data.numericId &&
@@ -97,21 +97,21 @@ service cloud.firestore {
       allow read: if resource.data.status == 'approved' ||
         (isAuthenticated() && resource.data.ownerUid == request.auth.uid) ||
         isAdmin();
-      // Applications, edits, review and deletion use validated Functions.
+      // Applications, edits, review, and deletion use validated trusted backend routes.
       allow create, update, delete: if false;
     }
 
     match /products/{id} {
       // Products are publicly readable.
       allow read: if true;
-      // Product catalog changes are batched with listings by Cloud Functions.
+      // Product catalog changes are batched with listings by the trusted backend.
       allow create, update, delete: if false;
     }
 
     match /listings/{id} {
       // Public read — needed for catalog queries.
       allow read: if true;
-      // Listing mutations and stock history are handled by Cloud Functions.
+      // Listing mutations and stock history are handled by the trusted backend.
       allow create, update, delete: if false;
     }
 
@@ -120,7 +120,7 @@ service cloud.firestore {
       allow read: if resource.data.status == 'approved' ||
         (isAuthenticated() && resource.data.ownerUid == request.auth.uid) ||
         isAdmin();
-      // Submission and moderation are authorized in Cloud Functions.
+      // Submission and moderation are authorized by the trusted backend.
       allow create, update, delete: if false;
     }
 
@@ -172,7 +172,7 @@ service cloud.firestore {
           resource.data.expiresAt is timestamp &&
           resource.data.expiresAt > request.time);
       allow list: if isAdmin();
-      // Session lifecycle and authorization are enforced by Cloud Functions.
+      // Session lifecycle and authorization are enforced by the trusted backend.
       allow create, update, delete: if false;
     }
 

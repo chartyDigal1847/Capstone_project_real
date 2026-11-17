@@ -611,9 +611,9 @@ export const deleteMediaAsset = onCall(CALLABLE_OPTIONS, async (request) => {
     if (admin.data()?.role !== "admin") throw new HttpsError("not-found", "Media was not found.");
     const matching = await db.collection("mediaAssets").where("assetId", "==", data.assetId).limit(1).get();
     if (matching.empty) throw new HttpsError("not-found", "Media was not found.");
-    return deleteMediaRecord(matching.docs[0].ref, matching.docs[0].data(), uid);
+    return deleteMediaRecord(matching.docs[0].ref, uid);
   }
-  return deleteMediaRecord(mediaRef, mediaSnap.data()!, uid);
+  return deleteMediaRecord(mediaRef, uid);
 });
 
 export const getPrivateMediaAccess = onCall(CALLABLE_OPTIONS, async (request) => {
@@ -641,14 +641,28 @@ export const getPrivateMediaAccess = onCall(CALLABLE_OPTIONS, async (request) =>
   return { url: r2PrivateMediaUrl(objectKey), token };
 });
 
-async function deleteMediaRecord(mediaRef: FirebaseFirestore.DocumentReference, media: FirebaseFirestore.DocumentData, actorUid: string) {
-  if (media.uid !== actorUid) {
-    const admin = await db.collection("users").doc(actorUid).get();
-    if (admin.data()?.role !== "admin") throw new HttpsError("permission-denied", "You cannot delete this media.");
-  }
-  if (media.linkedProductId != null || media.linkedStoreId != null || media.linkedTourId != null) {
-    throw new HttpsError("failed-precondition", "Remove this media from its product, store, or tour before deleting it.");
-  }
+async function claimMediaDeletion(mediaRef: FirebaseFirestore.DocumentReference, actorUid: string) {
+  return db.runTransaction(async (transaction) => {
+    const current = await transaction.get(mediaRef);
+    if (!current.exists) throw new HttpsError("not-found", "Media was not found.");
+    const media = current.data()!;
+    if (media.uid !== actorUid) {
+      const admin = await transaction.get(db.collection("users").doc(actorUid));
+      if (admin.data()?.role !== "admin") throw new HttpsError("permission-denied", "You cannot delete this media.");
+    }
+    if (media.linkedProductId != null || media.linkedStoreId != null || media.linkedTourId != null) {
+      throw new HttpsError("failed-precondition", "Remove this media from its product, store, or tour before deleting it.");
+    }
+    const now = Timestamp.now();
+    transaction.update(mediaRef, { status: "deleting", deletionStartedAt: now, updatedAt: now });
+    return media;
+  });
+}
+
+async function deleteMediaRecord(mediaRef: FirebaseFirestore.DocumentReference, actorUid: string) {
+  // Re-read ownership and links transactionally before claiming deletion so a
+  // concurrent product, store, or tour link cannot be deleted from stale state.
+  const media = await claimMediaDeletion(mediaRef, actorUid);
   const objectKeys = [
     media.objectKey,
     media.quarantinePath,
@@ -664,7 +678,6 @@ async function deleteMediaRecord(mediaRef: FirebaseFirestore.DocumentReference, 
     if (typeof key === "string") objectKeys.push(key);
   }
   const uniqueObjectKeys = [...new Set(objectKeys)];
-  await mediaRef.set({ status: "deleting", deletionStartedAt: Timestamp.now() }, { merge: true });
   for (const objectKey of uniqueObjectKeys) await deleteStoredObject(objectKey, actorUid, "user-request");
   for (const derivative of derivativeRecords.docs) {
     await derivative.ref.set({ status: "deleted", accountingState: "deleted", deletedAt: Timestamp.now() }, { merge: true });

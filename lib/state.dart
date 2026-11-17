@@ -777,7 +777,7 @@ class AppState extends ChangeNotifier {
       );
       locationAllowed = true;
       locationNote =
-          'Foreground location is on. LocalSpot does not request background tracking.';
+          'Foreground location is on. Locentra does not request background tracking.';
       if (startUpdates) await startLocationUpdates();
       notifyListeners();
     } catch (_) {
@@ -1433,7 +1433,7 @@ class AppState extends ChangeNotifier {
       }
     }
     final match = users.where((user) => user.email.toLowerCase() == normalized);
-    if (match.isEmpty) return 'No LocalSpot account uses that email.';
+    if (match.isEmpty) return 'No Locentra account uses that email.';
     final member = match.first;
     if (member.role == AppRole.admin) {
       return 'Administrators cannot be added as store staff.';
@@ -1615,14 +1615,21 @@ class AppState extends ChangeNotifier {
     return delimiter >= 0 ? message.substring(delimiter + 2) : message;
   }
 
-  void setStoreStatus(Store store, StoreStatus status) {
+  Future<String?> setStoreStatus(Store store, StoreStatus status) async {
+    final previousStatus = store.status;
     store.status = status;
     notifyListeners();
     if (apiOnline && api.token != null) {
-      unawaited(
-        api.patch('/admin/stores/${store.id}', {'status': status.name}),
-      );
+      try {
+        await api.patch('/admin/stores/${store.id}', {'status': status.name});
+        if (status == StoreStatus.approved) await refreshCatalog();
+      } catch (error) {
+        store.status = previousStatus;
+        notifyListeners();
+        return _submissionError(error);
+      }
     }
+    return null;
   }
 
   CatalogProduct createProduct({

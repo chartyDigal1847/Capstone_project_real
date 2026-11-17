@@ -1,4 +1,6 @@
-# LocalSpot trial deployment runbook
+# Legacy LocalSpot trial deployment runbook
+
+> **Superseded for the no-Blaze migration. Do not follow these Functions deployment steps for the Cloudflare backend trial.** This document describes the earlier Firebase Functions-to-R2-gateway architecture and requires a Blaze billing association. Use [LOCALSPOT_FREE_TRIAL_DEPLOYMENT.md](LOCALSPOT_FREE_TRIAL_DEPLOYMENT.md) for the current planning-only Worker migration. This legacy runbook is retained as historical reference; no deployment is authorized.
 
 **Status: planning only. No isolated trial environment exists and no deployment has been made.** This document intentionally contains no secrets and no deployed trial endpoint.
 

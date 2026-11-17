@@ -368,11 +368,11 @@ class StoreDetailPage extends StatelessWidget {
                 height: 160,
               ),
               const SizedBox(height: 12),
-              PrimaryButton('Preview route in LocalSpot', onPressed: onRoute),
+              PrimaryButton('Preview route in Locentra', onPressed: onRoute),
               const Padding(
                 padding: EdgeInsets.only(top: 10, bottom: 10),
                 child: InfoBanner(
-                  'The route stays on the LocalSpot map. An external map app is optional. Owner-created 360° tours are the immersive store view in this release.',
+                  'The route stays on the Locentra map. An external map app is optional. Owner-created 360° tours are the immersive store view in this release.',
                   icon: Icons.map_outlined,
                 ),
               ),
@@ -834,7 +834,7 @@ class _RoutePreviewPageState extends State<RoutePreviewPage> {
           child: SoftCard(
             child:
                 loading
-                    ? const Text('Drawing the route on the LocalSpot map…')
+                    ? const Text('Drawing the route on the Locentra map…')
                     : Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -859,8 +859,8 @@ class _RoutePreviewPageState extends State<RoutePreviewPage> {
                         const SizedBox(height: 8),
                         Text(
                           navigating
-                              ? 'Following your position on the LocalSpot map. Turn-by-turn voice guidance is a later enhancement.'
-                              : 'Stay inside LocalSpot to preview this route.',
+                              ? 'Following your position on the Locentra map. Turn-by-turn voice guidance is a later enhancement.'
+                              : 'Stay inside Locentra to preview this route.',
                           style: const TextStyle(color: taupe, fontSize: 11),
                         ),
                       ],
@@ -1148,7 +1148,7 @@ class _CameraSearchPageState extends State<CameraSearchPage> {
         const Padding(
           padding: EdgeInsets.symmetric(horizontal: 20),
           child: InfoBanner(
-            'A photo suggests likely products, then LocalSpot searches participating listings nearby. It does not invent stock a store has not reported.',
+            'A photo suggests likely products, then Locentra searches participating listings nearby. It does not invent stock a store has not reported.',
             icon: Icons.photo_camera_outlined,
           ),
         ),

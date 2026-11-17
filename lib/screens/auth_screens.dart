@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../models.dart';
+import '../state.dart';
 import '../theme.dart';
 import '../widgets.dart';
 
@@ -16,82 +17,70 @@ class WelcomePage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const SizedBox(height: 12),
-          Container(
-            width: 48,
-            height: 48,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: leafDark,
-              borderRadius: BorderRadius.circular(16),
-              boxShadow: const [
-                BoxShadow(
-                  color: Color(0x332E5A27),
-                  blurRadius: 12,
-                  offset: Offset(0, 5),
-                ),
-              ],
-            ),
-            child: const Text(
-              'L',
-              style: TextStyle(
-                color: paper,
-                fontFamily: 'Georgia',
-                fontSize: 24,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final logoSize = constraints.maxHeight < 680 ? 104.0 : 148.0;
+        return Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const SizedBox(height: 12),
+              Image.asset(
+                'assets/brand/locentra-logo.png',
+                width: logoSize,
+                height: logoSize,
+                fit: BoxFit.contain,
+                semanticLabel: 'Locentra logo',
               ),
-            ),
-          ),
-          const Spacer(),
-          SoftCard(
-            color: const Color(0xFF24382C),
-            padding: const EdgeInsets.fromLTRB(20, 22, 20, 24),
-            child: const Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'PHILIPPINE LOCAL STORE LOCATOR',
-                  style: TextStyle(
-                    color: champagne,
-                    fontSize: 9,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 1.4,
-                  ),
+              const Spacer(),
+              SoftCard(
+                color: const Color(0xFF24382C),
+                padding: const EdgeInsets.fromLTRB(20, 22, 20, 24),
+                child: const Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'PHILIPPINE LOCAL STORE LOCATOR',
+                      style: TextStyle(
+                        color: champagne,
+                        fontSize: 9,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 1.4,
+                      ),
+                    ),
+                    SizedBox(height: 12),
+                    Text(
+                      'Find it nearby.\nBuy it there.',
+                      style: TextStyle(
+                        fontFamily: 'Georgia',
+                        fontSize: 34,
+                        height: 1.08,
+                        color: paper,
+                      ),
+                    ),
+                    SizedBox(height: 12),
+                    Text(
+                      'Search participating sari-sari stores, market stalls and vendors. Locentra does not take orders or deliveries.',
+                      style: TextStyle(color: Color(0xFFD8D0C4), height: 1.5),
+                    ),
+                  ],
                 ),
-                SizedBox(height: 12),
-                Text(
-                  'Find it nearby.\nBuy it there.',
-                  style: TextStyle(
-                    fontFamily: 'Georgia',
-                    fontSize: 34,
-                    height: 1.08,
-                    color: paper,
-                  ),
+              ),
+              const Spacer(),
+              PrimaryButton('Create an account', onPressed: onRegister),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton(
+                  onPressed: onLogin,
+                  child: const Text('Sign in'),
                 ),
-                SizedBox(height: 12),
-                Text(
-                  'Search participating sari-sari stores, market stalls and vendors. LocalSpot does not take orders or deliveries.',
-                  style: TextStyle(color: Color(0xFFD8D0C4), height: 1.5),
-                ),
-              ],
-            ),
+              ),
+            ],
           ),
-          const Spacer(),
-          PrimaryButton('Create an account', onPressed: onRegister),
-          const SizedBox(height: 10),
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton(
-              onPressed: onLogin,
-              child: const Text('Sign in'),
-            ),
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 }
@@ -263,6 +252,7 @@ class _RegisterPageState extends State<RegisterPage> {
   String? nameError;
   String? emailError;
   String? passwordError;
+  String? submitError;
   var busy = false;
 
   @override
@@ -304,6 +294,7 @@ class _RegisterPageState extends State<RegisterPage> {
               FilterMenu<AppRole>(
                 label: 'I am joining as',
                 value: role,
+                selectedLabel: roleLabel(role),
                 items: const [
                   DropdownMenuItem(
                     value: AppRole.customer,
@@ -323,14 +314,26 @@ class _RegisterPageState extends State<RegisterPage> {
           ),
         ),
         const SizedBox(height: 20),
+        if (submitError != null) ...[
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Text(
+              submitError!,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: clay, fontSize: 13),
+            ),
+          ),
+          const SizedBox(height: 12),
+        ],
         PrimaryButton(
-          'Register',
+          busy ? 'Creating account…' : 'Register',
           onPressed:
               busy
                   ? null
                   : () async {
                     setState(() {
                       busy = true;
+                      submitError = null;
                       nameError =
                           name.text.trim().isEmpty ? 'Enter your name.' : null;
                       emailError =
@@ -358,6 +361,7 @@ class _RegisterPageState extends State<RegisterPage> {
                     if (apiError != null) {
                       setState(() {
                         busy = false;
+                        submitError = apiError.message;
                         nameError = apiError.field('name') ?? nameError;
                         emailError = apiError.field('email') ?? emailError;
                         passwordError =
@@ -368,6 +372,32 @@ class _RegisterPageState extends State<RegisterPage> {
                     widget.onSuccess();
                   },
         ),
+        if (app.api.token != null &&
+            app.authProfileStatus == AuthProfileStatus.failed)
+          TextButton(
+            onPressed:
+                busy
+                    ? null
+                    : () async {
+                      setState(() {
+                        busy = true;
+                        submitError = null;
+                      });
+                      await app.retryProfileLoad();
+                      if (!context.mounted) return;
+                      if (app.authProfileStatus == AuthProfileStatus.loaded) {
+                        widget.onSuccess();
+                      } else {
+                        setState(() {
+                          busy = false;
+                          submitError =
+                              app.authProfileError ??
+                              'Account setup is still unavailable. Please retry shortly.';
+                        });
+                      }
+                    },
+            child: const Text('Retry account setup'),
+          ),
       ],
     );
   }

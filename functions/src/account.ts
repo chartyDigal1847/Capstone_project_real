@@ -31,17 +31,26 @@ async function cleanProductMedia(uid: string): Promise<void> {
         // Keep catalog media in use, but remove its uploader identity.
         batch.update(doc.ref, { uid: null, uploaderDeletedAt: Timestamp.now() });
       } else {
+        const derivatives = await doc.ref.collection("derivatives").get();
         const ownedPrefixes = [
           `products/quarantine/${uid}/`,
           `products/public/${uid}/`,
           `stores/quarantine/${uid}/`,
           `stores/processed/${uid}/`,
           `tours/originals/${uid}/`,
+          `tours/derivatives/${uid}/`,
         ];
-        for (const path of [data.quarantinePath, data.publicPath, data.privatePath, data.originalPath, data.pendingOutputPath, data.pendingPublicPath, data.objectKey]) {
+        for (const path of [data.quarantinePath, data.publicPath, data.privatePath, data.originalPath, data.pendingOutputPath, data.pendingPublicPath, data.objectKey, data.latestDerivativeObjectKey, ...derivatives.docs.map((revision) => revision.data().objectKey)]) {
           if (typeof path === "string" && ownedPrefixes.some((prefix) => path.startsWith(prefix))) {
             files.add(path);
           }
+        }
+        for (let index = 0; index < derivatives.docs.length; index += 400) {
+          const revisionBatch = db.batch();
+          for (const revision of derivatives.docs.slice(index, index + 400)) {
+            revisionBatch.update(revision.ref, { status: "deleted", accountingState: "deleted", deletedAt: Timestamp.now() });
+          }
+          await revisionBatch.commit();
         }
         batch.update(doc.ref, { status: "deleting", cleanupStartedAt: Timestamp.now() });
       }

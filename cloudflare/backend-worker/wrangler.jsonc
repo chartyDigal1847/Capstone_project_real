@@ -1,0 +1,23 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "localspot-backend-local",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-16",
+  "workers_dev": true,
+  "triggers": {
+    "crons": ["*/15 * * * *"]
+  },
+  "vars": {
+    "FIREBASE_PROJECT_ID": "demo-localspot",
+    "FIREBASE_PROJECT_NUMBER": "1",
+    "FIREBASE_AUTH_EMULATOR_URL": "http://127.0.0.1:9099",
+    "FIRESTORE_EMULATOR_URL": "http://127.0.0.1:8080",
+    "LOCAL_EMULATORS": "true"
+  },
+  "r2_buckets": [
+    {
+      "binding": "MEDIA_BUCKET",
+      "bucket_name": "localspot-backend-local"
+    }
+  ]
+}

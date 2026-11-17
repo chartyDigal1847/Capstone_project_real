@@ -30,4 +30,15 @@ class LocalSpotGateway {
       firebase.patch(path, body);
 
   Future<dynamic> delete(String path) => firebase.delete(path);
+
+  Future<Map<String, dynamic>> getStorageQuota() => firebase.getStorageQuota();
+
+  Future<void> requestStorageReconciliation() =>
+      firebase.requestStorageReconciliation();
+
+  Future<void> deleteStorageOrphan(String key) =>
+      firebase.deleteStorageOrphan(key);
+
+  Future<void> deleteMediaAsset(String assetId) =>
+      firebase.deleteMediaAsset(assetId);
 }
