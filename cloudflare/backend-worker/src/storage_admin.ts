@@ -4,6 +4,14 @@ import { ApiError } from "./errors.js";
 
 const LIMIT_BYTES = 9_000_000_000;
 
+export async function handleStorageAvailability(request: Request, env: Env): Promise<Response> {
+  if (request.method !== "POST") return Response.json({ error: "Method not allowed." }, { status: 405, headers: { Allow: "POST" } });
+  const quota = documentData(await new FirestoreRest(env).get("system_config/storage_quota")) ?? {};
+  const enabled = quota.uploadEnabled === true && quota.maintenanceLock !== true &&
+    quota.storageProvider === "cloudflare_r2" && Number(quota.limitBytes) === LIMIT_BYTES;
+  return Response.json({ uploadEnabled: enabled, maintenanceLock: quota.maintenanceLock === true, state: typeof quota.reconciliationState === "string" ? quota.reconciliationState : "not-reconciled" }, { headers: { "Cache-Control": "no-store" } });
+}
+
 function state(used: number, reserved: number): "normal" | "warning" | "critical" | "full" {
   const ratio = (used + reserved) / LIMIT_BYTES;
   return ratio >= 1 ? "full" : ratio >= 0.9 ? "critical" : ratio >= 0.8 ? "warning" : "normal";

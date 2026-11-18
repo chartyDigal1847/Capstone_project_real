@@ -30,7 +30,7 @@ export async function reservePanoramaDerivativeUpload(request: Request, env: Env
   if (data.contentType !== "image/jpeg") throw new ApiError(400, "Panorama derivatives must be JPEG images.");
   if (!Number.isSafeInteger(data.expectedBytes) || Number(data.expectedBytes) <= 0 || Number(data.expectedBytes) > MAX_PANORAMA_BYTES) throw new ApiError(400, "The derivative must be no larger than 50 MiB.");
   if (typeof data.derivativeSha256 !== "string" || !/^[a-f0-9]{64}$/.test(data.derivativeSha256)) throw new ApiError(400, "A lowercase derivative SHA-256 digest is required.");
-  if (typeof data.processingVersion !== "string" || !/^localspot-panorama-local-v[0-9]{1,8}$/.test(data.processingVersion)) throw new ApiError(400, "The panorama processing version is invalid.");
+  if (typeof data.processingVersion !== "string" || !/^(?:localspot-panorama-local-v[0-9]{1,8}|localspot-panorama-original-v1)$/.test(data.processingVersion)) throw new ApiError(400, "The panorama processing version is invalid.");
   const tourId = Number(data.tourId), nodeId = Number(data.nodeId), db = new FirestoreRest(env);
   const tours = await db.query("tours", [{ field: "numericId", op: "EQUAL", value: tourId }], 1);
   if (!tours.length) throw new ApiError(404, "Tour was not found.");

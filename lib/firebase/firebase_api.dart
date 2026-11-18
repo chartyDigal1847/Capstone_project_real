@@ -37,6 +37,11 @@ class LocalSpotFirebaseApi {
     return Map<String, dynamic>.from(result);
   }
 
+  Future<bool> getStorageAvailability() async {
+    final result = await _call('getStorageAvailability', const {});
+    return result is Map && result['uploadEnabled'] == true;
+  }
+
   Future<void> requestStorageReconciliation() async {
     await _call('requestStorageReconciliation', const {});
   }
@@ -118,6 +123,7 @@ class LocalSpotFirebaseApi {
           'POST',
         ),
         'getStorageQuota': ('/api/v1/admin/storage/quota', 'POST'),
+        'getStorageAvailability': ('/api/v1/storage/availability', 'POST'),
         'requestStorageReconciliation': (
           '/api/v1/admin/storage/reconcile',
           'POST',
@@ -175,7 +181,10 @@ class LocalSpotFirebaseApi {
     });
   }
 
-  Future<Map<String, dynamic>> _userPayload(User user, {String? newAccountRole}) async {
+  Future<Map<String, dynamic>> _userPayload(
+    User user, {
+    String? newAccountRole,
+  }) async {
     // Auth registration can succeed even when the following Worker request is
     // interrupted. Repair the idempotent Worker-managed Firestore profile
     // before attempting the direct, rules-protected client read. This also
@@ -1449,6 +1458,29 @@ class LocalSpotFirebaseApi {
       });
     }
 
+    final nodeReplace = RegExp(
+      r'^/tours/(\d+)/nodes/(\d+)/replace$',
+    ).firstMatch(path);
+    if (nodeReplace != null) {
+      return _call('manageStoreTour', {
+        'action': 'replaceNode',
+        'tourId': int.parse(nodeReplace.group(1)!),
+        'nodeId': int.parse(nodeReplace.group(2)!),
+        'originalPath': data['original_path'],
+      });
+    }
+
+    final nodeRemove = RegExp(
+      r'^/tours/(\d+)/nodes/(\d+)/remove$',
+    ).firstMatch(path);
+    if (nodeRemove != null) {
+      return _call('manageStoreTour', {
+        'action': 'removeNode',
+        'tourId': int.parse(nodeRemove.group(1)!),
+        'nodeId': int.parse(nodeRemove.group(2)!),
+      });
+    }
+
     final connect = RegExp(r'^/tours/(\d+)/connections$').firstMatch(path);
     if (connect != null) {
       return _call('manageStoreTour', {
@@ -1471,6 +1503,7 @@ class LocalSpotFirebaseApi {
         'inspectedDirections': data['inspected_directions'],
         'acknowledgedMissRisk': data['acknowledged_miss_risk'],
         'acknowledgedManualInspection': data['acknowledged_manual_inspection'],
+        'unblurredConsent': data['unblurred_consent'],
       });
     }
 
@@ -1865,7 +1898,7 @@ class LocalSpotFirebaseApi {
       // In Worker mode, _userPayload performs the idempotent server bootstrap
       // before reading the profile. The legacy path still waits for its Auth
       // trigger to create the document.
-      if (!_workerBackendConfigured)
+      if (!_workerBackendConfigured) {
         try {
           final profile = _db.collection('users').doc(user.uid);
           for (var attempt = 0; attempt < 20; attempt++) {
@@ -1877,6 +1910,7 @@ class LocalSpotFirebaseApi {
             await Future<void>.delayed(const Duration(milliseconds: 300));
           }
         } catch (_) {}
+      }
       return {
         'token': user.uid,
         'user': await _userPayload(user, newAccountRole: '${data['role']}'),

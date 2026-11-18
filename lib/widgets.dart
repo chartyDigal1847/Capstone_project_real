@@ -1214,6 +1214,16 @@ class NetworkPhoto extends StatelessWidget {
   }
 }
 
+ImageProvider<Object> panoramaImageProvider(
+  String url, {
+  Map<String, String>? headers,
+}) {
+  final source = url.split('#').first;
+  final remote = source.startsWith('http://') || source.startsWith('https://');
+  if (!kIsWeb && !remote) return FileImage(File(source));
+  return NetworkImage(source, headers: headers);
+}
+
 class PrimaryButton extends StatelessWidget {
   const PrimaryButton(this.label, {super.key, required this.onPressed});
   final String label;

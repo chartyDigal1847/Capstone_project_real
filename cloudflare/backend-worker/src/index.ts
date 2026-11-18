@@ -7,7 +7,7 @@ import { handlePromotions } from "./promotions.js";
 import { handleListings } from "./listings.js";
 import { handleStores } from "./stores.js";
 import { handleTours } from "./tours.js";
-import { handleStorageAdmin } from "./storage_admin.js";
+import { handleStorageAdmin, handleStorageAvailability } from "./storage_admin.js";
 import { handleStorageOrphanDelete } from "./storage_orphans.js";
 import { handleStorageReconciliation } from "./storage_reconciliation.js";
 import { runExpiredMediaCleanup } from "./media_expiry_cleanup.js";
@@ -346,6 +346,7 @@ export default {
       if (url.pathname === "/api/v1/tours/manage") return await handleTours(request, env, principal);
       if (url.pathname === "/api/v1/admin/storage/orphans/delete") return await handleStorageOrphanDelete(request, env, principal);
       if (url.pathname === "/api/v1/admin/storage/reconcile") return await handleStorageReconciliation(request, env, principal);
+      if (url.pathname === "/api/v1/storage/availability") return await handleStorageAvailability(request, env);
       if (url.pathname === "/api/v1/media/reservations") return await reserveMediaUpload(request, env, principal);
       if (url.pathname === "/api/v1/media/finalize") return await finalizeMediaUpload(request, env, principal);
       if (url.pathname === "/api/v1/media/private-access") return await getPrivateMediaAccess(request, env, principal);

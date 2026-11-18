@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:cloud_firestore/cloud_firestore.dart' hide GeoPoint;
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -11,6 +12,7 @@ import 'package:panorama_privacy_prototype/main.dart' as panorama_privacy;
 import 'package:panorama_privacy_prototype/review_flow.dart' as panorama_review;
 import 'package:panorama_privacy_prototype/review_model.dart'
     as panorama_review_model;
+import 'package:panorama_viewer/panorama_viewer.dart';
 
 import '../firebase/media_upload.dart';
 import '../firebase/bootstrap.dart';
@@ -2021,14 +2023,45 @@ class _TourEditorPageState extends State<TourEditorPage> {
   panorama_review.PanoramaPrivacyReceipt? privacyReceipt;
   Map<String, dynamic>? verifiedPanoramaDerivative;
   int? pendingPanoramaNodeId;
+  int? replacePanoramaNodeId;
+  bool panoramaReplacementLinked = false;
+  String? replacedPanoramaOldPath;
   bool recoveringPanorama = false;
   bool uploadingPanorama = false;
   double panoramaProgress = 0;
-  var publishing = false;
   var creatingTour = false;
-  static const _panoramaR2CutoverReady = false;
+  var _panoramaR2CutoverReady = false;
+  var _checkedPanoramaR2Availability = false;
+  var _checkingPanoramaR2Availability = false;
   bool get _panoramaUploadReady =>
       _panoramaR2CutoverReady || localPanoramaE2EEnabled;
+
+  Future<void> _refreshPanoramaR2Availability() async {
+    final app = AppScope.of(context);
+    if (!app.apiOnline || localPanoramaE2EEnabled) return;
+    setState(() => _checkingPanoramaR2Availability = true);
+    var available = false;
+    try {
+      available = await app.api.getStorageAvailability();
+    } catch (_) {
+      available = false;
+    }
+    if (!mounted) return;
+    setState(() {
+      _panoramaR2CutoverReady = available;
+      _checkingPanoramaR2Availability = false;
+    });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_checkedPanoramaR2Availability) return;
+    _checkedPanoramaR2Availability = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (mounted) await _refreshPanoramaR2Availability();
+    });
+  }
 
   static const samples = [
     (
@@ -2052,7 +2085,30 @@ class _TourEditorPageState extends State<TourEditorPage> {
     super.dispose();
   }
 
-  Future<void> _pickPanorama() async {
+  Future<void> _pickPanorama({int? replaceNodeId, StoreTour? tour}) async {
+    if (replaceNodeId != null && tour?.status == TourStatus.published) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder:
+            (dialogContext) => AlertDialog(
+              title: const Text('Edit published tour?'),
+              content: const Text(
+                'Changing this panorama briefly returns the tour to draft. It will publish automatically after the new panorama is verified.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext, false),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(dialogContext, true),
+                  child: const Text('Continue'),
+                ),
+              ],
+            ),
+      );
+      if (confirmed != true || !mounted) return;
+    }
     try {
       final file = await ImagePicker().pickImage(source: ImageSource.gallery);
       if (file == null || !mounted) return;
@@ -2061,7 +2117,7 @@ class _TourEditorPageState extends State<TourEditorPage> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
-              'Panorama privacy processing currently supports JPEG files only.',
+              'Panorama uploads currently support JPEG files only.',
             ),
           ),
         );
@@ -2087,6 +2143,11 @@ class _TourEditorPageState extends State<TourEditorPage> {
         panoramaAssetId = MediaUpload.createAssetId();
         uploadedOriginalPath = null;
         privacyReceipt = null;
+        verifiedPanoramaDerivative = null;
+        pendingPanoramaNodeId = null;
+        replacePanoramaNodeId = replaceNodeId;
+        panoramaReplacementLinked = false;
+        replacedPanoramaOldPath = null;
         panoramaProgress = 0;
         image.text = file.name;
       });
@@ -2126,22 +2187,55 @@ class _TourEditorPageState extends State<TourEditorPage> {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Text(
-          'Local processing and owner attestation recorded. Secure upload remains disabled until initial R2 reconciliation is completed.',
+          'Face blur is prepared. You can upload it or use the original panorama.',
         ),
       ),
     );
+  }
+
+  void _useOriginalPanorama() {
+    if (uploadingPanorama) return;
+    setState(() {
+      privacyReceipt = null;
+      verifiedPanoramaDerivative = null;
+      pendingPanoramaNodeId = null;
+      panoramaProgress = 0;
+    });
   }
 
   Future<void> _uploadAndAddOnlinePanorama(StoreTour tour) async {
     final receipt = privacyReceipt;
     final selected = selectedPanorama;
     final assetId = panoramaAssetId;
-    if (!_panoramaUploadReady ||
-        receipt == null ||
-        selected == null ||
-        assetId == null) {
+    if (!_panoramaUploadReady || selected == null || assetId == null) {
       return;
     }
+    if (tour.status == TourStatus.published && replacePanoramaNodeId == null) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder:
+            (dialogContext) => AlertDialog(
+              title: const Text('Update the live tour?'),
+              content: const Text(
+                'The tour briefly returns to draft while this viewpoint uploads, then publishes automatically when ready.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext, false),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(dialogContext, true),
+                  child: const Text('Continue'),
+                ),
+              ],
+            ),
+      );
+      if (confirmed != true || !mounted) return;
+    }
+    final derivativePath = receipt?.derivativePath ?? selected.path;
+    final processingVersion =
+        receipt?.processingVersion ?? 'localspot-panorama-original-v1';
     final app = AppScope.of(context);
     setState(() {
       uploadingPanorama = true;
@@ -2161,8 +2255,29 @@ class _TourEditorPageState extends State<TourEditorPage> {
         if (!mounted) return;
         setState(() => uploadedOriginalPath = originalPath);
       }
-      var nodeId = pendingPanoramaNodeId;
-      if (nodeId == null) {
+      var nodeId = replacePanoramaNodeId ?? pendingPanoramaNodeId;
+      if (replacePanoramaNodeId != null) {
+        nodeId = replacePanoramaNodeId;
+        if (!panoramaReplacementLinked) {
+          final currentNode = tour.nodes.firstWhere(
+            (item) => item.id == replacePanoramaNodeId,
+          );
+          final oldPath = currentNode.originalStoragePath;
+          if (oldPath == null) {
+            throw StateError(
+              'This viewpoint has no stored panorama to replace.',
+            );
+          }
+          final response = await app.replaceTourNodePanorama(
+            tour,
+            currentNode,
+            originalPath,
+          );
+          replacedPanoramaOldPath =
+              response['replacedOriginalPath'] as String? ?? oldPath;
+          panoramaReplacementLinked = true;
+        }
+      } else if (nodeId == null) {
         final existing =
             tour.nodes
                 .where((node) => node.originalStoragePath == originalPath)
@@ -2191,30 +2306,63 @@ class _TourEditorPageState extends State<TourEditorPage> {
         }
         pendingPanoramaNodeId = nodeId;
       }
+      final resolvedNodeId = nodeId;
+      if (resolvedNodeId == null) {
+        throw StateError('The viewpoint could not be identified for upload.');
+      }
 
       var derivative = verifiedPanoramaDerivative;
       if (derivative == null ||
-          derivative['sha256'] != receipt.derivativeSha256) {
+          (receipt != null &&
+              derivative['sha256'] != receipt.derivativeSha256)) {
+        final digest =
+            receipt?.derivativeSha256 ??
+            (await sha256.bind(File(derivativePath).openRead()).first)
+                .toString();
         derivative = await MediaUpload.uploadPanoramaDerivative(
-          File(receipt.derivativePath),
+          File(derivativePath),
           tourId: tour.id,
-          nodeId: nodeId,
+          nodeId: resolvedNodeId,
           assetId: assetId,
-          derivativeSha256: receipt.derivativeSha256,
-          processingVersion: receipt.processingVersion,
+          derivativeSha256: digest,
+          processingVersion: processingVersion,
           onProgress: (value) {
             if (mounted) setState(() => panoramaProgress = .35 + value * .5);
           },
         );
         verifiedPanoramaDerivative = derivative;
       }
-      await app.api.post('/tours/${tour.id}/nodes/$nodeId/review', {
-        'derivative_sha256': receipt.derivativeSha256,
-        'processing_version': receipt.processingVersion,
-        'inspected_directions': receipt.inspectedDirections.toList()..sort(),
-        'acknowledged_miss_risk': receipt.acknowledgedMissRisk,
-        'acknowledged_manual_inspection': receipt.acknowledgedManualInspection,
-      });
+      if (receipt != null) {
+        await app.api.post('/tours/${tour.id}/nodes/$resolvedNodeId/review', {
+          'derivative_sha256': receipt.derivativeSha256,
+          'processing_version': receipt.processingVersion,
+          'inspected_directions': receipt.inspectedDirections.toList()..sort(),
+          'acknowledged_miss_risk': receipt.acknowledgedMissRisk,
+          'acknowledged_manual_inspection':
+              receipt.acknowledgedManualInspection,
+          'unblurred_consent': false,
+        });
+      }
+      app.markOnlineTourNodeVerified(
+        tour,
+        resolvedNodeId,
+        unblurred: receipt == null,
+      );
+      final publicationError = await app.publishTour(tour);
+      if (publicationError != null) {
+        throw StateError(
+          'Panorama uploaded, but publishing failed: $publicationError',
+        );
+      }
+      final oldPath = replacedPanoramaOldPath;
+      if (oldPath != null && oldPath != originalPath) {
+        try {
+          await app.api.deleteMediaAsset(oldPath.split('/').last);
+        } catch (_) {
+          // The active viewpoint is already replaced; quota reconciliation can
+          // safely remove an unlinked old object if cleanup is temporarily down.
+        }
+      }
       if (!mounted) return;
       setState(() {
         selectedPanorama = null;
@@ -2223,12 +2371,17 @@ class _TourEditorPageState extends State<TourEditorPage> {
         privacyReceipt = null;
         verifiedPanoramaDerivative = null;
         pendingPanoramaNodeId = null;
+        replacePanoramaNodeId = null;
+        panoramaReplacementLinked = false;
+        replacedPanoramaOldPath = null;
         panoramaProgress = 0;
       });
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text(
-            'Derivative independently verified, quota finalized, and owner attestation recorded.',
+            receipt == null
+                ? 'Panorama uploaded. The tour is now live for customers.'
+                : 'Blurred panorama uploaded. The tour is now live for customers.',
           ),
         ),
       );
@@ -2306,6 +2459,74 @@ class _TourEditorPageState extends State<TourEditorPage> {
       );
     } finally {
       if (mounted) setState(() => recoveringPanorama = false);
+    }
+  }
+
+  Future<void> _removeTourPanorama(StoreTour tour, TourNode node) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder:
+          (dialogContext) => AlertDialog(
+            title: const Text('Remove this viewpoint?'),
+            content: Text(
+              tour.status == TourStatus.published
+                  ? 'This removes “${node.title}” and its panorama. The tour will publish automatically again if another viewpoint remains.'
+                  : 'This removes “${node.title}” and its stored panorama from the tour.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton.tonal(
+                onPressed: () => Navigator.pop(dialogContext, true),
+                child: const Text('Remove viewpoint'),
+              ),
+            ],
+          ),
+    );
+    if (confirmed != true || !mounted) return;
+    final app = AppScope.of(context);
+    setState(() => uploadingPanorama = true);
+    var mediaCleanupPending = false;
+    try {
+      final response = await app.removeTourNodePanorama(tour, node);
+      final oldPath = response['removedOriginalPath'];
+      if (oldPath is String && oldPath.isNotEmpty) {
+        try {
+          await app.api.deleteMediaAsset(oldPath.split('/').last);
+        } catch (_) {
+          mediaCleanupPending = true;
+        }
+      }
+      String? publicationError;
+      final updatedTour = app.draftOrPublishedTour(tour.storeId);
+      if (updatedTour != null && updatedTour.nodes.isNotEmpty) {
+        publicationError = await app.publishTour(updatedTour);
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              publicationError != null
+                  ? 'Viewpoint removed. The tour is saved as a draft and could not be published: $publicationError'
+                  : mediaCleanupPending
+                  ? 'Viewpoint removed and tour updated. Storage cleanup is temporarily pending.'
+                  : updatedTour != null && updatedTour.nodes.isNotEmpty
+                  ? 'Viewpoint removed. The updated tour is live for customers.'
+                  : 'Viewpoint removed. Add a panorama to publish the tour again.',
+            ),
+          ),
+        );
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not remove viewpoint: $error')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => uploadingPanorama = false);
     }
   }
 
@@ -2442,19 +2663,25 @@ class _TourEditorPageState extends State<TourEditorPage> {
                           ),
                           const SizedBox(height: 6),
                           StatusChip(
-                            n.canPublish && !app.apiOnline
-                                ? 'Privacy ready'
+                            n.publishedWithoutFaceBlur
+                                ? 'Unblurred · owner consent'
+                                : n.canPublish && !app.apiOnline
+                                ? 'Owner review complete'
                                 : app.apiOnline
-                                ? n.originalStoragePath == null
-                                    ? 'Privacy not verified'
-                                    : 'Private original · server processing unavailable'
+                                ? n.ownerReviewed
+                                    ? 'Panorama reviewed'
+                                    : n.originalStoragePath == null
+                                    ? 'Choose a panorama'
+                                    : 'Awaiting owner choice'
                                 : n.privacyStatus == PrivacyStatus.failed
                                 ? 'Privacy failed · original stays private'
                                 : n.privacyStatus == PrivacyStatus.processing
                                 ? 'Processing'
-                                : 'Needs privacy review',
+                                : 'Choose blur option',
                             color:
-                                n.canPublish && !app.apiOnline
+                                n.publishedWithoutFaceBlur
+                                    ? champagne
+                                    : n.canPublish && !app.apiOnline
                                     ? leaf
                                     : champagne,
                           ),
@@ -2472,10 +2699,21 @@ class _TourEditorPageState extends State<TourEditorPage> {
                               ),
                             ),
                           const SizedBox(height: 8),
-                          if (n.privacyStatus == PrivacyStatus.failed ||
-                              n.image.trim().isEmpty)
+                          if (n.privacyStatus == PrivacyStatus.failed)
                             const Text(
                               'No public preview. Failed processing never publishes the original.',
+                              style: TextStyle(color: taupe, fontSize: 11),
+                            )
+                          else if (app.apiOnline &&
+                              n.privacyStatus == PrivacyStatus.ready &&
+                              n.image.trim().isEmpty)
+                            const Text(
+                              'Verified in R2 · ready to publish',
+                              style: TextStyle(color: taupe, fontSize: 11),
+                            )
+                          else if (n.image.trim().isEmpty)
+                            const Text(
+                              'Choose a panorama to create a preview.',
                               style: TextStyle(color: taupe, fontSize: 11),
                             )
                           else
@@ -2494,11 +2732,12 @@ class _TourEditorPageState extends State<TourEditorPage> {
                             },
                             child: const Text('Process'),
                           )
-                        else if (app.apiOnline)
+                        else if (app.apiOnline &&
+                            n.privacyStatus != PrivacyStatus.ready)
                           const Padding(
                             padding: EdgeInsets.symmetric(horizontal: 6),
                             child: Text(
-                              'Privacy worker pending',
+                              'Waiting for verified upload',
                               style: TextStyle(color: taupe, fontSize: 10),
                             ),
                           ),
@@ -2536,6 +2775,25 @@ class _TourEditorPageState extends State<TourEditorPage> {
                           ),
                         ),
                         if (app.apiOnline && n.originalStoragePath != null) ...[
+                          TextButton.icon(
+                            onPressed:
+                                uploadingPanorama
+                                    ? null
+                                    : () => _pickPanorama(
+                                      replaceNodeId: n.id,
+                                      tour: tour,
+                                    ),
+                            icon: const Icon(Icons.swap_horiz),
+                            label: const Text('Change panorama'),
+                          ),
+                          TextButton.icon(
+                            onPressed:
+                                uploadingPanorama || app.writeBusy
+                                    ? null
+                                    : () => _removeTourPanorama(tour, n),
+                            icon: const Icon(Icons.delete_outline),
+                            label: const Text('Remove viewpoint'),
+                          ),
                           TextButton(
                             onPressed:
                                 () => _showPrivatePanorama(
@@ -2607,7 +2865,7 @@ class _TourEditorPageState extends State<TourEditorPage> {
                   const Padding(
                     padding: EdgeInsets.only(top: 6),
                     child: Text(
-                      'Select a JPEG panorama, run on-device privacy processing, and complete all 48 owner-review directions. Upload and publication stay disabled until secure backend verification and R2 reconciliation are ready.',
+                      'Choose a full 360° JPEG panorama (2:1 aspect ratio). Preview it here, then select Detect faces and blur to prepare the reviewed version required before online publishing. Standard photos and partial panoramas are not supported.',
                       style: TextStyle(color: taupe, fontSize: 11),
                     ),
                   ),
@@ -2641,34 +2899,78 @@ class _TourEditorPageState extends State<TourEditorPage> {
                   const SizedBox(height: 12),
                 ],
                 OutlinedButton.icon(
-                  onPressed: uploadingPanorama ? null : _pickPanorama,
+                  onPressed:
+                      uploadingPanorama
+                          ? null
+                          : () => _pickPanorama(
+                            replaceNodeId: replacePanoramaNodeId,
+                            tour: tour,
+                          ),
                   icon: const Icon(Icons.photo_outlined, size: 18),
                   label: Text(
                     selectedPanorama == null
-                        ? 'Choose panorama file'
+                        ? 'Choose 360° panorama (JPEG)'
                         : 'Choose another file',
                   ),
                 ),
                 if (selectedPanorama != null) ...[
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 12),
+                  Text(
+                    '360° preview',
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                  const SizedBox(height: 6),
+                  SizedBox(
+                    height: 220,
+                    width: double.infinity,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(14),
+                      child: PanoramaViewer(
+                        key: ValueKey(
+                          'tour-panorama-${selectedPanorama!.path}',
+                        ),
+                        child: Image.file(
+                          File(selectedPanorama!.path),
+                          fit: BoxFit.cover,
+                          errorBuilder:
+                              (context, error, stackTrace) => const Center(
+                                child: Text(
+                                  'The selected panorama preview is unavailable.',
+                                ),
+                              ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'Drag to look around. Previewing does not change or upload the original.',
+                    style: TextStyle(color: taupe, fontSize: 12),
+                  ),
+                  const SizedBox(height: 10),
                   OutlinedButton.icon(
                     onPressed:
                         uploadingPanorama ? null : _processAndReviewPanorama,
-                    icon: const Icon(Icons.shield_outlined),
+                    icon: const Icon(Icons.face_retouching_natural_outlined),
                     label: Text(
                       privacyReceipt == null
-                          ? 'Process and review 360° panorama'
-                          : 'Reprocess and review panorama',
+                          ? 'Optional: detect faces and blur'
+                          : 'Review or update face blur',
                     ),
                   ),
                   if (privacyReceipt != null)
-                    const Padding(
-                      padding: EdgeInsets.only(top: 6),
-                      child: Text(
-                        'On-device review recorded for the current derivative. This local receipt is not backend verification and does not authorize publication.',
-                        style: TextStyle(color: taupe, fontSize: 11),
-                      ),
+                    TextButton.icon(
+                      onPressed:
+                          uploadingPanorama ? null : _useOriginalPanorama,
+                      icon: const Icon(Icons.visibility_outlined),
+                      label: const Text('Use original without blur'),
                     ),
+                  Text(
+                    privacyReceipt == null
+                        ? 'Ready to upload without blur. People may be identifiable in the public tour.'
+                        : 'Face blur is applied. Review the result before uploading.',
+                    style: const TextStyle(color: taupe, fontSize: 11),
+                  ),
                 ],
                 if (uploadingPanorama) ...[
                   const SizedBox(height: 10),
@@ -2699,7 +3001,7 @@ class _TourEditorPageState extends State<TourEditorPage> {
                   ),
                 if (app.apiOnline && uploadedOriginalPath != null)
                   const Text(
-                    'Validated upload recovered. Add the viewpoint to finish saving it.',
+                    'Validated upload recovered. Upload it to finish saving the viewpoint.',
                     style: TextStyle(color: taupe, fontSize: 11),
                   ),
               ],
@@ -2712,7 +3014,8 @@ class _TourEditorPageState extends State<TourEditorPage> {
                     ? (_panoramaUploadReady &&
                             !uploadingPanorama &&
                             !app.writeBusy &&
-                            privacyReceipt != null
+                            selectedPanorama != null &&
+                            panoramaAssetId != null
                         ? () => _uploadAndAddOnlinePanorama(tour)
                         : null)
                     : app.writeBusy || uploadingPanorama
@@ -2800,46 +3103,52 @@ class _TourEditorPageState extends State<TourEditorPage> {
             child: Text(
               app.apiOnline
                   ? privacyReceipt == null
-                      ? 'Complete on-device processing and 360° review first'
-                      : localPanoramaE2EEnabled
-                      ? 'Upload & add panorama to local R2 simulation'
-                      : 'Upload & add panorama (disabled until R2 reconciliation)'
+                      ? replacePanoramaNodeId == null
+                          ? 'Upload'
+                          : 'Replace panorama'
+                      : replacePanoramaNodeId == null
+                      ? 'Upload with face blur'
+                      : 'Replace with blurred panorama'
                   : uploadingPanorama
                   ? 'Uploading panorama…'
                   : 'Add demo viewpoint',
             ),
           ),
-          const SizedBox(height: 8),
-          PrimaryButton(
-            'Publish tour',
-            onPressed:
-                (app.apiOnline && !localPanoramaE2EEnabled) ||
-                        tour.nodes.length < 2 ||
-                        publishing ||
-                        app.writeBusy
-                    ? null
-                    : () async {
-                      setState(() => publishing = true);
-                      final error = await app.publishTour(tour);
-                      setState(() => publishing = false);
-                      if (error != null && context.mounted) {
-                        ScaffoldMessenger.of(
-                          context,
-                        ).showSnackBar(SnackBar(content: Text(error)));
-                      }
-                    },
-          ),
           Padding(
             padding: EdgeInsets.only(top: 12),
             child: InfoBanner(
               app.apiOnline
-                  ? localPanoramaE2EEnabled
-                      ? 'Local test only: panoramas use the Firebase emulators and Wrangler local R2 simulation. Nothing is uploaded to production.'
-                      : 'Original panoramas upload to private storage. Online upload/publication stay disabled until production R2 reconciliation and deployment readiness are approved.'
-                  : 'Demo originals stay private. Demo processing is only a UI preview; do not publish failed viewpoints. Production publication requires a server-sanitized derivative and owner review.',
+                  ? _panoramaUploadReady
+                      ? tour.status == TourStatus.published
+                          ? 'Live for customers. Uploading, replacing, or removing a viewpoint publishes the updated tour automatically. The first viewpoint is the starting view.'
+                          : 'Upload a panorama to publish automatically. The first viewpoint is the starting view; face blur is optional.'
+                      : 'Face blur is optional. Unblurred panoramas may show identifiable people. Online upload and publishing stay disabled until R2 storage reconciliation is complete.'
+                  : 'Demo processing is only a preview. Face blur is optional; unblurred panoramas may show identifiable people. Online publishing requires verified storage.',
               icon: Icons.privacy_tip_outlined,
             ),
           ),
+          if (app.apiOnline && !localPanoramaE2EEnabled)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed:
+                    _checkingPanoramaR2Availability
+                        ? null
+                        : _refreshPanoramaR2Availability,
+                icon:
+                    _checkingPanoramaR2Availability
+                        ? const SizedBox.square(
+                          dimension: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                        : const Icon(Icons.refresh),
+                label: Text(
+                  _panoramaUploadReady
+                      ? 'Refresh storage status'
+                      : 'Check storage availability',
+                ),
+              ),
+            ),
         ],
       ],
     );
@@ -3495,9 +3804,9 @@ class _AdminPageState extends State<AdminPage> {
                               StoreStatus.approved,
                             );
                             if (error != null && context.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(content: Text(error)),
-                              );
+                              ScaffoldMessenger.of(
+                                context,
+                              ).showSnackBar(SnackBar(content: Text(error)));
                             }
                           },
                           child: const Text('Approve'),
@@ -3509,9 +3818,9 @@ class _AdminPageState extends State<AdminPage> {
                               StoreStatus.rejected,
                             );
                             if (error != null && context.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(content: Text(error)),
-                              );
+                              ScaffoldMessenger.of(
+                                context,
+                              ).showSnackBar(SnackBar(content: Text(error)));
                             }
                           },
                           child: const Text('Decline'),
@@ -3526,9 +3835,9 @@ class _AdminPageState extends State<AdminPage> {
                           StoreStatus.suspended,
                         );
                         if (error != null && context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text(error)),
-                          );
+                          ScaffoldMessenger.of(
+                            context,
+                          ).showSnackBar(SnackBar(content: Text(error)));
                         }
                       },
                       child: const Text('Suspend'),

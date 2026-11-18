@@ -32,6 +32,7 @@ class MainActivity : FlutterActivity() {
     private val channelName = "localspot/panorama_privacy_prototype"
     private val cancelled = AtomicBoolean(false)
     @Volatile private var progressSink: EventChannel.EventSink? = null
+    @Volatile private var processingStage = "starting"
 
     companion object {
         init { System.loadLibrary("pano_stream") }
@@ -69,6 +70,7 @@ class MainActivity : FlutterActivity() {
                 cancelled.set(false)
                 executor.execute {
                     try {
+                        processingStage = if (call.method == "process") "preparing panorama" else "applying manual blur"
                         val response = if (call.method == "process") processPanorama(path)
                             else applyMasks(path, masks)
                         check(!cancelled.get()) { "Processing was cancelled." }
@@ -76,7 +78,17 @@ class MainActivity : FlutterActivity() {
                     } catch (error: Throwable) {
                         android.util.Log.e("PanoPrivacy", "Local processing failed", error)
                         val code = if (cancelled.get()) "cancelled" else "processing-failed"
-                        runOnUiThread { result.error(code, error.message ?: "Panorama processing failed.", null) }
+                        val rootCause = generateSequence(error) { it.cause }.last()
+                        val detail = error.message?.takeIf { it.isNotBlank() }
+                            ?: rootCause.message?.takeIf { it.isNotBlank() }
+                            ?: rootCause.javaClass.simpleName
+                        val message = "$processingStage failed (${error.javaClass.simpleName}): $detail"
+                        runOnUiThread {
+                            result.error(code, message, mapOf(
+                                "exceptionType" to error.javaClass.name,
+                                "rootCauseType" to rootCause.javaClass.name,
+                            ))
+                        }
                     }
                 }
             }
@@ -112,14 +124,21 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun processPanorama(path: String): Map<String, Any> {
+        processingStage = "opening panorama"
         val uri = sourceUri(path)
         val started = System.nanoTime()
+        processingStage = "decoding panorama for detection"
         val detectionImage = decodeForDetection(uri)
-        require(detectionImage.width >= 2 * detectionImage.height) { "Select a full equirectangular panorama (2:1 aspect ratio)." }
+        processingStage = "checking panorama dimensions"
+        require(detectionImage.width >= 2 * detectionImage.height) {
+            "Choose a full 360° equirectangular panorama with a 2:1 aspect ratio. Standard photos and partial panoramas are not supported."
+        }
+        processingStage = "loading face detector"
         val faces = FaceDetection.getClient(
             FaceDetectorOptions.Builder().setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_ACCURATE)
                 .setMinFaceSize(0.025f).build()
         )
+        processingStage = "loading person detector"
         val people = ObjectDetector.createFromOptions(
             this,
             ObjectDetectorOptions.builder().setBaseOptions(
@@ -133,6 +152,7 @@ class MainActivity : FlutterActivity() {
             // Four azimuths at the equator and +/-45°, plus both poles. Each 100° view
             // overlaps its neighbours; the pole views and shifted rings cover the seams.
             for ((index, viewCenter) in PanoramaProjection.views.withIndex()) {
+                processingStage = "detecting people in view ${index + 1} of ${PanoramaProjection.views.size}"
                 check(!cancelled.get()) { "Processing was cancelled." }
                 val yaw = viewCenter.yawDegrees
                 val pitch = viewCenter.pitchDegrees
@@ -161,7 +181,9 @@ class MainActivity : FlutterActivity() {
             people.close()
             detectionImage.recycle()
         }
+        processingStage = "combining detected privacy regions"
         val merged = mergeRegions(regions)
+        processingStage = "writing the full-resolution blurred image"
         val output = writeDerivative(uri, merged.map { SphericalRegion(it.x, it.y, it.w, it.h) })
         return output + mapOf(
             "faceDetections" to faceCount,
@@ -172,6 +194,7 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun applyMasks(path: String, masks: List<Map<String, Double>>): Map<String, Any> {
+        processingStage = "checking manual blur regions"
         check(!cancelled.get()) { "Processing was cancelled." }
         require(masks.isNotEmpty()) { "Add a manual blur region before applying corrections." }
         val uri = sourceUri(path)
@@ -183,14 +206,16 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun writeDerivative(uri: Uri, regions: List<SphericalRegion>): Map<String, Any> {
+        processingStage = "opening panorama source"
         val (sourceFile, copiedSource) = materializeSource(uri)
         val outFile = File(cacheDir, "panorama-private-derivative-${System.nanoTime()}.jpg")
         var previewFile: File? = null
         try {
+            processingStage = "reading panorama dimensions and orientation"
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
             require(bounds.outWidth > 0 && bounds.outHeight > 0 && bounds.outWidth >= bounds.outHeight * 2) {
-                "The source must be a supported 2:1 equirectangular panorama."
+                "Choose a full 360° JPEG panorama with a 2:1 aspect ratio. Standard photos and partial panoramas are not supported."
             }
             // Progressive JPEG decoders can spill coefficient arrays to cache.
             // Reserve a conservative six bytes per source pixel plus output/slop.
@@ -211,11 +236,13 @@ class MainActivity : FlutterActivity() {
                 flatMasks[index * 4 + 2] = region.w
                 flatMasks[index * 4 + 3] = region.h
             }
+            processingStage = "encoding the full-resolution JPEG"
             check(nativeWriteJpeg(sourceFile.absolutePath, outFile.absolutePath, cacheDir.absolutePath,
                 flatMasks, bounds.outWidth, bounds.outHeight)) {
                 if (cancelled.get()) "Processing was cancelled." else "The streaming JPEG encoder did not complete."
             }
             check(outFile.isFile && outFile.length() > 0L) { "JPEG derivative output is empty." }
+            processingStage = "creating a preview image"
             if (isDebuggableBuild()) logMemory("before-preview-decode")
             val preview = decodeSampled(Uri.fromFile(outFile), 2048)
             if (isDebuggableBuild()) logMemory("preview-decoded-${preview.width}x${preview.height}")

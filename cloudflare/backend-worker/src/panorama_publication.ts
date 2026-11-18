@@ -10,7 +10,24 @@ function currentDerivative(node: Record<string, unknown>, ownerUid: string, tour
   const derivative = node.verified_derivative as Record<string, unknown> | undefined;
   const review = node.owner_review as Record<string, unknown> | undefined;
   if (node.owner_reviewed !== true || !derivative || derivative.status !== "verified" || derivative.accountingState !== "counted" || derivative.contentType !== "image/jpeg" || !Number.isSafeInteger(derivative.size) || Number(derivative.size) <= 0 || typeof derivative.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(derivative.sha256) || typeof derivative.revisionId !== "string" || !/^[a-f0-9]{32}$/.test(derivative.revisionId) || typeof derivative.reservationId !== "string" || derivative.objectKey !== `tours/derivatives/${ownerUid}/${tourId}/${Number(node.id)}/${derivative.revisionId}_${derivative.sha256}.jpg` || !(derivative.verifiedAt instanceof Date)) throw new ApiError(412, "Every viewpoint needs a current backend-verified derivative.");
-  if (!review || review.ownerUid !== ownerUid || review.derivativeSha256 !== derivative.sha256 || review.processingVersion !== derivative.processingVersion || typeof review.processingVersion !== "string" || review.acknowledgedMissRisk !== true || review.acknowledgedManualInspection !== true || review.directionCount !== 48 || review.recordType !== "owner-attestation-not-privacy-proof" || !Array.isArray(review.inspectedDirections) || review.inspectedDirections.length !== 48 || new Set(review.inspectedDirections).size !== 48 || review.inspectedDirections.some((value, index) => value !== index) || !(review.reviewedAt instanceof Date)) throw new ApiError(412, "Every viewpoint needs the current owner's complete 48-direction attestation.");
+  const unblurredConsent = review?.recordType === "owner-consented-unblurred" &&
+    review.ownerUid === ownerUid && review.derivativeSha256 === derivative.sha256 &&
+    derivative.processingVersion === "localspot-panorama-original-v1" &&
+    review.processingVersion === derivative.processingVersion && review.unblurredConsent === true &&
+    review.acknowledgedMissRisk === true && review.acknowledgedManualInspection === false &&
+    review.directionCount === 0 && Array.isArray(review.inspectedDirections) &&
+    review.inspectedDirections.length === 0 && review.reviewedAt instanceof Date;
+  const completeReview = review?.recordType === "owner-attestation-not-privacy-proof" &&
+    review.ownerUid === ownerUid && review.derivativeSha256 === derivative.sha256 &&
+    review.processingVersion === derivative.processingVersion && typeof review.processingVersion === "string" &&
+    review.acknowledgedMissRisk === true && review.acknowledgedManualInspection === true &&
+    review.directionCount === 48 && Array.isArray(review.inspectedDirections) &&
+    review.inspectedDirections.length === 48 && new Set(review.inspectedDirections).size === 48 &&
+    review.inspectedDirections.some((value, index) => value !== index) === false &&
+    review.reviewedAt instanceof Date;
+  if (node.owner_reviewed !== true || (!unblurredConsent && !completeReview)) {
+    throw new ApiError(412, "Every viewpoint needs either a complete owner review or explicit consent to publish without face blur.");
+  }
   return derivative;
 }
 
@@ -40,7 +57,7 @@ export async function publishStoreTour(request: Request, env: Env, principal: Pr
   if (!Number.isSafeInteger(data.tourId) || Number(data.tourId) <= 0) throw new ApiError(400, "A valid tour ID is required.");
   const db = new FirestoreRest(env), uid = principal.uid, tourId = Number(data.tourId), initial = await requireTourStore(db, tourId);
   if (initial.tour.ownerUid !== uid || initial.store.ownerUid !== uid || initial.store.status !== "approved") throw new ApiError(403, "Only the authenticated store owner can publish this tour.");
-  if (!Array.isArray(initial.tour.nodes) || initial.tour.nodes.length < 2 || initial.tour.status !== "draft") throw new ApiError(412, "A draft tour with at least two reviewed viewpoints is required.");
+  if (!Array.isArray(initial.tour.nodes) || initial.tour.nodes.length < 1 || initial.tour.status !== "draft") throw new ApiError(412, "A draft tour with at least one reviewed viewpoint is required.");
   const nodes = initial.tour.nodes as Array<Record<string, unknown>>;
   const derivatives = nodes.map((node) => ({ node, derivative: currentDerivative(node, uid, tourId) }));
   const accounting = await Promise.all(derivatives.map(async ({ derivative }) => {

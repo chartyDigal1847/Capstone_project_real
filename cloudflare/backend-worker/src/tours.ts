@@ -54,6 +54,7 @@ export async function handleTours(request: Request, env: Env, principal: Princip
   const profile = documentData(await db.get(`users/${principal.uid}`));
   if (!profile) throw new ApiError(412, "Your account profile is not ready yet.");
   let newNodeTitle: string | undefined, newNodePath: string | undefined, panoramaMediaPath: string | undefined;
+  let editNodeId: number | undefined;
   if (action === "addNode") {
     if (typeof data.title !== "string" || !data.title.trim() || data.title.trim().length > 80) throw new ApiError(400, "Viewpoint title must be between 1 and 80 characters.");
     if (typeof data.originalPath !== "string" || !new RegExp(`^tours/originals/${principal.uid}/${Number(data.tourId)}/[A-Za-z0-9_-]+$`).test(data.originalPath)) throw new ApiError(400, "A private original uploaded to this tour is required.");
@@ -64,6 +65,17 @@ export async function handleTours(request: Request, env: Env, principal: Princip
     newNodePath = data.originalPath;
     panoramaMediaPath = `mediaAssets/${principal.uid}_${data.originalPath.split("/").at(-1)}`;
   }
+  if (action === "replaceNode" || action === "removeNode") {
+    if (!Number.isSafeInteger(data.nodeId) || Number(data.nodeId) <= 0) throw new ApiError(400, "A valid viewpoint ID is required.");
+    editNodeId = Number(data.nodeId);
+    if (action === "replaceNode") {
+      if (typeof data.originalPath !== "string" || !new RegExp(`^tours/originals/${principal.uid}/${Number(data.tourId)}/[A-Za-z0-9_-]+$`).test(data.originalPath)) throw new ApiError(400, "A private panorama uploaded to this tour is required.");
+      const original = await gatewayHead(env, data.originalPath);
+      if (!original || original.size <= 0 || original.size > 50 * 1024 * 1024 || !["image/jpeg", "image/png", "image/webp"].includes(original.contentType)) throw new ApiError(412, "The replacement panorama upload could not be verified.");
+      newNodePath = data.originalPath;
+      panoramaMediaPath = `mediaAssets/${principal.uid}_${newNodePath.split("/").at(-1)}`;
+    }
+  }
   return await db.runTransaction(async (tx) => {
     const matches = await tx.query("tours", [{ field: "numericId", op: "EQUAL", value: Number(data.tourId) }], 1);
     if (!matches.length) throw new ApiError(404, "Tour was not found.");
@@ -73,11 +85,42 @@ export async function handleTours(request: Request, env: Env, principal: Princip
     const stores = await tx.query("stores", [{ field: "numericId", op: "EQUAL", value: Number(tour.storeId) }], 1);
     if (!stores.length) throw new ApiError(404, "Store was not found.");
     const store = documentData(stores[0])!;
-    if (tour.status !== "draft") throw new ApiError(412, "Only draft tours can be edited.");
+    const nodeMediaEdit = action === "replaceNode" || action === "removeNode" || action === "addNode";
+    if (tour.status !== "draft" && !nodeMediaEdit) throw new ApiError(412, "Only draft tours can be edited.");
     if (store.status !== "approved" || Number(store.numericId) !== Number(tour.storeId)) throw new ApiError(412, "Only tours for approved stores can be edited.");
     if ((!profile || profile.role !== "admin") && (store.ownerUid !== principal.uid || tour.ownerUid !== principal.uid)) throw new ApiError(403, "Only the tour owner or an administrator can edit this draft.");
     if (!Array.isArray(tour.nodes) || tour.nodes.length > 40 || tour.nodes.some((node) => !node || typeof node !== "object")) throw new ApiError(412, "Tour draft structure is invalid.");
     const nodes = tour.nodes as Array<Record<string, unknown>>;
+    if (action === "replaceNode" || action === "removeNode") {
+      const nodeIndex = nodes.findIndex((node) => Number(node.id) === editNodeId);
+      if (nodeIndex < 0) throw new ApiError(404, "The selected viewpoint was not found.");
+      const currentNode = nodes[nodeIndex];
+      const oldOriginalPath = currentNode.original_path;
+      if (typeof oldOriginalPath !== "string" || !new RegExp(`^tours/originals/${principal.uid}/${Number(data.tourId)}/[A-Za-z0-9_-]+$`).test(oldOriginalPath)) throw new ApiError(412, "The current panorama is not linked to this owner account.");
+      const oldMediaPath = `mediaAssets/${principal.uid}_${oldOriginalPath.split("/").at(-1)}`;
+      const oldMedia = documentData(await tx.get(oldMediaPath));
+      if (!oldMedia || oldMedia.uid !== principal.uid || oldMedia.mediaType !== "panorama" || oldMedia.originalPath !== oldOriginalPath || Number(oldMedia.linkedTourId) !== Number(data.tourId)) throw new ApiError(412, "The current panorama storage record is not linked to this tour.");
+      const now = new Date();
+      if (action === "removeNode") {
+        const remaining = nodes.filter((_, index) => index !== nodeIndex);
+        for (const node of remaining) {
+          node.connections = (Array.isArray(node.connections) ? node.connections as number[] : []).filter((id) => Number(id) !== editNodeId);
+        }
+        tx.patch(oldMediaPath, { linkedTourId: null, unlinkedAt: now, updatedAt: now });
+        tx.patch(tourPath, { nodes: remaining, status: "draft", updatedAt: now });
+        return Response.json({ ...tourPayload({ ...tour, nodes: remaining, status: "draft" }), removedOriginalPath: oldOriginalPath });
+      }
+      const nextMedia = documentData(await tx.get(panoramaMediaPath!));
+      if (!nextMedia || nextMedia.uid !== principal.uid || nextMedia.mediaType !== "panorama" || nextMedia.status !== "awaiting-privacy-processing" || nextMedia.originalPath !== newNodePath || nextMedia.linkedTourId != null) throw new ApiError(412, "The replacement panorama is not available for this tour.");
+      const replacement = { ...currentNode };
+      delete replacement.verified_derivative;
+      delete replacement.owner_review;
+      nodes[nodeIndex] = { ...replacement, image: "", original_path: newNodePath!, privacy_status: "processing", owner_reviewed: false, published_without_face_blur: false, manual_blur: false, original_retained: true, blur_regions: [] };
+      tx.patch(oldMediaPath, { linkedTourId: null, unlinkedAt: now, updatedAt: now });
+      tx.patch(panoramaMediaPath!, { linkedTourId: Number(data.tourId), linkedAt: now, updatedAt: now });
+      tx.patch(tourPath, { nodes, status: "draft", updatedAt: now });
+      return Response.json({ ...tourPayload({ ...tour, nodes, status: "draft" }), replacedOriginalPath: oldOriginalPath });
+    }
     let panoramaMedia: Record<string, unknown> | null = null;
     if (action === "addNode") {
       const mediaDoc = await tx.get(panoramaMediaPath!);
@@ -95,8 +138,8 @@ export async function handleTours(request: Request, env: Env, principal: Princip
       }
       nodes.push(node);
       tx.patch(panoramaMediaPath!, { linkedTourId: Number(data.tourId), linkedAt: new Date(), updatedAt: new Date() });
-      tx.patch(tourPath, { nodes, updatedAt: new Date() });
-      return Response.json(tourPayload({ ...tour, nodes }));
+      tx.patch(tourPath, { nodes, status: "draft", updatedAt: new Date() });
+      return Response.json(tourPayload({ ...tour, nodes, status: "draft" }));
     }
     if (action === "connect") {
       const from = data.fromNodeId, to = data.toNodeId;

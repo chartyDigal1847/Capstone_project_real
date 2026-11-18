@@ -245,6 +245,9 @@ StoreTour tourFromJson(Map<String, dynamic> json) {
             PrivacyStatus.ready,
           ),
           ownerReviewed: node['owner_reviewed'] == true,
+          publishedWithoutFaceBlur:
+              (node['owner_review'] as Map?)?['recordType'] ==
+              'owner-consented-unblurred',
           manualBlur: node['manual_blur'] == true,
           originalRetained: node['original_retained'] == true,
           originalStoragePath: node['original_path'] as String?,

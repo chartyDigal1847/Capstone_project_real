@@ -816,7 +816,14 @@ class _PrototypeScreenState extends State<PrototypeScreen> {
             FilledButton.icon(
               onPressed: _working ? null : _choose,
               icon: const Icon(Icons.photo_library_outlined),
-              label: const Text('Choose a 2:1 panorama'),
+              label: const Text('Choose 360° panorama (JPEG)'),
+            ),
+          if (!widget.integratedMode)
+            const Padding(
+              padding: EdgeInsets.only(top: 8),
+              child: Text(
+                'Choose an original, full-resolution 360° JPEG panorama in equirectangular format (2:1 aspect ratio). Standard photos and partial panoramas are not supported.',
+              ),
             ),
           if (kDebugMode)
             OutlinedButton.icon(
@@ -888,6 +895,16 @@ class _PrototypeScreenState extends State<PrototypeScreen> {
             if (_outputWidth != null)
               Text(
                 'Derivative dimensions: $_outputWidth × $_outputHeight · ${_outputBytes ?? 0} bytes',
+              ),
+            if (_outputWidth != null && _outputWidth! < 2000)
+              Card(
+                color: Theme.of(context).colorScheme.tertiaryContainer,
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Text(
+                    'This panorama is only $_outputWidth pixels wide, so it may look soft when viewed up close. For a clearer tour, choose the original, full-resolution 2:1 JPEG panorama.',
+                  ),
+                ),
               ),
             const SizedBox(height: 14),
             KeyedSubtree(

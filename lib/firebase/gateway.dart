@@ -33,6 +33,8 @@ class LocalSpotGateway {
 
   Future<Map<String, dynamic>> getStorageQuota() => firebase.getStorageQuota();
 
+  Future<bool> getStorageAvailability() => firebase.getStorageAvailability();
+
   Future<void> requestStorageReconciliation() =>
       firebase.requestStorageReconciliation();
 

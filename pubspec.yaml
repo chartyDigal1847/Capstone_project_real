@@ -25,6 +25,8 @@ dependencies:
   firebase_ai: ^2.3.0
   panorama_privacy_prototype:
     path: prototypes/panorama_privacy_prototype
+  panorama_viewer: ^3.0.0
+  crypto: ^3.0.6
 dev_dependencies:
   flutter_test:
     sdk: flutter

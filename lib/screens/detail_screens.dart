@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:material_ui/material_ui.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:panorama_viewer/panorama_viewer.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../api.dart';
@@ -377,10 +378,7 @@ class StoreDetailPage extends StatelessWidget {
                 ),
               ),
               if (tour != null)
-                OutlinedButton(
-                  onPressed: onTour,
-                  child: const Text('Open 360° store tour'),
-                )
+                _TourPreviewCard(tour: tour, onOpen: onTour)
               else
                 const EmptyNote(
                   'No published store tour yet.',
@@ -549,7 +547,6 @@ class TourViewerPage extends StatefulWidget {
 
 class _TourViewerPageState extends State<TourViewerPage> {
   late int nodeId = widget.tour.nodes.first.id;
-  double pan = 0;
   String? _mediaUrl;
   Map<String, String>? _mediaHeaders;
   bool _loadingMedia = true;
@@ -568,7 +565,9 @@ class _TourViewerPageState extends State<TourViewerPage> {
   }
 
   Future<void> _loadCurrentMedia(int targetNodeId) async {
-    final node = widget.tour.nodes.firstWhere((item) => item.id == targetNodeId);
+    final node = widget.tour.nodes.firstWhere(
+      (item) => item.id == targetNodeId,
+    );
     final app = AppScope.of(context);
     if (!app.apiOnline) {
       if (mounted) {
@@ -586,7 +585,11 @@ class _TourViewerPageState extends State<TourViewerPage> {
       _loadingMedia = true;
     });
     try {
-      final result = await app.api.get('/tours/${widget.tour.id}/nodes/$targetNodeId/public-media') as Map;
+      final result =
+          await app.api.get(
+                '/tours/${widget.tour.id}/nodes/$targetNodeId/public-media',
+              )
+              as Map;
       if (!mounted || nodeId != targetNodeId) return;
       final url = result['url'];
       final token = result['token'];
@@ -599,13 +602,14 @@ class _TourViewerPageState extends State<TourViewerPage> {
         _loadingMedia = false;
       });
     } catch (_) {
-      if (mounted && nodeId == targetNodeId) setState(() => _loadingMedia = false);
+      if (mounted && nodeId == targetNodeId) {
+        setState(() => _loadingMedia = false);
+      }
     }
   }
 
   void _selectNode(int targetNodeId) {
     setState(() {
-      pan = 0;
       nodeId = targetNodeId;
     });
     _loadCurrentMedia(targetNodeId);
@@ -616,110 +620,388 @@ class _TourViewerPageState extends State<TourViewerPage> {
     final app = AppScope.of(context);
     final node = widget.tour.nodes.firstWhere((n) => n.id == nodeId);
     final displayUrl = app.apiOnline ? (_mediaUrl ?? '') : node.image;
+    final connections =
+        node.connections
+            .where((id) => widget.tour.nodes.any((item) => item.id == id))
+            .toList()
+          ..sort();
+    final previousId = connections.where((id) => id < node.id).lastOrNull;
+    final nextId = connections.where((id) => id > node.id).firstOrNull;
+    final leftTarget =
+        previousId ??
+        (nextId == null && connections.length > 1 ? connections.last : null);
+    final rightTarget =
+        nextId ??
+        (leftTarget == null && connections.isNotEmpty
+            ? connections.first
+            : null);
     return Column(
       children: [
         PageHeader(widget.tour.title, onBack: widget.onBack),
         Expanded(
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              LayoutBuilder(
-                builder: (context, constraints) {
-                  return GestureDetector(
-                    onHorizontalDragUpdate: (details) {
-                      setState(
-                        () =>
-                            pan = (pan + details.delta.dx).clamp(-220.0, 220.0),
-                      );
-                    },
-                    onHorizontalDragEnd: (details) {
-                      if (details.primaryVelocity == null ||
-                          node.connections.isEmpty) {
-                        return;
-                      }
-                      if (details.primaryVelocity!.abs() < 900) return;
-                      _selectNode(
-                        details.primaryVelocity! < 0
-                            ? node.connections.first
-                            : node.connections.last,
-                      );
-                    },
-                    child: ClipRect(
-                      child: Transform.translate(
-                        offset: Offset(pan, 0),
-                        child: OverflowBox(
-                          minWidth: constraints.maxWidth * 1.7,
-                          maxWidth: constraints.maxWidth * 1.7,
-                          minHeight: constraints.maxHeight,
-                          maxHeight: constraints.maxHeight,
-                          alignment: Alignment.center,
-                          child: NetworkPhoto(
-                            displayUrl,
-                            headers: _mediaHeaders,
-                            radius: 0,
-                            height: constraints.maxHeight,
-                            width: constraints.maxWidth * 1.7,
-                          ),
-                        ),
-                      ),
-                    ),
-                  );
-                },
-              ),
-              if (_loadingMedia)
-                const Center(child: CircularProgressIndicator())
-              else if (displayUrl.trim().isEmpty)
-                const Center(
-                  child: Padding(
-                    padding: EdgeInsets.all(24),
-                    child: EmptyNote(
-                      'This viewpoint has no public privacy-processed image. The original stays private.',
-                      icon: Icons.hide_image_outlined,
+          child: ClipRect(
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                ClipRect(
+                  child: ColoredBox(
+                    color: Colors.black,
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 220),
+                      child:
+                          displayUrl.trim().isEmpty
+                              ? const SizedBox.expand(
+                                key: ValueKey('empty-panorama'),
+                              )
+                              : PanoramaViewer(
+                                key: ValueKey('panorama-$nodeId-$displayUrl'),
+                                latitude: -10,
+                                zoom: .85,
+                                minZoom: .85,
+                                sensitivity: 1.0,
+                                maxZoom: 3.0,
+                                child: Image(
+                                  image: panoramaImageProvider(
+                                    displayUrl,
+                                    headers: _mediaHeaders,
+                                  ),
+                                  fit: BoxFit.cover,
+                                ),
+                              ),
                     ),
                   ),
                 ),
-              Positioned(
-                left: 16,
-                right: 16,
-                bottom: 24,
-                child: SoftCard(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        node.title,
-                        style: const TextStyle(fontWeight: FontWeight.w700),
+                if (_loadingMedia)
+                  const Center(child: CircularProgressIndicator())
+                else if (displayUrl.trim().isEmpty)
+                  const Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(24),
+                      child: EmptyNote(
+                        'This viewpoint has no published panorama yet.',
+                        icon: Icons.hide_image_outlined,
                       ),
-                      const Text(
-                        'Drag to look around this viewpoint · use arrows to walk the connected tour',
-                        style: TextStyle(fontSize: 11, color: taupe),
+                    ),
+                  ),
+                if (leftTarget != null)
+                  Positioned(
+                    left: 14,
+                    top: 0,
+                    bottom: 0,
+                    child: Center(
+                      child: _TourDirectionButton(
+                        icon: Icons.arrow_back_rounded,
+                        destination:
+                            widget.tour.nodes
+                                .firstWhere((item) => item.id == leftTarget)
+                                .title,
+                        onPressed: () => _selectNode(leftTarget),
                       ),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
+                    ),
+                  ),
+                if (rightTarget != null)
+                  Positioned(
+                    right: 14,
+                    top: 0,
+                    bottom: 0,
+                    child: Center(
+                      child: _TourDirectionButton(
+                        icon: Icons.arrow_forward_rounded,
+                        destination:
+                            widget.tour.nodes
+                                .firstWhere((item) => item.id == rightTarget)
+                                .title,
+                        onPressed: () => _selectNode(rightTarget),
+                      ),
+                    ),
+                  ),
+                Positioned(
+                  top: 14,
+                  left: 14,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: .55),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: const Padding(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
                         children: [
-                          for (final id in node.connections)
-                            OutlinedButton(
-                              onPressed: () => _selectNode(id),
-                              child: Text(
-                                widget.tour.nodes
-                                    .firstWhere((n) => n.id == id)
-                                    .title,
-                              ),
-                            ),
+                          Icon(Icons.threesixty, color: Colors.white, size: 18),
+                          SizedBox(width: 6),
+                          Text('360°', style: TextStyle(color: Colors.white)),
                         ],
                       ),
-                    ],
+                    ),
                   ),
                 ),
-              ),
-            ],
+                Positioned(
+                  left: 16,
+                  right: 16,
+                  bottom: 24,
+                  child: SoftCard(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          node.title,
+                          style: const TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        const Text(
+                          'Drag to look around · tap an arrow to move to a connected viewpoint',
+                          style: TextStyle(fontSize: 11, color: taupe),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ],
     );
   }
+}
+
+class _TourPreviewCard extends StatefulWidget {
+  const _TourPreviewCard({required this.tour, required this.onOpen});
+
+  final StoreTour tour;
+  final VoidCallback onOpen;
+
+  @override
+  State<_TourPreviewCard> createState() => _TourPreviewCardState();
+}
+
+class _TourPreviewCardState extends State<_TourPreviewCard> {
+  String? _url;
+  Map<String, String>? _headers;
+  bool _loading = true;
+  bool _started = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_started) return;
+    _started = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadPreview());
+  }
+
+  Future<void> _loadPreview() async {
+    if (widget.tour.nodes.isEmpty) {
+      if (mounted) setState(() => _loading = false);
+      return;
+    }
+    final node = widget.tour.nodes.first;
+    final app = AppScope.of(context);
+    if (!app.apiOnline) {
+      if (mounted) {
+        setState(() {
+          _url = node.image;
+          _loading = false;
+        });
+      }
+      return;
+    }
+    try {
+      final result =
+          await app.api.get(
+                '/tours/${widget.tour.id}/nodes/${node.id}/public-media',
+              )
+              as Map;
+      final url = result['url'];
+      final token = result['token'];
+      if (!mounted) return;
+      if (url is String &&
+          token is String &&
+          url.isNotEmpty &&
+          token.isNotEmpty) {
+        setState(() {
+          _url = url;
+          _headers = {'X-Gateway-Authorization': 'Bearer $token'};
+          _loading = false;
+        });
+      } else {
+        setState(() => _loading = false);
+      }
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hasPreview = _url != null && _url!.trim().isNotEmpty;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Semantics(
+        button: true,
+        label: 'Interactive 360 degree store tour preview. Tap to explore.',
+        child: Material(
+          color: charcoal,
+          borderRadius: BorderRadius.circular(18),
+          clipBehavior: Clip.antiAlias,
+          child: GestureDetector(
+            onTap: _loading ? null : widget.onOpen,
+            child: SizedBox(
+              height: 230,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  if (hasPreview)
+                    PanoramaViewer(
+                      key: ValueKey('tour-preview-${widget.tour.id}-$_url'),
+                      latitude: -10,
+                      zoom: .85,
+                      sensitivity: 1.0,
+                      minZoom: .85,
+                      maxZoom: 2.5,
+                      latSegments: 48,
+                      lonSegments: 96,
+                      child: Image(
+                        image: panoramaImageProvider(_url!, headers: _headers),
+                        fit: BoxFit.cover,
+                      ),
+                    )
+                  else
+                    Center(
+                      child:
+                          _loading
+                              ? const CircularProgressIndicator(
+                                color: Colors.white,
+                              )
+                              : const Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    Icons.threesixty,
+                                    color: Colors.white,
+                                    size: 36,
+                                  ),
+                                  SizedBox(height: 8),
+                                  Text(
+                                    '360° tour preview',
+                                    style: TextStyle(color: Colors.white),
+                                  ),
+                                ],
+                              ),
+                    ),
+                  IgnorePointer(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [
+                            Colors.black.withValues(alpha: .42),
+                            Colors.transparent,
+                            Colors.transparent,
+                            Colors.black.withValues(alpha: .55),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    top: 12,
+                    left: 12,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: .58),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: const Padding(
+                        padding: EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 7,
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.threesixty,
+                              size: 17,
+                              color: Colors.white,
+                            ),
+                            SizedBox(width: 5),
+                            Text(
+                              '360° preview',
+                              style: TextStyle(color: Colors.white),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    left: 14,
+                    bottom: 12,
+                    child: Text(
+                      hasPreview
+                          ? 'Drag to look around · Tap to explore'
+                          : 'Tap to explore the store tour',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        shadows: [Shadow(color: Colors.black54, blurRadius: 5)],
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    right: 8,
+                    bottom: 4,
+                    child: IconButton.filled(
+                      onPressed: widget.onOpen,
+                      tooltip: 'Explore store tour',
+                      style: IconButton.styleFrom(
+                        backgroundColor: Colors.black.withValues(alpha: .62),
+                        foregroundColor: Colors.white,
+                      ),
+                      icon: const Icon(Icons.arrow_forward_rounded),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TourDirectionButton extends StatelessWidget {
+  const _TourDirectionButton({
+    required this.icon,
+    required this.destination,
+    required this.onPressed,
+  });
+
+  final IconData icon;
+  final String destination;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+    message: 'Go to $destination',
+    child: Material(
+      color: Colors.black.withValues(alpha: .58),
+      shape: const CircleBorder(),
+      child: IconButton(
+        onPressed: onPressed,
+        tooltip: 'Go to $destination',
+        color: Colors.white,
+        iconSize: 30,
+        icon: Icon(icon),
+      ),
+    ),
+  );
 }
 
 String _vendorLocationCopy(Store store) {

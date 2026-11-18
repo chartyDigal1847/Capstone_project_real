@@ -112,9 +112,7 @@ class MediaUpload {
         signature[0] != 0xff ||
         signature[1] != 0xd8 ||
         signature[2] != 0xff) {
-      throw StateError(
-        'Panorama privacy processing currently supports JPEG images only.',
-      );
+      throw StateError('Panorama uploads currently support JPEG images only.');
     }
 
     final reservation = await _reserve({

@@ -1941,6 +1941,43 @@ class AppState extends ChangeNotifier {
     return null;
   }
 
+  Future<Map<String, dynamic>> replaceTourNodePanorama(
+    StoreTour tour,
+    TourNode node,
+    String originalPath,
+  ) async {
+    _beginWrite();
+    try {
+      final data =
+          await api.post('/tours/${tour.id}/nodes/${node.id}/replace', {
+                'original_path': originalPath,
+              })
+              as Map;
+      final response = Map<String, dynamic>.from(data);
+      _replaceTour(tour.id, tourFromJson(response));
+      return response;
+    } finally {
+      _endWrite();
+    }
+  }
+
+  Future<Map<String, dynamic>> removeTourNodePanorama(
+    StoreTour tour,
+    TourNode node,
+  ) async {
+    _beginWrite();
+    try {
+      final data =
+          await api.post('/tours/${tour.id}/nodes/${node.id}/remove', {})
+              as Map;
+      final response = Map<String, dynamic>.from(data);
+      _replaceTour(tour.id, tourFromJson(response));
+      return response;
+    } finally {
+      _endWrite();
+    }
+  }
+
   Future<void> processTourNode(
     StoreTour tour,
     TourNode node, {
@@ -1955,6 +1992,24 @@ class AppState extends ChangeNotifier {
       node.privacyStatus = PrivacyStatus.ready;
       node.image = '/storage/tours/${node.id}/sanitized.jpg';
     }
+    notifyListeners();
+  }
+
+  void markOnlineTourNodeVerified(
+    StoreTour tour,
+    int nodeId, {
+    required bool unblurred,
+  }) {
+    final currentTour = tours.where((item) => item.id == tour.id).firstOrNull;
+    final node =
+        (currentTour ?? tour).nodes
+            .where((item) => item.id == nodeId)
+            .firstOrNull;
+    if (node == null) return;
+    node.privacyStatus = PrivacyStatus.ready;
+    node.ownerReviewed = true;
+    node.publishedWithoutFaceBlur = unblurred;
+    node.originalRetained = true;
     notifyListeners();
   }
 
@@ -1990,11 +2045,13 @@ class AppState extends ChangeNotifier {
   }
 
   Future<String?> publishTour(StoreTour tour) async {
-    if (tour.nodes.length < 2) {
-      return 'Connect at least two viewpoints before publishing.';
+    final currentTour =
+        tours.where((item) => item.id == tour.id).firstOrNull ?? tour;
+    if (currentTour.nodes.isEmpty) {
+      return 'Upload at least one panorama before publishing.';
     }
     if (!apiOnline &&
-        tour.nodes.any(
+        currentTour.nodes.any(
           (node) =>
               !node.canPublish ||
               node.image.contains('#') ||
@@ -2003,12 +2060,9 @@ class AppState extends ChangeNotifier {
       return 'Every viewpoint needs privacy processing and owner review before publishing.';
     }
     if (apiOnline && api.token != null) {
-      if (!localPanoramaE2EEnabled) {
-        return 'Online publication is disabled until production R2 reconciliation and deployment readiness are approved.';
-      }
       _beginWrite();
       try {
-        await api.post('/tours/${tour.id}/publish');
+        await api.post('/tours/${currentTour.id}/publish');
         await refreshCatalog();
         return null;
       } catch (error) {
@@ -2018,7 +2072,7 @@ class AppState extends ChangeNotifier {
       }
     }
     _beginWrite();
-    tour.status = TourStatus.published;
+    currentTour.status = TourStatus.published;
     notifyListeners();
     _endWrite();
     return null;

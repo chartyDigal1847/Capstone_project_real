@@ -422,6 +422,7 @@ class TourNode {
     required this.connections,
     this.privacyStatus = PrivacyStatus.ready,
     this.ownerReviewed = false,
+    this.publishedWithoutFaceBlur = false,
     this.manualBlur = false,
     this.originalRetained = false,
     this.originalStoragePath,
@@ -434,6 +435,7 @@ class TourNode {
   List<int> connections;
   PrivacyStatus privacyStatus;
   bool ownerReviewed;
+  bool publishedWithoutFaceBlur;
   bool manualBlur;
   bool originalRetained;
   String? originalStoragePath;

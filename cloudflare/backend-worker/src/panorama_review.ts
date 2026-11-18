@@ -5,10 +5,15 @@ import { ApiError } from "./errors.js";
 function reviewInput(data: Record<string, unknown>) {
   if (!Number.isSafeInteger(data.tourId) || Number(data.tourId) <= 0 || !Number.isSafeInteger(data.nodeId) || Number(data.nodeId) <= 0) throw new ApiError(400, "Valid tour and viewpoint IDs are required.");
   if (typeof data.derivativeSha256 !== "string" || !/^[a-f0-9]{64}$/.test(data.derivativeSha256)) throw new ApiError(400, "A lowercase derivative SHA-256 digest is required.");
-  if (typeof data.processingVersion !== "string" || !/^localspot-panorama-local-v[0-9]{1,8}$/.test(data.processingVersion)) throw new ApiError(400, "The panorama processing version is invalid.");
-  if (!Array.isArray(data.inspectedDirections) || data.inspectedDirections.length !== 48 || data.inspectedDirections.some((value) => !Number.isSafeInteger(value) || Number(value) < 0 || Number(value) >= 48) || new Set(data.inspectedDirections).size !== 48) throw new ApiError(412, "All 48 owner-review directions must be inspected.");
-  if (data.acknowledgedMissRisk !== true || data.acknowledgedManualInspection !== true) throw new ApiError(412, "Both owner-review acknowledgements are required.");
-  return { tourId: Number(data.tourId), nodeId: Number(data.nodeId), derivativeSha256: data.derivativeSha256, processingVersion: data.processingVersion, inspectedDirections: (data.inspectedDirections as number[]).slice().sort((a, b) => a - b) };
+  const unblurredConsent = data.processingVersion === "localspot-panorama-original-v1";
+  if (typeof data.processingVersion !== "string" || !/^(?:localspot-panorama-local-v[0-9]{1,8}|localspot-panorama-original-v1)$/.test(data.processingVersion)) throw new ApiError(400, "The panorama processing version is invalid.");
+  if (unblurredConsent) {
+    if (data.unblurredConsent !== true || !Array.isArray(data.inspectedDirections) || data.inspectedDirections.length !== 0 || data.acknowledgedMissRisk !== true || data.acknowledgedManualInspection !== false) throw new ApiError(412, "Explicit owner consent is required to publish the original panorama without face blur.");
+  } else {
+    if (data.unblurredConsent === true || !Array.isArray(data.inspectedDirections) || data.inspectedDirections.length !== 48 || data.inspectedDirections.some((value) => !Number.isSafeInteger(value) || Number(value) < 0 || Number(value) >= 48) || new Set(data.inspectedDirections).size !== 48) throw new ApiError(412, "All 48 owner-review directions must be inspected.");
+    if (data.acknowledgedMissRisk !== true || data.acknowledgedManualInspection !== true) throw new ApiError(412, "Both owner-review acknowledgements are required.");
+  }
+  return { tourId: Number(data.tourId), nodeId: Number(data.nodeId), derivativeSha256: data.derivativeSha256, processingVersion: data.processingVersion, inspectedDirections: (data.inspectedDirections as number[]).slice().sort((a, b) => a - b), unblurredConsent };
 }
 
 async function body(request: Request): Promise<Record<string, unknown>> {
@@ -43,11 +48,13 @@ export async function recordTourPanoramaReview(request: Request, env: Env, princ
     const expectedKey = revisionValid ? `tours/derivatives/${uid}/${input.tourId}/${input.nodeId}/${derivative!.revisionId}_${input.derivativeSha256}.jpg` : "";
     if (!derivative || derivative.status !== "verified" || derivative.objectKey !== expectedKey || derivative.sha256 !== input.derivativeSha256 || derivative.contentType !== "image/jpeg" || !Number.isSafeInteger(derivative.size) || Number(derivative.size) <= 0 || derivative.processingVersion !== input.processingVersion || derivative.accountingState !== "counted" || typeof derivative.reservationId !== "string" || !(derivative.verifiedAt instanceof Date)) throw new ApiError(412, "The current panorama derivative has not been verified and quota-accounted by the backend.");
     const old = node.owner_review as Record<string, unknown> | undefined;
-    if (node.owner_reviewed === true && old?.ownerUid === uid && old.derivativeSha256 === input.derivativeSha256 && old.processingVersion === input.processingVersion && JSON.stringify(old.inspectedDirections) === JSON.stringify(input.inspectedDirections) && old.acknowledgedMissRisk === true && old.acknowledgedManualInspection === true && old.reviewedAt instanceof Date) {
-      return Response.json({ ok: true, tourId: input.tourId, nodeId: input.nodeId, review: { ownerUid: uid, reviewedAt: old.reviewedAt.toISOString(), derivativeSha256: input.derivativeSha256, processingVersion: input.processingVersion, inspectedDirections: input.inspectedDirections, directionCount: 48, acknowledgedMissRisk: true, acknowledgedManualInspection: true, recordType: "owner-attestation-not-privacy-proof" } });
+    const directionCount = input.unblurredConsent ? 0 : 48;
+    const recordType = input.unblurredConsent ? "owner-consented-unblurred" : "owner-attestation-not-privacy-proof";
+    if (node.owner_reviewed === true && old?.ownerUid === uid && old.derivativeSha256 === input.derivativeSha256 && old.processingVersion === input.processingVersion && JSON.stringify(old.inspectedDirections) === JSON.stringify(input.inspectedDirections) && old.acknowledgedMissRisk === true && old.acknowledgedManualInspection === !input.unblurredConsent && old.unblurredConsent === input.unblurredConsent && old.reviewedAt instanceof Date) {
+      return Response.json({ ok: true, tourId: input.tourId, nodeId: input.nodeId, review: { ownerUid: uid, reviewedAt: old.reviewedAt.toISOString(), derivativeSha256: input.derivativeSha256, processingVersion: input.processingVersion, inspectedDirections: input.inspectedDirections, directionCount, acknowledgedMissRisk: true, acknowledgedManualInspection: !input.unblurredConsent, unblurredConsent: input.unblurredConsent, recordType } });
     }
-    const reviewedAt = new Date(), review = { ownerUid: uid, reviewedAt, derivativeSha256: input.derivativeSha256, processingVersion: input.processingVersion, inspectedDirections: input.inspectedDirections, directionCount: 48, acknowledgedMissRisk: true, acknowledgedManualInspection: true, recordType: "owner-attestation-not-privacy-proof" };
-    nodes[index] = { ...node, owner_review: review, owner_reviewed: true };
+    const reviewedAt = new Date(), review = { ownerUid: uid, reviewedAt, derivativeSha256: input.derivativeSha256, processingVersion: input.processingVersion, inspectedDirections: input.inspectedDirections, directionCount, acknowledgedMissRisk: true, acknowledgedManualInspection: !input.unblurredConsent, unblurredConsent: input.unblurredConsent, recordType };
+    nodes[index] = { ...node, owner_review: review, owner_reviewed: true, privacy_status: "ready" };
     tx.patch(tourPath, { nodes, updatedAt: reviewedAt });
     return Response.json({ ok: true, tourId: input.tourId, nodeId: input.nodeId, review: { ...review, reviewedAt: reviewedAt.toISOString() } });
   });

@@ -122,7 +122,7 @@ packages:
     source: hosted
     version: "0.3.5+5"
   crypto:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: crypto
       sha256: e3626ae6270383c9e3a549f34c9e4cd26c09ae6a9adaab2bf4737a00340efdc4
@@ -677,7 +677,7 @@ packages:
     source: path
     version: "1.0.0+1"
   panorama_viewer:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: panorama_viewer
       sha256: "5143f0f3f469138466b1f1e1ea93127698e885f8944f7886dcd2ccc0941990e4"

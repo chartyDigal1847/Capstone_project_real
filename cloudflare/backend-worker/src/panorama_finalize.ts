@@ -66,7 +66,20 @@ export async function finalizePanoramaDerivativeUpload(request: Request, env: En
   const storePath = storeMatches[0].name.split("/documents/")[1], mediaPath = `mediaAssets/${principal.uid}_${reservation.assetId}`;
   const revisionPath = `${mediaPath}/derivatives/${reservation.revisionId}`, verifiedAt = new Date();
   const actualHash = object.verifiedSha256;
+  const unblurred = reservation.processingVersion === "localspot-panorama-original-v1";
   const verified = { status: "verified", objectKey: key, size: object.size, contentType: "image/jpeg", sha256: actualHash, revisionId: reservation.revisionId, processingVersion: reservation.processingVersion, reservationId, accountingState: "counted", verifiedAt };
+  const ownerReview = unblurred ? {
+    ownerUid: principal.uid,
+    reviewedAt: verifiedAt,
+    derivativeSha256: actualHash,
+    processingVersion: reservation.processingVersion,
+    inspectedDirections: [],
+    directionCount: 0,
+    acknowledgedMissRisk: true,
+    acknowledgedManualInspection: false,
+    unblurredConsent: true,
+    recordType: "owner-consented-unblurred",
+  } : null;
   await db.runTransaction(async (tx) => {
     const [currentTourDoc, storeDoc, mediaDoc, revisionDoc] = await Promise.all([tx.get(tourPath), tx.get(storePath), tx.get(mediaPath), tx.get(revisionPath)]);
     const currentTour = documentData(currentTourDoc), store = documentData(storeDoc), media = documentData(mediaDoc);
@@ -84,7 +97,14 @@ export async function finalizePanoramaDerivativeUpload(request: Request, env: En
     if (current?.status === "verified" && current.revisionId !== reservation.revisionId && currentVerified > reservationCreated) return;
     const nextNode = { ...nodes[index] };
     delete nextNode.owner_review;
-    nodes[index] = { ...nextNode, verified_derivative: verified, privacy_status: "awaiting-owner-review", owner_reviewed: false, image: "" };
+    nodes[index] = {
+      ...nextNode,
+      ...(ownerReview ? { owner_review: ownerReview } : {}),
+      verified_derivative: verified,
+      privacy_status: unblurred ? "ready" : "awaiting-owner-review",
+      owner_reviewed: unblurred,
+      image: "",
+    };
     tx.patch(tourPath, { nodes, updatedAt: verifiedAt });
     tx.patch(mediaPath, { latestDerivativeRevisionId: reservation.revisionId, latestDerivativeObjectKey: key, latestDerivativeSha256: actualHash, updatedAt: verifiedAt });
   });
